@@ -78,6 +78,31 @@ class AgentService : Service() {
             _apiStatus.value = st
         }
 
+        fun clearMessages() {
+            _messages.value = emptyList()
+        }
+
+        fun refreshSessionState(context: Context) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val state = PythonHost.getSessionState(context)
+                    val activeWs = state.optString("active_workspace")
+                    if (activeWs.isNotBlank()) {
+                        _currentWorkspace.value = activeWs
+                    }
+                    val hasKey = state.optBoolean("has_api_key", false)
+                    val prov = state.optString("active_provider", "NONE")
+                    if (hasKey && prov != "NONE") {
+                        _apiStatus.value = "API: $prov"
+                    } else {
+                        _apiStatus.value = "NO KEY"
+                    }
+                } catch (_: Exception) {
+                    _apiStatus.value = "NO KEY"
+                }
+            }
+        }
+
         fun executeCommand(context: Context, inputText: String, attachedFiles: List<String> = emptyList()) {
             val intent = Intent(context, AgentService::class.java).apply {
                 putExtra("input_text", inputText)

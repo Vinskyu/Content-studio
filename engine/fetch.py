@@ -299,10 +299,14 @@ def download_media(
 
     if HAS_YT_DLP:
         print("[*] Menggunakan pustaka in-process yt_dlp...")
+        ffmpeg_loc = get_ffmpeg_bin()
+        if os.path.isfile(ffmpeg_loc):
+            ffmpeg_loc = os.path.dirname(ffmpeg_loc)
+
         ydl_opts: Dict[str, Any] = {
             "outtmpl": out_pattern,
             "no_warnings": True,
-            "ffmpeg_location": get_ffmpeg_bin(),
+            "ffmpeg_location": ffmpeg_loc,
         }
 
         if section and s_sec is not None and e_sec is not None:
@@ -347,7 +351,7 @@ def download_media(
 
     if not download_success:
         print("[*] Menggunakan binary CLI yt-dlp fallback...")
-        cmd = ["yt-dlp", "--no-warnings", "-o", out_pattern, "--ffmpeg-location", get_ffmpeg_bin()]
+        cmd = ["yt-dlp", "--no-warnings", "-o", out_pattern, "--ffmpeg-location", ffmpeg_loc]
 
         if section and s_raw and e_raw:
             cmd.extend([
@@ -615,6 +619,176 @@ def cmd_stock(args):
 
     print(f"\n[*] Manifest stok berhasil disimpan di: {manifest_file}")
     return 0
+
+# ==============================================================================
+# ==============================================================================
+# IN-PROCESS AUTO-HUNTER (CLI AGENT TOOL)
+# ==============================================================================
+
+def hunt_media(
+    query: str,
+    media_type: str = "clip",
+    duration: float = 6.0,
+    out_dir: Optional[str] = None,
+    tag: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Berburu bahan media secara in-process via yt-dlp:
+    - clip: cari ytsearch5:<query>, non-live 15s-20m, potong durasi detik pada heatmap tertinggi / ~35% durasi.
+    - meme: cek cache library.json; jika tidak ada, unduh ytsearch5:<query> meme clip (<=30s) ke assets/memes/<slug>.mp4.
+    - sfx: cek cache library.json; jika tidak ada, unduh ytsearch5:<query> sound effect (<=15s) ke assets/sfx/<slug>.mp3.
+    """
+    media_type = media_type.lower().strip()
+    if media_type not in {"clip", "meme", "sfx"}:
+        media_type = "clip"
+
+    # 1. Cek cache library.json untuk meme dan sfx
+    if media_type in {"meme", "sfx"}:
+        try:
+            from engine.assets import load_library
+            lib = load_library()
+            q_clean = query.lower()
+            q_tokens = [w for w in re.split(r"[^a-zA-Z0-9]+", q_clean) if len(w) > 2]
+            for a in lib.get("assets", []):
+                if a.get("type") == media_type:
+                    a_name = a.get("name", "").lower()
+                    a_tags = [t.lower() for t in a.get("tags", [])]
+                    if any(tok in a_name or tok in a_tags for tok in q_tokens):
+                        full_p = os.path.join(get_root_dir(), a.get("path", ""))
+                        if os.path.exists(full_p):
+                            return {
+                                "status": "ok",
+                                "cached": True,
+                                "path": full_p,
+                                "type": media_type,
+                                "title": a.get("name", query),
+                                "message": f"Ditemukan di cache bank aset: {os.path.basename(full_p)}"
+                            }
+        except Exception:
+            pass
+
+    # 2. Tentukan direktori penyimpanan
+    if not out_dir:
+        if media_type == "meme":
+            out_dir = os.path.join(get_root_dir(), "assets", "memes")
+        elif media_type == "sfx":
+            out_dir = os.path.join(get_root_dir(), "assets", "sfx")
+        else:
+            out_dir = os.path.join(get_root_dir(), "inbox")
+
+    out_dir = resolve_path(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    if not HAS_YT_DLP:
+        raise RuntimeError("Pustaka yt-dlp tidak tersedia di environment.")
+
+    # 3. Kueri pencarian YouTube
+    if media_type == "clip":
+        search_term = f"ytsearch5:{query}"
+    elif media_type == "meme":
+        search_term = f"ytsearch5:{query} meme clip"
+    else:
+        search_term = f"ytsearch5:{query} sound effect"
+
+    print(f"[*] Berburu media [{media_type.upper()}]: '{search_term}'...")
+
+    search_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": False,
+        "skip_download": True,
+        "ffmpeg_location": get_ffmpeg_bin()
+    }
+
+    with yt_dlp.YoutubeDL(search_opts) as ydl:
+        try:
+            info = ydl.extract_info(search_term, download=False)
+        except Exception as e:
+            return {"status": "error", "message": f"Pencarian media gagal: {e}"}
+
+    entries = info.get("entries") or []
+    if not entries:
+        return {"status": "error", "message": f"Tidak ada media yang ditemukan untuk '{query}'."}
+
+    # 4. Filter entry yang cocok
+    target_entry = None
+    for ent in entries:
+        if not ent:
+            continue
+        if ent.get("is_live"):
+            continue
+        d = float(ent.get("duration") or 0.0)
+        if media_type == "clip":
+            if 15.0 <= d <= 1800.0:
+                target_entry = ent
+                break
+        elif media_type == "meme":
+            if 0.5 <= d <= 35.0:
+                target_entry = ent
+                break
+        elif media_type == "sfx":
+            if 0.5 <= d <= 20.0:
+                target_entry = ent
+                break
+
+    if not target_entry:
+        target_entry = entries[0]
+
+    video_url = target_entry.get("webpage_url") or target_entry.get("url") or f"https://www.youtube.com/watch?v={target_entry.get('id')}"
+    title = target_entry.get("title") or query
+    tot_dur = float(target_entry.get("duration") or 60.0)
+
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", title.lower())[:30].strip("_")
+    if not slug:
+        slug = f"hunt_{media_type}_{int(time.time())}"
+
+    # 5. Hitung rentang detik
+    section_str = ""
+    if media_type == "clip":
+        start_sec = 0.0
+        heatmaps = target_entry.get("heatmap") or []
+        if heatmaps and isinstance(heatmaps, list):
+            try:
+                best_hm = max(heatmaps, key=lambda x: x.get("value", 0))
+                start_sec = float(best_hm.get("start_time", 0.0))
+            except Exception:
+                start_sec = max(0.0, tot_dur * 0.35)
+        else:
+            start_sec = max(0.0, tot_dur * 0.35)
+
+        end_sec = min(start_sec + duration, tot_dur)
+        section_str = f"{start_sec:.1f}-{end_sec:.1f}"
+
+    is_audio = (media_type == "sfx")
+    max_h = 1080 if media_type in {"clip", "meme"} else 480
+
+    dl_res = download_media(
+        url=video_url,
+        out_dir=out_dir,
+        audio_only=is_audio,
+        max_height=max_h,
+        name_prefix=slug,
+        section=section_str
+    )
+
+    downloaded_file = dl_res.get("file_path") or ""
+
+    if media_type in {"meme", "sfx"}:
+        try:
+            from engine.assets import scan_assets_library
+            scan_assets_library()
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "cached": False,
+        "type": media_type,
+        "title": title,
+        "path": downloaded_file,
+        "duration": duration if media_type == "clip" else tot_dur,
+        "section": section_str
+    }
 
 # ==============================================================================
 # MAIN ROUTER

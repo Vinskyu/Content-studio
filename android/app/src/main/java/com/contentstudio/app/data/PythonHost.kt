@@ -161,6 +161,13 @@ object PythonHost {
         }
         isInitialized = false
         ensureInitialized(context)
+        val envMap = mapOf(
+            "GROQ_API_KEY" to groq.trim(),
+            "GEMINI_API_KEY" to gemini.trim(),
+            "OPENROUTER_API_KEY" to openRouter.trim()
+        )
+        val envJson = JSONObject(envMap).toString()
+        bridgeModule.callAttr("init_env", "", outDir.trim(), "", "", envJson)
     }
 
     fun getApiKeys(context: Context): Map<String, String> {
@@ -171,5 +178,71 @@ object PythonHost {
             "OPENROUTER_API_KEY" to (prefs.getString("OPENROUTER_API_KEY", "") ?: ""),
             "out_dir" to (prefs.getString("out_dir", "/sdcard/ContentStudio/out") ?: "/sdcard/ContentStudio/out")
         )
+    }
+
+    fun switchWorkspace(context: Context, name: String): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("switch_workspace", name).toString()
+        return JSONObject(resultStr)
+    }
+
+    fun createWorkspace(context: Context, name: String, niche: String, style: String = "", laws: String = "", skill: String = ""): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("create_workspace", name, niche, style, laws, skill).toString()
+        return JSONObject(resultStr)
+    }
+
+    fun deleteWorkspace(context: Context, name: String): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("delete_workspace", name).toString()
+        return JSONObject(resultStr)
+    }
+
+    fun readWorkspaceFile(context: Context, ws: String, relPath: String): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("read_workspace_file", ws, relPath).toString()
+        return JSONObject(resultStr)
+    }
+
+    fun saveWorkspaceFile(context: Context, ws: String, relPath: String, content: String): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("save_workspace_file", ws, relPath, content).toString()
+        return JSONObject(resultStr)
+    }
+
+    fun listSkills(context: Context): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("list_skills").toString()
+        return JSONObject(resultStr)
+    }
+
+    fun installSkill(context: Context, source: String): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("install_skill", source).toString()
+        return JSONObject(resultStr)
+    }
+
+    fun deleteSkill(context: Context, name: String): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("delete_skill", name).toString()
+        return JSONObject(resultStr)
+    }
+
+    fun listMcpServers(context: Context): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("list_mcp_servers").toString()
+        return JSONObject(resultStr)
+    }
+
+    fun saveMcpServer(context: Context, name: String, url: String, headersJson: String = "{}", enabled: Boolean = true): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("save_mcp_server", name, url, headersJson, enabled).toString()
+        return JSONObject(resultStr)
+    }
+
+    fun deleteMcpServer(context: Context, name: String): JSONObject {
+        ensureInitialized(context)
+        val resultStr = bridgeModule.callAttr("delete_mcp_server", name).toString()
+        return JSONObject(resultStr)
     }
 }

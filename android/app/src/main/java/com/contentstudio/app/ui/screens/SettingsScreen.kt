@@ -7,6 +7,7 @@ import android.os.Environment
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,9 +23,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.contentstudio.app.data.PythonHost
+import com.contentstudio.app.service.AgentService
 import com.contentstudio.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -48,12 +52,26 @@ fun SettingsScreen(
     var storagePctUsed by remember { mutableStateOf("0.0") }
     var saveStatus by remember { mutableStateOf<String?>(null) }
 
+    var isStoragePermitted by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Environment.isExternalStorageManager()
+            } else {
+                true
+            }
+        )
+    }
+
     LaunchedEffect(Unit) {
         val keys = PythonHost.getApiKeys(context)
         groqKey = keys["GROQ_API_KEY"] ?: ""
         geminiKey = keys["GEMINI_API_KEY"] ?: ""
         openRouterKey = keys["OPENROUTER_API_KEY"] ?: ""
         outDir = keys["out_dir"] ?: "/sdcard/ContentStudio/out"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            isStoragePermitted = Environment.isExternalStorageManager()
+        }
 
         scope.launch(Dispatchers.IO) {
             try {
@@ -111,29 +129,50 @@ fun SettingsScreen(
                 color = TextSecondary
             )
 
-            Button(
-                onClick = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        if (!Environment.isExternalStorageManager()) {
-                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                                data = Uri.parse("package:${context.packageName}")
+            if (isStoragePermitted) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(CardHighlight)
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "[IZIN STORAGE: AKTIF]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+            } else {
+                Button(
+                    onClick = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            try {
+                                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(intent)
+                            } catch (_: Exception) {
+                                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                context.startActivity(intent)
                             }
-                            context.startActivity(intent)
                         }
-                    }
-                },
-                shape = RoundedCornerShape(6.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = CardHighlight,
-                    contentColor = TextPrimary
-                ),
-                border = ButtonDefaults.outlinedButtonBorder.copy(brush = SolidColor(BorderSubtle))
-            ) {
-                Text(
-                    text = "IZIN AKSES STORAGE PENUH",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp
-                )
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ActionSolidBg,
+                        contentColor = ActionSolidText
+                    )
+                ) {
+                    Text(
+                        text = "BERIKAN IZIN STORAGE",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
@@ -155,25 +194,25 @@ fun SettingsScreen(
                 color = TextPrimary
             )
 
-            ApiKeyInputField(
+            MaskedApiKeyInputField(
                 label = "GROQ API KEY (Utama / JSON Fast):",
                 value = groqKey,
                 onValueChange = { groqKey = it }
             )
 
-            ApiKeyInputField(
+            MaskedApiKeyInputField(
                 label = "GEMINI API KEY (Vision / Multimodal):",
                 value = geminiKey,
                 onValueChange = { geminiKey = it }
             )
 
-            ApiKeyInputField(
+            MaskedApiKeyInputField(
                 label = "OPENROUTER API KEY (Free Large Model):",
                 value = openRouterKey,
                 onValueChange = { openRouterKey = it }
             )
 
-            ApiKeyInputField(
+            PlainInputField(
                 label = "FOLDER OUTPUT VIDEO:",
                 value = outDir,
                 onValueChange = { outDir = it }
@@ -182,7 +221,8 @@ fun SettingsScreen(
             Button(
                 onClick = {
                     PythonHost.saveApiKeys(context, groqKey, geminiKey, openRouterKey, outDir)
-                    saveStatus = "[OK] Setelan dan API Key berhasil disimpan."
+                    AgentService.refreshSessionState(context)
+                    saveStatus = "[OK] Setelan tersimpan."
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
@@ -200,19 +240,89 @@ fun SettingsScreen(
             }
 
             if (saveStatus != null) {
-                Text(
-                    text = saveStatus!!,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = TextPrimary
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(CardHighlight)
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = saveStatus!!,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextPrimary
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-fun ApiKeyInputField(
+fun MaskedApiKeyInputField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    var isVisible by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = TextSecondary
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(CardHighlight)
+                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                    .clickable { isVisible = !isVisible }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = if (isVisible) "[TUTUP]" else "[LIHAT]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = TextPrimary
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .background(BgDark)
+                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                visualTransformation = if (isVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                textStyle = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = TextPrimary
+                ),
+                cursorBrush = SolidColor(TextPrimary),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+fun PlainInputField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit

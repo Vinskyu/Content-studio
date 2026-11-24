@@ -29,6 +29,7 @@ LIBRARY_JSON = os.path.join(ASSETS_DIR, "library.json")
 
 FOLDERS = {
     "sticker": os.path.join(ASSETS_DIR, "stickers"),
+    "meme": os.path.join(ASSETS_DIR, "memes"),
     "sfx": os.path.join(ASSETS_DIR, "sfx"),
     "background": os.path.join(ASSETS_DIR, "backgrounds")
 }

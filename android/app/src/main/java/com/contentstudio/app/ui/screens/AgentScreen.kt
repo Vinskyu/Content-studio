@@ -33,6 +33,8 @@ import com.contentstudio.app.service.AgentService
 import com.contentstudio.app.service.AgentStepItem
 import com.contentstudio.app.service.MessageBubble
 import com.contentstudio.app.ui.theme.*
+import com.contentstudio.app.data.PythonHost
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -65,6 +67,10 @@ fun AgentScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        AgentService.refreshSessionState(context)
+    }
+
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
@@ -81,8 +87,18 @@ fun AgentScreen(
             workspace = activeWorkspace,
             apiStatus = apiStatus,
             onWorkspaceChange = { ws ->
-                AgentService.setWorkspace(ws)
-                AgentService.executeCommand(context, "/use $ws")
+                coroutineScope.launch(Dispatchers.IO) {
+                    PythonHost.switchWorkspace(context, ws)
+                    AgentService.setWorkspace(ws)
+                    AgentService.clearMessages()
+                    AgentService.refreshSessionState(context)
+                }
+            },
+            onResetChat = {
+                coroutineScope.launch(Dispatchers.IO) {
+                    PythonHost.runConsole(context, "/clear")
+                    AgentService.clearMessages()
+                }
             }
         )
 
@@ -170,10 +186,33 @@ fun AgentScreen(
 fun AgentTopBar(
     workspace: String,
     apiStatus: String,
-    onWorkspaceChange: (String) -> Unit
+    onWorkspaceChange: (String) -> Unit,
+    onResetChat: () -> Unit
 ) {
+    val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
-    val workspaces = listOf("hok_insights", "lirik_vibes")
+    var workspaces by remember { mutableStateOf(listOf("hok_insights", "lirik_vibes")) }
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            try {
+                val res = PythonHost.listWorkspaces(context)
+                val wsArr = res.optJSONArray("workspaces")
+                if (wsArr != null) {
+                    val list = mutableListOf<String>()
+                    for (i in 0 until wsArr.length()) {
+                        val wName = wsArr.getJSONObject(i).optString("workspace")
+                        if (wName.isNotBlank()) list.add(wName)
+                    }
+                    if (list.isNotEmpty()) {
+                        kotlinx.coroutines.withContext(Dispatchers.Main) {
+                            workspaces = list
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
 
     Row(
         modifier = Modifier
@@ -241,20 +280,42 @@ fun AgentTopBar(
             }
         }
 
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(CardHighlight)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "API: $apiStatus",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                color = if (apiStatus.contains("READY")) TextPrimary else TextSecondary
-            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(BgDark)
+                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                    .clickable { onResetChat() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "[BARU]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(CardHighlight)
+                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = apiStatus,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (apiStatus.contains("READY") || apiStatus.contains("GROQ") || apiStatus.contains("GEMINI") || apiStatus.contains("OPENROUTER")) TextPrimary else TextSecondary
+                )
+            }
         }
     }
 }

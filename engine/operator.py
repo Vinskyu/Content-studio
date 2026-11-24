@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
 ContentStudio Autonomous CLI Agent & Interactive Operator (engine/operator.py)
-Sprint I-2: Autonomous CLI Agent penuh 100% in-process (Android/Chaquopy-safe, 0 subprocess python3, Python 3.11+).
-            Mendukung 2 Mode:
-            1. Mode CLI Langsung (diawali '/', 0 Token AI, pemicu instan tombol UI)
-            2. Mode Autonomous Agent (agentic tool-calling loop maks 8 langkah, read/write workspace & plan.json, auto-validation, step-streaming)
+Sprint J: Real CLI Agent dengan Native Tool-Calling, Auto-Skill, Auto-MCP Remote,
+           Workspace Session Isolation, dan Perilaku Eksekutor Proaktif (Zero Pasif).
+100% In-Process Python 3.11 (Chaquopy-Safe, 0 subprocess python3).
 """
 
 import sys
@@ -31,966 +30,864 @@ from engine.runtime import (
     get_cache_dir,
     get_output_base_dir,
     get_workspaces_dir,
-    get_skills_dir,
     get_inbox_dir,
     get_assets_dir,
     resolve_path,
     load_runtime_env
 )
+from engine.router import chat_with_tools, get_all_providers_status
+from engine.skills import get_skill_index, load_skill, install_skill, list_skills
+from engine.mcp_client import get_all_mcp_tools, is_mcp_tool, call_mcp_tool, list_mcp_servers
+from engine.fetch import hunt_media
+from engine.assets import load_library, scan_assets_library
 
-SESSION_FILE_NAME = "operator_session.json"
+GLOBAL_SESSION_FILE = "operator_session.json"
+MAX_AGENT_STEPS = 12
 
-def get_session_file_path() -> str:
-    """Mengembalikan path file state operator session."""
-    cache_d = get_cache_dir()
-    os.makedirs(cache_d, exist_ok=True)
-    return os.path.join(cache_d, SESSION_FILE_NAME)
+# ==============================================================================
+# SESSION & WORKSPACE ISOLATION
+# ==============================================================================
+
+def get_session_dir() -> str:
+    """Folder penyimpanan session percakapan terisolasi per workspace."""
+    s_dir = os.path.join(get_cache_dir(), "sessions")
+    os.makedirs(s_dir, exist_ok=True)
+    return s_dir
+
+def get_workspace_session_path(workspace: str) -> str:
+    """Path file riwayat chat khusus workspace tertentu."""
+    clean_ws = re.sub(r"[^a-zA-Z0-9_-]+", "_", workspace.strip().lower())
+    return os.path.join(get_session_dir(), f"{clean_ws}.json")
 
 def load_session() -> Dict[str, Any]:
-    """Membaca session state dari cache atau inisialisasi default."""
-    sess_path = get_session_file_path()
-    default_session = {
+    """Membaca status sesi global (active_workspace, last_plan_path, last_output_video)."""
+    p = os.path.join(get_cache_dir(), GLOBAL_SESSION_FILE)
+    default_state = {
         "active_workspace": "hok_insights",
         "last_plan_path": None,
-        "last_output_video": None,
-        "history": []
+        "last_output_video": None
     }
-    if os.path.exists(sess_path):
+    if os.path.exists(p):
         try:
-            with open(sess_path, "r", encoding="utf-8") as f:
+            with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    for k, v in default_session.items():
+                    for k, v in default_state.items():
                         if k not in data:
                             data[k] = v
                     return data
         except Exception:
             pass
 
-    # Verifikasi active_workspace awal
+    # Verifikasi active_workspace awal dari folder workspaces
     ws_dir = get_workspaces_dir()
     if os.path.exists(ws_dir):
-        available = [d for d in os.listdir(ws_dir) if os.path.isdir(os.path.join(ws_dir, d)) and not d.startswith(".")]
-        if available and default_session["active_workspace"] not in available:
-            default_session["active_workspace"] = available[0]
+        avail = [d for d in os.listdir(ws_dir) if os.path.isdir(os.path.join(ws_dir, d)) and not d.startswith(".")]
+        if avail and default_state["active_workspace"] not in avail:
+            default_state["active_workspace"] = avail[0]
 
-    return default_session
+    return default_state
 
 def save_session(session: Dict[str, Any]) -> None:
-    """Menyimpan session state secara atomic dengan membatasi history maks 10 entri."""
-    sess_path = get_session_file_path()
-    tmp_path = sess_path + ".tmp"
+    """Menyimpan status sesi global secara atomic."""
+    p = os.path.join(get_cache_dir(), GLOBAL_SESSION_FILE)
+    tmp = p + ".tmp"
     try:
-        if "history" in session and isinstance(session["history"], list):
-            session["history"] = session["history"][-10:]
-
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(session, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, sess_path)
-    except Exception as e:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+        os.replace(tmp, p)
+    except Exception:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except Exception: pass
+
+def load_chat_history(workspace: str) -> List[Dict[str, Any]]:
+    """Membaca riwayat percakapan terisolasi untuk suatu workspace (maks 20 pesan terakhir)."""
+    p = get_workspace_session_path(workspace)
+    if os.path.exists(p):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data[-20:]
+        except Exception:
+            pass
+    return []
+
+def save_chat_history(workspace: str, history: List[Dict[str, Any]]) -> None:
+    """Menyimpan riwayat percakapan untuk workspace aktif."""
+    p = get_workspace_session_path(workspace)
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(history[-20:], f, indent=2, ensure_ascii=False)
+        os.replace(tmp, p)
+    except Exception:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except Exception: pass
+
+def clear_chat_history(workspace: str) -> None:
+    """Menghapus riwayat percakapan workspace."""
+    p = get_workspace_session_path(workspace)
+    if os.path.exists(p):
+        try: os.remove(p)
+        except Exception: pass
 
 def get_storage_info() -> Dict[str, Any]:
-    """Membaca sisa penyimpanan disk (GB) pada ContentStudio root dan output base."""
+    """Membaca informasi kapasitas penyimpanan."""
     root_d = get_root_dir()
     out_d = get_output_base_dir()
     try:
-        u_root = shutil.disk_usage(root_d)
-        free_gb = round(u_root.free / (1024 ** 3), 2)
-        total_gb = round(u_root.total / (1024 ** 3), 2)
-        pct_used = round(((u_root.total - u_root.free) / u_root.total) * 100, 1) if u_root.total > 0 else 0.0
+        check_target = out_d if os.path.exists(out_d) else root_d
+        usage = shutil.disk_usage(check_target)
+        free_gb = usage.free / (1024 ** 3)
+        total_gb = usage.total / (1024 ** 3)
+        used_gb = usage.used / (1024 ** 3)
+        pct = (usage.used / usage.total) * 100.0 if usage.total > 0 else 0.0
+        return {
+            "free_gb": round(free_gb, 2),
+            "total_gb": round(total_gb, 2),
+            "used_gb": round(used_gb, 2),
+            "pct_used": round(pct, 1),
+            "safe": free_gb >= 1.0
+        }
     except Exception:
-        free_gb = 0.0
-        total_gb = 0.0
-        pct_used = 0.0
+        return {"free_gb": 0.0, "total_gb": 0.0, "used_gb": 0.0, "pct_used": 0.0, "safe": False}
 
-    return {
-        "free_gb": free_gb,
-        "total_gb": total_gb,
-        "pct_used": pct_used,
-        "root_dir": root_d,
-        "out_dir": out_d
+# ==============================================================================
+# WORKSPACE CONTEXT EXTRACTOR
+# ==============================================================================
+
+def get_workspace_context(workspace: str) -> Dict[str, str]:
+    """Membaca ringkasan DNA (niche, style, laws, skill) dari workspace aktif."""
+    ws_dir = os.path.join(get_workspaces_dir(), workspace)
+    context = {
+        "workspace": workspace,
+        "niche": "",
+        "style": "",
+        "laws": "",
+        "skill": ""
     }
+    if not os.path.exists(ws_dir):
+        return context
 
-def sanitize_safe_path(rel_path: str) -> Optional[str]:
-    """
-    Memastikan path berada dalam sandbox direktori ContentStudio.
-    Mencegah directory traversal keluar dari root.
-    Mendukung fallback otomatis jika user/LLM lupa menulis prefix 'workspaces/'.
-    """
-    if not rel_path:
-        return None
-    root = os.path.abspath(get_root_dir())
-    clean_rel = rel_path.strip().lstrip("/")
-    target = os.path.abspath(os.path.join(root, clean_rel))
-    if target == root or target.startswith(root + os.sep):
-        if os.path.exists(target):
-            return target
-        # Coba fallback ke folder workspaces/ jika belum diawali workspaces/
-        if not clean_rel.startswith("workspaces/"):
-            ws_target = os.path.abspath(os.path.join(root, "workspaces", clean_rel))
-            if os.path.exists(ws_target):
-                return ws_target
-        return target
-    return None
-
-def emit_step_event(cb: Optional[Callable], tool: str, status: str, detail: str):
-    """Mengirim event langkah kerja terstruktur ke callback Kotlin / UI."""
-    if cb and callable(cb):
-        try:
-            cb({
-                "type": "step",
-                "tool": tool,
-                "status": status,
-                "detail": detail
-            })
-        except Exception:
-            pass
-
-def emit_progress_event(cb: Optional[Callable], stage: str, pct: int, msg: str):
-    """Mengirim event progres ke callback Kotlin / UI."""
-    if cb and callable(cb):
-        try:
-            cb({
-                "type": "progress",
-                "stage": stage,
-                "pct": max(0, min(100, int(pct))),
-                "msg": msg
-            })
-        except Exception:
-            pass
-
-# ==============================================================================
-# 1. PARSER ARGUMEN PERINTAH /PLAN
-# ==============================================================================
-def parse_plan_args(arg_str: str, attached_files: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Parse argumen perintah /plan."""
-    parts = arg_str.strip().split()
-    topic_words = []
-    duration = 45.0
-    media_list = list(attached_files) if attached_files else []
-    vo_file = None
-    bgm_file = None
-
-    idx = 0
-    while idx < len(parts):
-        token = parts[idx]
-        if token == "--duration" and idx + 1 < len(parts):
+    for k in ["niche", "style", "laws"]:
+        f_path = os.path.join(ws_dir, f"{k}.md")
+        if os.path.exists(f_path):
             try:
-                duration = float(parts[idx + 1])
-            except ValueError:
+                with open(f_path, "r", encoding="utf-8") as f:
+                    context[k] = f.read().strip()[:1000]
+            except Exception:
                 pass
-            idx += 2
-        elif token == "--media" and idx + 1 < len(parts):
-            m_path = parts[idx + 1]
-            if m_path not in media_list:
-                media_list.append(m_path)
-            idx += 2
-        elif token == "--vo" and idx + 1 < len(parts):
-            vo_file = parts[idx + 1]
-            idx += 2
-        elif token == "--bgm" and idx + 1 < len(parts):
-            bgm_file = parts[idx + 1]
-            idx += 2
-        else:
-            topic_words.append(token)
-            idx += 1
 
-    topic = " ".join(topic_words).strip() or "Konten Otomatis"
-    return {
-        "topic": topic,
-        "duration": duration,
-        "media": media_list,
-        "vo": vo_file,
-        "bgm": bgm_file
-    }
+    # Cari skill director terkait
+    skill_data = load_skill(f"{workspace}-director")
+    if skill_data.get("status") == "ok":
+        context["skill"] = skill_data.get("content", "")[:1200]
+
+    return context
 
 # ==============================================================================
-# 2. HANDLER MODE CLI LANGSUNG (DIAWALI '/')
+# CORE AGENT TOOLBOX DEFINITION (OPENAI SCHEMAS)
 # ==============================================================================
-def handle_cli_command(
-    cmd_line: str,
-    attached_files: Optional[List[str]] = None,
-    session: Optional[Dict[str, Any]] = None,
-    event_callback: Optional[Callable] = None
-) -> Dict[str, Any]:
-    """Mengeksekusi perintah CLI instan (0 token AI)."""
-    session = session if session is not None else load_session()
-    raw = cmd_line.strip()
-    cmd_name = raw.split()[0].lower()
-    arg_str = raw[len(cmd_name):].strip()
 
-    logs: List[str] = [f"[CLI] Perintah: {raw}"]
-    action_cards: List[Dict[str, Any]] = []
-    steps: List[Dict[str, str]] = []
-    reply = ""
-
-    # /help
-    if cmd_name == "/help":
-        reply = (
-            "[CLI] PANDUAN PERINTAH OPERATOR:\n"
-            "  /help                     - Tampilkan bantuan ini\n"
-            "  /status                   - Cek status API provider, workspace, & sisa storage\n"
-            "  /workspaces               - Daftar akun & status Skill DNA\n"
-            "  /use <nama_workspace>     - Ganti workspace aktif\n"
-            "  /assets [scan|list|search <q>] - Kelola aset visual & audio lokal\n"
-            "  /fetch <url> [start-end]  - Unduh potongan klip 1080p in-process\n"
-            "  /plan <topik> [opsi]      - Susun rencana plan.json & contract.json\n"
-            "  /render [plan_path]       - Render video 1080p in-process\n"
-            "  /clear                    - Bersihkan riwayat percakapan sesi"
-        )
-        logs.append("[OK] Bantuan ditampilkan.")
-
-    # /status
-    elif cmd_name == "/status":
-        from engine.router import get_all_providers_status
-        prov_info = get_all_providers_status()
-        providers = prov_info.get("providers", {})
-        storage = get_storage_info()
-
-        prov_lines = []
-        for p, st in providers.items():
-            status_tag = st.get("status", "UNKNOWN")
-            ready_k = st.get("ready", 0)
-            total_k = st.get("total_keys", 0)
-            prov_lines.append(f"  - {p.upper():<10}: {status_tag} ({ready_k}/{total_k} key siap)")
-
-        reply = (
-            "[STATUS] SISTEM & RUNTIME CONTENTSTUDIO:\n"
-            f"  Workspace Aktif : {session.get('active_workspace', '-')}\n"
-            f"  Last Plan       : {session.get('last_plan_path') or '-'}\n"
-            f"  Last Output     : {session.get('last_output_video') or '-'}\n"
-            f"  Sisa Storage    : {storage['free_gb']} GB bebas dari total {storage['total_gb']} GB ({storage['pct_used']}% terpakai)\n"
-            "  Provider LLM Status:\n" + "\n".join(prov_lines)
-        )
-        logs.append("[OK] Status sistem diperbarui.")
-
-    # /workspaces
-    elif cmd_name == "/workspaces":
-        from engine.director import get_workspaces_list
-        ws_list = get_workspaces_list()
-        lines = ["[STATUS] DAFTAR WORKSPACE TERSEDIA:"]
-        for item in ws_list:
-            w_name = item.get("workspace", "")
-            w_st = item.get("status", "").upper()
-            w_niche = item.get("niche", "-")
-            active_marker = " [AKTIF]" if w_name == session.get("active_workspace") else ""
-            lines.append(f"  * {w_name:<16} [{w_st}]{active_marker} - {w_niche}")
-        reply = "\n".join(lines)
-        logs.append(f"[OK] {len(ws_list)} workspace ditemukan.")
-
-    # /use <workspace>
-    elif cmd_name == "/use":
-        target_ws = arg_str.strip()
-        if not target_ws:
-            reply = "[ERR] Tentukan nama workspace. Contoh: /use hok_insights"
-            logs.append("[ERR] Argumen workspace kosong.")
-            return {
-                "status": "error",
-                "mode": "cli",
-                "active_workspace": session.get("active_workspace", ""),
-                "reply": reply,
-                "logs": logs,
-                "steps": steps,
-                "action_cards": action_cards
+CORE_TOOLS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "ls_dir",
+            "description": "Melihat daftar file dan subdirektori di path tertentu (relatif terhadap root ContentStudio).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path relatif direktori yang ingin dilihat (contoh: 'inbox', 'workspaces/hok_insights', 'assets'). Default '.'."}
+                }
             }
-
-        ws_full_path = os.path.join(get_workspaces_dir(), target_ws)
-        if not os.path.exists(ws_full_path) or not os.path.isdir(ws_full_path):
-            reply = f"[ERR] Workspace '{target_ws}' tidak ditemukan di {ws_full_path}. Ketik /workspaces untuk melihat daftar."
-            logs.append(f"[ERR] Workspace '{target_ws}' tidak valid.")
-        else:
-            session["active_workspace"] = target_ws
-            save_session(session)
-            reply = f"[OK] Workspace aktif dialihkan ke: '{target_ws}'."
-            logs.append(f"[OK] Active workspace set to {target_ws}.")
-
-    # /assets [scan | list | search <q>]
-    elif cmd_name == "/assets":
-        sub = arg_str.strip().split()
-        sub_act = sub[0].lower() if sub else "list"
-        query = " ".join(sub[1:]).strip() if len(sub) > 1 else ""
-
-        from engine.assets import scan_assets_library
-        if sub_act == "scan":
-            logs.append("[OP] Memindai folder assets lokal...")
-            res = scan_assets_library()
-            total = res.get("total_assets", 0)
-            reply = f"[OK] Pemindaian selesai. Total {total} aset tercatat di assets/library.json."
-            logs.append(f"[OK] Scan selesai: {total} aset.")
-        elif sub_act == "search":
-            if not query:
-                reply = "[ERR] Tentukan kata kunci pencarian. Contoh: /assets search hook"
-                logs.append("[ERR] Query search kosong.")
-            else:
-                from engine.bridge import list_assets
-                all_assets_json = list_assets()
-                all_data = json.loads(all_assets_json)
-                items = all_data.get("assets", [])
-                matched = [
-                    it for it in items
-                    if query.lower() in it.get("name", "").lower()
-                    or query.lower() in str(it.get("tags", [])).lower()
-                    or query.lower() in it.get("type", "").lower()
-                ]
-                if not matched:
-                    reply = f"[INFO] Tidak ditemukan aset dengan kata kunci: '{query}'."
-                else:
-                    lines = [f"[STATUS] HASIL PENCARIAN ASET ('{query}', total {len(matched)}):"]
-                    for m in matched[:15]:
-                        lines.append(f"  - [{m.get('type', '-').upper():<10}] {m.get('name', '-'):<25} ({m.get('path', '-')})")
-                    reply = "\n".join(lines)
-                logs.append(f"[OK] Search selesai: {len(matched)} hasil.")
-        else:  # list
-            from engine.bridge import list_assets
-            all_assets_json = list_assets()
-            all_data = json.loads(all_assets_json)
-            items = all_data.get("assets", [])
-            lines = [f"[STATUS] KATALOG ASET LOKAL (Total: {len(items)}):"]
-            for m in items[:15]:
-                lines.append(f"  - [{m.get('type', '-').upper():<10}] {m.get('name', '-'):<25} ({m.get('path', '-')})")
-            if len(items) > 15:
-                lines.append(f"  ... dan {len(items) - 15} aset lainnya. Gunakan '/assets search <kata_kunci>' untuk filter.")
-            reply = "\n".join(lines)
-            logs.append(f"[OK] Katalog aset dimuat ({len(items)} item).")
-
-    # /fetch <url> [start-end]
-    elif cmd_name == "/fetch":
-        parts = arg_str.strip().split()
-        if not parts:
-            reply = "[ERR] Tentukan URL yang ingin diunduh. Contoh: /fetch https://youtu.be/xxxx 00:00:10-00:00:20"
-            logs.append("[ERR] Argumen URL kosong.")
-        else:
-            url = parts[0]
-            section = parts[1] if len(parts) > 1 else ""
-            active_ws = session.get("active_workspace", "hok_insights")
-            out_dir = os.path.join(get_workspaces_dir(), active_ws, "inbox")
-            os.makedirs(out_dir, exist_ok=True)
-
-            logs.append(f"[OP] Mengunduh media in-process dari: {url}")
-            from engine.fetch import download_media
-            try:
-                res = download_media(
-                    url=url,
-                    out_dir=out_dir,
-                    max_height=1080,
-                    section=section,
-                    on_progress=event_callback
-                )
-                f_path = res.get("file_path", "")
-                sz = res.get("size_bytes", 0)
-                reply = (
-                    f"[OK] Media berhasil diunduh (1080p):\n"
-                    f"  File  : {f_path}\n"
-                    f"  Ukuran: {round(sz / (1024 * 1024), 2)} MB\n"
-                    f"Media siap digunakan dalam perencanaan (/plan)."
-                )
-                logs.append(f"[OK] Download berhasil: {f_path}")
-            except Exception as e:
-                reply = f"[ERR] Gagal mengunduh media: {e}"
-                logs.append(f"[ERR] Download error: {e}")
-
-    # /plan <topik> [opsi]
-    elif cmd_name == "/plan":
-        plan_params = parse_plan_args(arg_str, attached_files)
-        active_ws = session.get("active_workspace", "hok_insights")
-        proj_name = f"proj_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        logs.append(f"[OP] Menyusun rencana konten di workspace '{active_ws}'...")
-        req_dict = {
-            "workspace": active_ws,
-            "project": proj_name,
-            "topic": plan_params["topic"],
-            "duration": plan_params["duration"],
-            "media": plan_params["media"],
-            "vo": plan_params["vo"],
-            "bgm": plan_params["bgm"]
         }
-
-        from engine.director import create_plan_pipeline
-        try:
-            res = create_plan_pipeline(req_dict, on_event=event_callback, json_events=False)
-            if res.get("status") == "ok":
-                plan_path = res.get("plan_path", "")
-                contract = res.get("contract") or {}
-                session["last_plan_path"] = plan_path
-                save_session(session)
-
-                c_title = contract.get("title", plan_params["topic"])
-                c_hook = contract.get("hook", "-")
-                c_dur = contract.get("duration", plan_params["duration"])
-                c_shots = len(contract.get("scenes", []))
-
-                reply = (
-                    f"[PLAN] RENCANA KONTEN BERHASIL DISUSUN:\n"
-                    f"  Judul     : {c_title}\n"
-                    f"  Hook      : {c_hook}\n"
-                    f"  Target Dur: {c_dur}s ({c_shots} adegan)\n"
-                    f"  File Plan : {plan_path}\n\n"
-                    f"Konfirmasi rendering dengan mengetik: /render {plan_path}"
-                )
-                action_cards.append({
-                    "type": "contract",
-                    "title": c_title,
-                    "hook": c_hook,
-                    "plan_path": plan_path,
-                    "primary_cmd": f"/render {plan_path}"
-                })
-                logs.append(f"[OK] Plan dibuat: {plan_path}")
-            else:
-                reply = f"[ERR] Gagal menyusun rencana: {res.get('message', 'Unknown error')}"
-                logs.append(f"[ERR] Plan pipeline error: {res.get('message')}")
-        except Exception as e:
-            reply = f"[ERR] Kesalahan runtime saat membuat rencana: {e}"
-            logs.append(f"[ERR] Exception in plan pipeline: {e}")
-
-    # /render [plan_path]
-    elif cmd_name == "/render":
-        p_path = arg_str.strip() or session.get("last_plan_path")
-        if not p_path:
-            reply = "[ERR] Tidak ada rencana untuk dirender. Tentukan path atau jalankan /plan terlebih dahulu."
-            logs.append("[ERR] Plan path kosong.")
-        else:
-            p_path = resolve_path(p_path)
-            if not os.path.exists(p_path):
-                reply = f"[ERR] File plan.json tidak ditemukan: {p_path}"
-                logs.append(f"[ERR] File not found: {p_path}")
-            else:
-                logs.append(f"[RENDER] Memulai rendering Full HD 1080p: {p_path}...")
-                from engine.bridge import render_project
-                try:
-                    res_json = render_project(p_path, event_callback=event_callback)
-                    res = json.loads(res_json)
-                    if res.get("status") == "ok":
-                        out_vid = res.get("output_video", "")
-                        session["last_output_video"] = out_vid
-                        save_session(session)
-
-                        res_str = res.get("resolution", "1080x1920")
-                        dur_sec = res.get("duration", 0.0)
-                        sz_mb = round(res.get("size_bytes", 0) / (1024 * 1024), 2)
-
-                        reply = (
-                            f"[RENDER] PRODUKSI VIDEO 1080P SELESAI:\n"
-                            f"  Output    : {out_vid}\n"
-                            f"  Resolusi  : {res_str}\n"
-                            f"  Durasi    : {dur_sec}s\n"
-                            f"  Ukuran    : {sz_mb} MB"
-                        )
-                        action_cards.append({
-                            "type": "video_ready",
-                            "title": "Render 1080p Selesai",
-                            "path": out_vid
-                        })
-                        logs.append(f"[OK] Render selesai: {out_vid}")
-                    else:
-                        reply = f"[ERR] Rendering gagal: {res.get('message', 'Unknown error')}"
-                        logs.append(f"[ERR] Render error: {res.get('message')}")
-                except Exception as e:
-                    reply = f"[ERR] Kesalahan runtime saat render: {e}"
-                    logs.append(f"[ERR] Exception in render: {e}")
-
-    # /clear
-    elif cmd_name == "/clear":
-        session["history"] = []
-        save_session(session)
-        reply = "[OK] Riwayat percakapan sesi telah dibersihkan."
-        logs.append("[OK] Sesi di-reset.")
-
-    else:
-        reply = f"[ERR] Perintah tidak dikenali: '{cmd_name}'. Ketik /help untuk daftar perintah yang tersedia."
-        logs.append(f"[ERR] Unknown command: {cmd_name}")
-
-    return {
-        "status": "ok",
-        "mode": "cli",
-        "active_workspace": session.get("active_workspace", ""),
-        "reply": reply,
-        "logs": logs,
-        "steps": steps,
-        "action_cards": action_cards
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Membaca isi file teks di ContentStudio (niche.md, style.md, plan.json, dsb).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path relatif atau absolut ke file yang ingin dibaca."}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Menulis atau memperbarui file teks di ContentStudio (membuat direktori otomatis jika belum ada).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path tujuan file yang akan ditulis."},
+                    "content": {"type": "string", "description": "Isi teks lengkap yang akan ditulis ke file."}
+                },
+                "required": ["path", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_path",
+            "description": "Menghapus file atau direktori yang tidak diperlukan untuk menghemat penyimpanan.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path file atau direktori yang akan dihapus."}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_workspace",
+            "description": "Membuat akun/workspace baru beserta file niche.md, style.md, dan laws.md.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nama unik workspace (hanya huruf, angka, underscore)."},
+                    "niche": {"type": "string", "description": "Deskripsi niche/topik utama konten."},
+                    "style": {"type": "string", "description": "Pedoman gaya visual, font, dan warna."},
+                    "laws": {"type": "string", "description": "Hukum wajib dan larangan keras akun."}
+                },
+                "required": ["name", "niche"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_assets",
+            "description": "Mencari stiker, meme, SFX, atau background yang tersedia di bank aset lokal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "Filter kategori ('sticker', 'meme', 'sfx', 'background', atau kosong untuk semua)."},
+                    "tag": {"type": "string", "description": "Kata kunci tag pencarian (contoh: 'hook', 'arrow', 'funny')."}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_skill",
+            "description": "Memuat isi penuh SOP Skill operasional (on-demand) untuk memandu pembuatan konten spesifik.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nama atau slug skill yang ingin dimuat (contoh: 'short-form-producer', 'media-hunter')."}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "install_skill",
+            "description": "Menginstal skill baru secara dinamis dari URL GitHub repo, URL raw SKILL.md, atau path ZIP lokal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "URL raw SKILL.md, URL repository GitHub, atau path file ZIP lokal."}
+                },
+                "required": ["source"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hunt_media",
+            "description": "Berburu dan mengunduh bahan footage video (clip), meme reaksi (meme), atau efek suara (sfx) secara in-process via YouTube search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Kata kunci pencarian media (contoh: 'Honor of Kings gameplay rank', 'patrick bingung meme', 'whoosh sound')."},
+                    "media_type": {"type": "string", "description": "Tipe media yang dicari: 'clip' (video footage 1080p), 'meme' (video reaksi pendek), atau 'sfx' (audio efek suara). Default 'clip'."},
+                    "duration": {"type": "number", "description": "Durasi potongan detik yang diinginkan (default 6.0 detik)."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_plan",
+            "description": "Memvalidasi struktur teknis file plan.json terhadap aturan build.py sebelum dirender (Preflight check).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_path": {"type": "string", "description": "Path relatif atau absolut ke file plan.json."}
+                },
+                "required": ["plan_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "prepare_render",
+            "description": "Menyajikan rencana video final kepada pengguna dan menampilkan Action Card konfirmasi tombol render 1080p.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_path": {"type": "string", "description": "Path file plan.json yang sudah divalidasi 100% sukses."},
+                    "summary": {"type": "string", "description": "Ringkasan konsep video, durasi, hook, dan shot list untuk pengguna."}
+                },
+                "required": ["plan_path", "summary"]
+            }
+        }
     }
+]
 
 # ==============================================================================
-# 3. HANDLER AUTONOMOUS AGENT (AGENTIC TOOL-CALLING LOOP MAKS 8 LANGKAH)
+# TOOL HANDLERS EXECUTION
 # ==============================================================================
-AGENT_TOOLS_SCHEMA = """
-Tersedia tools kerja otonom yang dapat kamu panggil:
-1. read_file: {"rel_path": "<path_relatif>"} -> Membaca isi file di workspaces/, .agents/skills/, atau assets/
-2. write_file: {"rel_path": "<path_relatif>", "content": "<teks_atau_json>"} -> Menulis/mengedit file di workspaces/ atau .agents/skills/ (untuk revisi plan.json, style.md, SKILL.md, dll.)
-3. validate_plan: {"plan_path": "<path_ke_plan.json>"} -> Menguji validasi plan.json in-process sebelum dirender
-4. create_workspace: {"name": "<nama>", "niche_md": "<teks>", "style_md": "<teks>", "laws_md": "<teks>", "skill_md": "<teks>"} -> Membuat struktur workspace baru dan Skill DNA
-5. list_workspaces: {} -> Daftar workspace dan status Skill DNA
-6. set_workspace: {"workspace": "<nama>"} -> Ubah workspace aktif
-7. list_assets: {"asset_type": "<sticker|sfx|background|kosong>", "tag": "<kata_kunci|kosong>"} -> List aset library
-8. scan_assets: {} -> Pindai ulang folder aset lokal
-9. fetch_media: {"url": "<url>", "section": "<00:00:10-00:00:20|kosong>"} -> Unduh potongan media 1080p
-10. inspect_media: {"file_path": "<path>"} -> Probe durasi, resolusi, aspek rasio media
-11. create_plan: {"topic": "<topik>", "duration": <detik_float>, "media_paths": ["<path1>", ...]} -> Susun rencana & kontrak video
-12. render_project: {"plan_path": "<path_ke_plan.json>"} -> Render Full HD 1080p video
-"""
 
-def clean_llm_json(raw: str) -> str:
-    """Membersihkan format output JSON dari blok markdown ```json."""
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z0-9_-]*\n", "", raw)
-        raw = re.sub(r"\n```$", "", raw)
-    return raw.strip()
+def execute_local_tool(name: str, args: Dict[str, Any], session: Dict[str, Any]) -> str:
+    """Mengeksekusi tool lokal bawaan secara in-process."""
+    root_d = get_root_dir()
 
-def execute_agent_tool(tool_name: str, args: Dict[str, Any], session: Dict[str, Any],
-                       event_callback: Optional[Callable] = None) -> Tuple[Any, Optional[Dict[str, Any]], str, str]:
-    """
-    Mengeksekusi tool internal in-process dengan sandboxing.
-    Return: (tool_result, optional_action_card, log_msg, step_detail)
-    """
-    card = None
+    if name == "ls_dir":
+        rel_p = args.get("path", ".")
+        target_p = os.path.abspath(os.path.join(root_d, rel_p)) if not os.path.isabs(rel_p) else rel_p
+        if not os.path.exists(target_p):
+            return f"[ERR] Direktori tidak ditemukan: {rel_p}"
+        if not os.path.isdir(target_p):
+            return f"[INFO] '{rel_p}' adalah file tunggal (size: {os.path.getsize(target_p)} bytes)."
+        items = sorted(os.listdir(target_p))
+        res = []
+        for it in items[:40]:
+            fp = os.path.join(target_p, it)
+            t_str = "DIR" if os.path.isdir(fp) else "FILE"
+            sz_str = f" ({os.path.getsize(fp)} B)" if t_str == "FILE" else ""
+            res.append(f"[{t_str}] {it}{sz_str}")
+        return "\n".join(res) if res else "[DIREKTORI KOSONG]"
 
-    # TOOL 1: read_file
-    if tool_name == "read_file":
-        rel_path = args.get("rel_path", "").strip()
-        safe_path = sanitize_safe_path(rel_path)
-        if not safe_path or not os.path.exists(safe_path):
-            return {"status": "error", "message": f"File tidak ditemukan atau di luar sandbox: {rel_path}"}, None, f"[ERR] File tidak ada: {rel_path}", f"Gagal membaca {rel_path}"
+    elif name == "read_file":
+        rel_p = args.get("path", "")
+        target_p = os.path.abspath(os.path.join(root_d, rel_p)) if not os.path.isabs(rel_p) else rel_p
+        if not os.path.exists(target_p):
+            return f"[ERR] File tidak ditemukan: {rel_p}"
         try:
-            with open(safe_path, "r", encoding="utf-8") as f:
-                content = f.read(100_000)  # Batasi 100KB
-            return {"status": "ok", "path": rel_path, "content": content}, None, f"[OK] Membaca {rel_path} ({len(content)} karakter).", f"Membaca isi file {rel_path}"
+            with open(target_p, "r", encoding="utf-8") as f:
+                content = f.read()
+            if len(content) > 12000:
+                return content[:12000] + f"\n... [TERPOTONG: Total {len(content)} karakter]"
+            return content
         except Exception as e:
-            return {"status": "error", "message": str(e)}, None, f"[ERR] Gagal membaca: {e}", f"Error membaca {rel_path}"
+            return f"[ERR] Gagal membaca file: {e}"
 
-    # TOOL 2: write_file
-    elif tool_name == "write_file":
-        rel_path = args.get("rel_path", "").strip()
+    elif name == "write_file":
+        rel_p = args.get("path", "")
         content = args.get("content", "")
-        safe_path = sanitize_safe_path(rel_path)
-        if not safe_path:
-            return {"status": "error", "message": f"Path tidak valid atau di luar sandbox: {rel_path}"}, None, f"[ERR] Path invalid: {rel_path}", f"Ditolak: di luar sandbox"
+        target_p = os.path.abspath(os.path.join(root_d, rel_p)) if not os.path.isabs(rel_p) else rel_p
         try:
-            os.makedirs(os.path.dirname(safe_path), exist_ok=True)
-            with open(safe_path, "w", encoding="utf-8") as f:
+            os.makedirs(os.path.dirname(target_p), exist_ok=True)
+            with open(target_p, "w", encoding="utf-8") as f:
                 f.write(content)
-            # Jika yang diedit adalah plan.json, perbarui session last_plan_path
-            if safe_path.endswith("plan.json"):
-                session["last_plan_path"] = safe_path
-                save_session(session)
-            return {"status": "ok", "path": rel_path, "bytes_written": len(content)}, None, f"[OK] Menulis file {rel_path} ({len(content)} byte).", f"Menulis ke file {rel_path}"
+            return f"[OK] File berhasil ditulis: {os.path.relpath(target_p, root_d)} ({len(content)} karakter)"
         except Exception as e:
-            return {"status": "error", "message": str(e)}, None, f"[ERR] Gagal menulis: {e}", f"Error menulis {rel_path}"
+            return f"[ERR] Gagal menulis file: {e}"
 
-    # TOOL 3: validate_plan
-    elif tool_name == "validate_plan":
-        p_path = resolve_path(args.get("plan_path") or session.get("last_plan_path", ""))
-        from engine.build import validate_plan_file
-        is_valid, err_msg = validate_plan_file(p_path)
-        if is_valid:
-            return {"status": "ok", "valid": True, "plan_path": p_path}, None, f"[OK] Validasi sukses: {p_path}.", f"Memvalidasi plan.json: LULUS"
-        else:
-            return {"status": "invalid", "valid": False, "plan_path": p_path, "error": err_msg}, None, f"[WARN] Validasi gagal: {err_msg[:80]}.", f"Memvalidasi plan.json: GAGAL ({err_msg[:60]})"
+    elif name == "delete_path":
+        rel_p = args.get("path", "")
+        target_p = os.path.abspath(os.path.join(root_d, rel_p)) if not os.path.isabs(rel_p) else rel_p
+        if not os.path.exists(target_p):
+            return f"[WARN] Path tidak ditemukan: {rel_p}"
+        try:
+            if os.path.isdir(target_p):
+                shutil.rmtree(target_p)
+            else:
+                os.remove(target_p)
+            return f"[OK] Berhasil menghapus: {rel_p}"
+        except Exception as e:
+            return f"[ERR] Gagal menghapus: {e}"
 
-    # TOOL 4: create_workspace
-    elif tool_name == "create_workspace":
-        name = args.get("name", "").strip().lower().replace(" ", "_")
-        if not name:
-            return {"status": "error", "message": "Nama workspace wajib diisi."}, None, "[ERR] Nama workspace kosong.", "Gagal: nama kosong"
-
-        ws_dir = os.path.join(get_workspaces_dir(), name)
-        skill_dir = os.path.join(get_skills_dir(), f"{name}-director")
-        os.makedirs(ws_dir, exist_ok=True)
-        os.makedirs(os.path.join(ws_dir, "inbox"), exist_ok=True)
+    elif name == "create_workspace":
+        ws_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", args.get("name", "").strip().lower())
+        if not ws_name:
+            return "[ERR] Nama workspace tidak valid."
+        ws_dir = os.path.join(get_workspaces_dir(), ws_name)
         os.makedirs(os.path.join(ws_dir, "projects"), exist_ok=True)
-        os.makedirs(skill_dir, exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "references"), exist_ok=True)
 
-        niche_md = args.get("niche_md") or f"# NICHE: {name.upper()}\nWorkspace konten mandiri untuk niche {name}."
-        style_md = args.get("style_md") or "# STYLE & TONE\n- Resolusi: 1080p (9:16)\n- Pacing cepat dan hook kuat."
-        laws_md = args.get("laws_md") or "# LAWS\n1. Seluruh media wajib beresolusi Full HD 1080x1920.\n2. Audio jernih."
-        skill_md = args.get("skill_md") or f"# SKILL: {name}-director\nSutradara otomatis untuk workspace {name}."
+        niche = args.get("niche", f"# NICHE: {ws_name}\nTopik konten otomatis.")
+        style = args.get("style", "# STYLE GUIDE\n- Rasio: 9:16 Full HD 1080p (1080x1920)\n- Framing: blur_fill.")
+        laws = args.get("laws", "# LAWS & RULES\n1. Wajib resolusi 1080p.\n2. Bebas black bars.")
 
-        with open(os.path.join(ws_dir, "niche.md"), "w", encoding="utf-8") as f:
-            f.write(niche_md)
-        with open(os.path.join(ws_dir, "style.md"), "w", encoding="utf-8") as f:
-            f.write(style_md)
-        with open(os.path.join(ws_dir, "laws.md"), "w", encoding="utf-8") as f:
-            f.write(laws_md)
-        with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
-            f.write(skill_md)
+        for f_name, c_text in [("niche.md", niche), ("style.md", style), ("laws.md", laws)]:
+            with open(os.path.join(ws_dir, f_name), "w", encoding="utf-8") as f:
+                f.write(c_text.strip() + "\n")
 
-        session["active_workspace"] = name
+        session["active_workspace"] = ws_name
         save_session(session)
-        return {"status": "ok", "workspace": name, "ws_dir": ws_dir}, None, f"[OK] Workspace '{name}' berhasil dibuat.", f"Membuat workspace '{name}' & Skill DNA"
+        return f"[OK] Workspace '{ws_name}' berhasil dibuat dan dijadikan workspace aktif."
 
-    # TOOL 5: list_workspaces
-    elif tool_name == "list_workspaces":
-        from engine.director import get_workspaces_list
-        res = get_workspaces_list()
-        return res, None, f"[OK] Diperoleh {len(res)} workspace.", "Melihat daftar workspace"
+    elif name == "list_assets":
+        cat = args.get("category", "").lower().strip()
+        tag = args.get("tag", "").lower().strip()
+        lib = load_library()
+        assets = lib.get("assets", [])
+        if cat:
+            assets = [a for a in assets if a.get("type") == cat]
+        if tag:
+            assets = [a for a in assets if tag in [t.lower() for t in a.get("tags", [])]]
 
-    # TOOL 6: set_workspace
-    elif tool_name == "set_workspace":
-        target = args.get("workspace", "").strip()
-        ws_path = os.path.join(get_workspaces_dir(), target)
-        if os.path.exists(ws_path) and os.path.isdir(ws_path):
-            session["active_workspace"] = target
-            save_session(session)
-            return {"status": "ok", "active_workspace": target}, None, f"[OK] Workspace aktif set ke {target}.", f"Mengganti workspace ke '{target}'"
-        return {"status": "error", "message": f"Workspace '{target}' tidak ditemukan."}, None, f"[ERR] Workspace '{target}' tidak ditemukan.", f"Gagal ganti workspace"
+        if not assets:
+            return "[INFO] Tidak ada aset yang cocok. Anda dapat berburu aset baru dengan tool hunt_media."
+        lines = [f"Total {len(assets)} aset ditemukan:"]
+        for a in assets[:20]:
+            lines.append(f"- [{a.get('type').upper()}] {a.get('name')} -> {a.get('path')} (Tags: {', '.join(a.get('tags', []))})")
+        return "\n".join(lines)
 
-    # TOOL 7: list_assets
-    elif tool_name == "list_assets":
-        from engine.bridge import list_assets
-        res_str = list_assets(asset_type=args.get("asset_type", ""), tag=args.get("tag", ""))
-        return json.loads(res_str), None, "[OK] Katalog aset dimuat.", "Melihat katalog aset"
-
-    # TOOL 8: scan_assets
-    elif tool_name == "scan_assets":
-        from engine.assets import scan_assets_library
-        res = scan_assets_library()
-        return res, None, f"[OK] Scan aset selesai: {res.get('total_assets', 0)} item.", "Memindai folder aset"
-
-    # TOOL 9: fetch_media
-    elif tool_name == "fetch_media":
-        url = args.get("url", "")
-        sec = args.get("section", "")
-        active_ws = session.get("active_workspace", "hok_insights")
-        out_d = os.path.join(get_workspaces_dir(), active_ws, "inbox")
-        from engine.fetch import download_media
-        res = download_media(url=url, out_dir=out_d, max_height=1080, section=sec, on_progress=event_callback)
-        return res, None, f"[OK] Download media selesai: {res.get('file_path')}.", f"Mengunduh klip dari {url[:30]}..."
-
-    # TOOL 10: inspect_media
-    elif tool_name == "inspect_media":
-        f_path = resolve_path(args.get("file_path", ""))
-        from engine.director import probe_media_file
-        res = probe_media_file(f_path)
-        return res, None, f"[OK] Inspeksi media selesai: {f_path}.", f"Menginspeksi media {os.path.basename(f_path)}"
-
-    # TOOL 11: create_plan
-    elif tool_name == "create_plan":
-        topic = args.get("topic", "Konten Video")
-        dur = float(args.get("duration", 45.0) or 45.0)
-        m_paths = args.get("media_paths") or []
-        active_ws = session.get("active_workspace", "hok_insights")
-        proj_name = f"proj_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        req_dict = {
-            "workspace": active_ws,
-            "project": proj_name,
-            "topic": topic,
-            "duration": dur,
-            "media": m_paths
-        }
-        from engine.director import create_plan_pipeline
-        res = create_plan_pipeline(req_dict, on_event=event_callback, json_events=False)
+    elif name == "load_skill":
+        s_name = args.get("name", "")
+        res = load_skill(s_name)
         if res.get("status") == "ok":
-            plan_path = res.get("plan_path", "")
-            session["last_plan_path"] = plan_path
-            save_session(session)
-            contract = res.get("contract") or {}
-            card = {
-                "type": "contract",
-                "title": contract.get("title", topic),
-                "hook": contract.get("hook", "-"),
-                "plan_path": plan_path,
-                "primary_cmd": f"/render {plan_path}"
-            }
-            return res, card, f"[OK] Plan dibuat: {plan_path}.", f"Menyusun rencana video '{topic}'"
-        return res, None, f"[ERR] Gagal membuat plan: {res.get('message')}.", "Gagal menyusun plan"
+            return f"=== SKILL: {res.get('name')} ===\n{res.get('content')}"
+        return f"[ERR] {res.get('message')}"
 
-    # TOOL 12: render_project
-    elif tool_name == "render_project":
-        plan_path = resolve_path(args.get("plan_path") or session.get("last_plan_path", ""))
-        from engine.bridge import render_project
-        res_str = render_project(plan_path, event_callback=event_callback)
-        res = json.loads(res_str)
+    elif name == "install_skill":
+        src = args.get("source", "")
+        res = install_skill(src)
         if res.get("status") == "ok":
-            out_vid = res.get("output_video", "")
-            session["last_output_video"] = out_vid
-            save_session(session)
-            card = {
-                "type": "video_ready",
-                "title": "Render 1080p Selesai",
-                "path": out_vid
-            }
-            return res, card, f"[OK] Render selesai: {out_vid}.", f"Merender video 1080p"
-        return res, None, f"[ERR] Gagal render: {res.get('message')}.", "Gagal merender video"
+            return f"[OK] {res.get('message')} (Slug: {res.get('slug')})"
+        return f"[ERR] {res.get('message')}"
 
-    else:
-        return {"status": "error", "message": f"Tool '{tool_name}' tidak dikenal."}, None, f"[ERR] Tool '{tool_name}' tidak dikenal.", f"Tool '{tool_name}' tidak dikenal"
+    elif name == "hunt_media":
+        q = args.get("query", "")
+        m_type = args.get("media_type", "clip")
+        dur = float(args.get("duration", 6.0))
+        ws = session.get("active_workspace", "hok_insights")
+        target_dir = os.path.join(get_workspaces_dir(), ws, "inbox") if m_type == "clip" else None
+        res = hunt_media(query=q, media_type=m_type, duration=dur, out_dir=target_dir)
+        if res.get("status") == "ok":
+            cached_flag = "[DARI CACHE]" if res.get("cached") else "[UNDUHAN BARU]"
+            return f"[OK] {cached_flag} Media {res.get('type').upper()} siap: {res.get('path')} ({res.get('title')})"
+        return f"[ERR] Berburu media gagal: {res.get('message')}"
 
-def handle_agent_instruction(
-    user_input: str,
-    attached_files: Optional[List[str]] = None,
+    elif name == "validate_plan":
+        p_path = args.get("plan_path", "")
+        target_p = os.path.abspath(os.path.join(root_d, p_path)) if not os.path.isabs(p_path) else p_path
+        if not os.path.exists(target_p):
+            return f"[ERR] File plan.json tidak ditemukan di: {p_path}"
+
+        try:
+            with open(target_p, "r", encoding="utf-8") as f:
+                plan_dict = json.load(f)
+        except Exception as e:
+            return f"[ERR] Format JSON salah: {e}"
+
+        # Hard Guardrail 1080p
+        out_cfg = plan_dict.setdefault("output", {})
+        out_cfg["resolution"] = "1080p"
+        out_cfg["aspect"] = "9:16"
+        out_cfg["fps"] = 30
+
+        try:
+            with open(target_p, "w", encoding="utf-8") as f:
+                json.dump(plan_dict, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+        try:
+            from engine.build import validate_plan
+            is_valid = validate_plan(plan_dict, target_p)
+            if is_valid:
+                session["last_plan_path"] = target_p
+                save_session(session)
+                return "[OK] Preflight validation SUKSES 100%. File plan.json siap dirender."
+            return "[ERR] Preflight validation gagal. Periksa kembali segmen sumber, durasi, atau framing."
+        except Exception as e:
+            return f"[ERR] Error validasi: {e}"
+
+    elif name == "prepare_render":
+        p_path = args.get("plan_path", "")
+        summary = args.get("summary", "")
+        target_p = os.path.abspath(os.path.join(root_d, p_path)) if not os.path.isabs(p_path) else p_path
+        session["last_plan_path"] = target_p
+        save_session(session)
+        return f"[RENDER_READY] Rencana video siap dirender:\nPath: {target_p}\nRingkasan: {summary}"
+
+    return f"[ERR] Tool lokal '{name}' tidak dikenal."
+
+# ==============================================================================
+# MAIN AGENT LOOP (AUTONOMOUS EXECUTION ENGINE)
+# ==============================================================================
+
+def execute_autonomous_agent(
+    user_prompt: str,
+    attached_files: List[str] = [],
     session: Optional[Dict[str, Any]] = None,
-    event_callback: Optional[Callable] = None
+    event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 ) -> Dict[str, Any]:
     """
-    Menangani instruksi bahasa alami bebas (Autonomous CLI Agent) dengan agentic tool-calling loop (maks 8 langkah).
-    Mendukung modifikasi file, self-validation, guardrail konfirmasi, dan streaming steps.
+    Eksekusi loop otonom Real CLI Agent hingga 12 langkah dengan Native Tool-Calling:
+    - Auto-Inject Konteks (Skills, MCP, DNA Workspace)
+    - Proaktif & Self-Correction (Auto-Hunt, Auto-Plan, Auto-Validation)
     """
-    session = session if session is not None else load_session()
-    logs: List[str] = [f"[AGENT] Menerima instruksi: {user_input[:80]}..."]
-    action_cards: List[Dict[str, Any]] = []
-    steps: List[Dict[str, str]] = []
+    sess = session or load_session()
+    active_ws = sess.get("active_workspace", "hok_insights")
+    history = load_chat_history(active_ws)
 
-    input_lower = user_input.lower()
-    auto_render_requested = any(k in input_lower for k in [
-        "langsung render", "render sekarang", "auto render", "tanpa konfirmasi", "direct render"
-    ])
+    # 1. Kumpulkan seluruh tools aktif (Core Tools + Remote MCP Tools)
+    all_tools: List[Dict[str, Any]] = list(CORE_TOOLS)
+    try:
+        mcp_tools = get_all_mcp_tools()
+        all_tools.extend(mcp_tools)
+    except Exception as e:
+        print(f"[!] Warning MCP: {e}", file=sys.stderr)
 
-    from engine.router import route_call
+    # 2. Ambil konteks DNA workspace & indeks skill
+    ws_context = get_workspace_context(active_ws)
+    skill_index = get_skill_index()
+    skill_idx_summary = "\n".join([f"- {s['slug']}: {s['description']}" for s in skill_index])
 
-    history = session.get("history", [])
-    active_ws = session.get("active_workspace", "hok_insights")
-    last_plan = session.get("last_plan_path")
+    # 3. Bangun System Prompt Proaktif
+    system_prompt = f"""Kamu adalah ContentStudio Autonomous CLI Agent, sutradara dan produser video profesional di Android.
+Target format utama video: Vertikal 9:16 Full HD 1080p (1080x1920, 30fps).
 
-    history_snippet = ""
-    if history:
-        history_snippet = "Riwayat percakapan sebelumnya:\n"
-        for turn in history[-4:]:
-            r = turn.get("role", "user")
-            c = turn.get("content", "")
-            history_snippet += f"- {r.upper()}: {c}\n"
+WORKSPACE AKTIF: '{active_ws}'
+DNA KONSTITUSI WORKSPACE:
+- Niche: {ws_context.get('niche') or 'Belum didefinisikan.'}
+- Style: {ws_context.get('style') or 'Standard 9:16, 1080p Full HD, blur_fill.'}
+- Laws: {ws_context.get('laws') or 'Bebas black-bars, hook 3 detik awal, anti-pasif.'}
 
-    system_prompt = f"""Kamu adalah Autonomous AI Agent Mandiri ContentStudio, asisten produksi video pendek otomatis profesional.
-ATURAN KERAS:
-1. DILARANG KERAS MENGGUNAKAN EMOJI DALAM BENTUK APA PUN. Gunakan tag ASCII bersih seperti [OP], [OK], [ERR], [PLAN], [RENDER].
-2. Berikan jawaban yang padat, akurat, dan langsung ke inti.
-3. Workspace aktif saat ini: '{active_ws}'.
-4. File plan terakhir: '{last_plan or "None"}'.
-5. File terlampir dari input: {json.dumps(attached_files or [])}.
+SKILL OPERASIONAL TERSEDIA (Gunakan tool load_skill jika memerlukan detail SOP):
+{skill_idx_summary}
 
-{AGENT_TOOLS_SCHEMA}
-
-KEMAMPUAN OTONOM:
-- Kamu bisa membaca file (read_file), menulis/memperbaiki konfigurasi atau plan.json (write_file), dan mengujinya sendiri (validate_plan).
-- Jika pengguna meminta membuat niche/akun baru, panggil 'create_workspace'.
-- Jika pengguna meminta revisi hook/durasi/shot pada plan yang sudah ada, baca file dengan 'read_file', sesuaikan isinya dengan 'write_file', lalu validasi dengan 'validate_plan'.
-
-GUARDRAIL PRODUKSI KONTEN:
-- Jika pengguna meminta membuat atau merakit video baru dari nol, panggil tool 'create_plan'.
-- SETELAH tool 'create_plan' berhasil, kamu WAJIB BERHENTI (jangan panggil tool render_project), KECUALI jika pengguna meminta langsung render (auto_render={auto_render_requested}). Pengguna harus mengonfirmasi rancangan sebelum render dimulai.
-
-FORMAT RESPON:
-Kamu HARUS menjawab HANYA dalam format JSON valid satu objek (tanpa blok markdown):
-{{
-  "thought": "Penalaran langkah kamu (maksimal 1 kalimat)",
-  "tool_call": {{
-    "name": "nama_tool_atau_null",
-    "args": {{ ... }}
-  }},
-  "reply": "Pesan atau kesimpulan untuk pengguna"
-}}
-Jika tidak perlu memanggil tool lagi (jawaban final), isi "tool_call": null.
+PERILAKU & ATURAN KERAS EKSEKUTOR:
+1. DILARANG MERESPONS PASIF ala Customer Service ("Maaf mendengar itu...", atau balik bertanya sebelum bertindak).
+2. Jika pengguna meminta membuat video / konten:
+   - Segera muat skill relevan via 'load_skill' (misal: 'short-form-producer').
+   - Periksa bahan di inbox atau folder proyek via 'ls_dir'.
+   - Jika belum ada bahan media: gunakan tool 'hunt_media' untuk berburu klip video 1080p, meme reaksi, atau SFX.
+   - Susun file 'plan.json' lengkap via 'write_file' dengan 'resolution': '1080p', 'aspect': '9:16', 'framing': 'blur_fill'.
+   - Validasi menggunakan 'validate_plan'. Jika ada error, perbaiki sendiri file 'plan.json' hingga lolos.
+   - Akhiri dengan 'prepare_render' agar tombol ACC produksi muncul untuk pengguna.
+3. Selalu bertindak mandiri memanfaatkan tool yang tersedia sebelum memberikan laporan final kepada pengguna.
 """
 
-    loop_count = 0
-    max_loops = 8
-    current_prompt = f"{system_prompt}\n{history_snippet}\nInstruksi Pengguna:\n{user_input}\n"
+    # 4. Susun pesan percakapan
+    messages: List[Dict[str, Any]] = []
+    # Masukkan riwayat sebelumnya
+    for h in history:
+        messages.append(h)
+
+    # Tambahkan input pengguna saat ini
+    user_content = user_prompt.strip()
+    if attached_files:
+        user_content += f"\n[Lampiran File Media: {', '.join(attached_files)}]"
+    messages.append({"role": "user", "content": user_content})
+
+    steps_recorded: List[Dict[str, Any]] = []
+    action_cards: List[Dict[str, Any]] = []
     final_reply = ""
 
-    while loop_count < max_loops:
-        loop_count += 1
-        logs.append(f"[OP] AI memproses penalaran langkah #{loop_count}...")
-
+    # 5. Loop Agentik (Maksimal 12 Langkah)
+    for step_num in range(1, MAX_AGENT_STEPS + 1):
         try:
-            raw_response = route_call(task="json", prompt=current_prompt, pace=2.0, raise_on_error=True)
-            clean_resp = clean_llm_json(raw_response)
-            parsed = json.loads(clean_resp)
+            llm_res = chat_with_tools(
+                messages=messages,
+                tools=all_tools,
+                system_prompt=system_prompt,
+                cache_dir=get_cache_dir()
+            )
         except Exception as e:
-            err_msg = f"[OP] Gagal menghubungi layanan AI router: {e}. Anda dapat menggunakan perintah CLI langsung (ketik /help)."
-            logs.append(f"[ERR] LLM call failed: {e}")
-            final_reply = err_msg
+            err_msg = f"[ERR] Pemanggilan AI Router gagal: {e}"
+            steps_recorded.append({"tool": "ai_router", "status": "error", "detail": str(e)[:120]})
+            final_reply = f"Maaf, terjadi gangguan pada AI Router: {e}. Pastikan API Key di Setelan sudah benar."
             break
 
-        thought = parsed.get("thought", "")
-        tool_call = parsed.get("tool_call")
-        partial_reply = parsed.get("reply", "")
+        content = llm_res.get("content") or ""
+        tool_calls = llm_res.get("tool_calls") or []
+        raw_msg = llm_res.get("raw_assistant_msg") or {"role": "assistant", "content": content}
+        messages.append(raw_msg)
 
-        if thought:
-            logs.append(f"[OP] Penalaran: {thought}")
-
-        if not tool_call or not isinstance(tool_call, dict) or not tool_call.get("name"):
-            final_reply = partial_reply or thought or "[OK] Selesai."
+        if not tool_calls:
+            # Selesai: LLM memberikan jawaban akhir
+            final_reply = content
             break
 
-        tool_name = tool_call.get("name")
-        tool_args = tool_call.get("args") or {}
-        logs.append(f"[TOOL] Memanggil '{tool_name}'...")
+        # Eksekusi seluruh tool call yang diminta LLM
+        for tc in tool_calls:
+            t_id = tc.get("id") or f"call_{int(time.time()*1000)}"
+            t_name = tc.get("name", "")
+            t_args = tc.get("arguments") or {}
 
-        # Pancarkan event running ke UI
-        emit_step_event(event_callback, tool_name, "running", f"Menjalankan {tool_name}...")
+            # Emit event ke Android Kotlin Service
+            if event_callback:
+                event_callback({
+                    "type": "step",
+                    "tool": t_name,
+                    "status": "running",
+                    "detail": f"Menjalankan {t_name}..."
+                })
 
-        tool_result, card, tool_log, step_detail = execute_agent_tool(tool_name, tool_args, session, event_callback)
-        logs.append(tool_log)
-        is_err = tool_result.get("status") == "error" if isinstance(tool_result, dict) else False
-        step_st = "error" if is_err else "done"
-
-        # Catat langkah kerja
-        steps.append({
-            "tool": tool_name,
-            "status": step_st,
-            "detail": step_detail
-        })
-        emit_step_event(event_callback, tool_name, step_st, step_detail)
-
-        if card:
-            action_cards.append(card)
-
-        # Guardrail konfirmasi setelah create_plan
-        if tool_name == "create_plan":
-            c_dict = tool_result.get("contract") or {}
-            c_title = c_dict.get("title", "Rencana Konten")
-            c_hook = c_dict.get("hook", "-")
-            p_path = tool_result.get("plan_path", "")
-
-            if not auto_render_requested:
-                final_reply = (
-                    f"[PLAN] Rencana video '{c_title}' telah siap disusun:\n"
-                    f"  Hook      : {c_hook}\n"
-                    f"  File Plan : {p_path}\n\n"
-                    f"Silakan tinjau rancangan di atas. Jika setuju, ketik: /render {p_path}"
-                )
-                break
+            # Eksekusi tool (Lokal atau Remote MCP)
+            if is_mcp_tool(t_name):
+                tool_output = call_mcp_tool(t_name, t_args)
             else:
-                logs.append("[OP] Mode auto-render aktif: melanjutkan eksekusi render...")
+                tool_output = execute_local_tool(t_name, t_args, sess)
 
-        elif tool_name == "render_project":
-            out_v = tool_result.get("output_video", "")
-            final_reply = partial_reply or f"[RENDER] Video Full HD 1080p berhasil dirender di: {out_v}"
-            break
+            # Jika tool prepare_render dipanggil, ciptakan Action Card untuk UI Android
+            if t_name == "prepare_render":
+                p_path = t_args.get("plan_path", "")
+                action_cards.append({
+                    "type": "render",
+                    "title": f"ACC PRODUKSI: {os.path.basename(p_path)}",
+                    "hook": "Full HD 1080p (1080x1920) 30fps",
+                    "plan_path": p_path,
+                    "primary_cmd": f"/render {p_path}"
+                })
 
-        current_prompt += f"\n[Tool Output '{tool_name}']:\n{json.dumps(tool_result, ensure_ascii=False)}\nLanjutkan penalaran atau berikan jawaban akhir."
+            step_item = {
+                "tool": t_name,
+                "status": "done" if not str(tool_output).startswith("[ERR") else "error",
+                "detail": str(tool_output).replace("\n", " ")[:120]
+            }
+            steps_recorded.append(step_item)
 
-    # Simpan interaksi ke riwayat sesi
-    if "history" not in session:
-        session["history"] = []
-    session["history"].append({"role": "user", "content": user_input})
-    session["history"].append({"role": "assistant", "content": final_reply})
-    save_session(session)
+            if event_callback:
+                event_callback({
+                    "type": "step",
+                    "tool": t_name,
+                    "status": step_item["status"],
+                    "detail": step_item["detail"]
+                })
+
+            # Masukkan hasil tool ke messages
+            messages.append({
+                "role": "tool",
+                "tool_call_id": t_id,
+                "name": t_name,
+                "content": str(tool_output)
+            })
+
+    # Simpan riwayat chat yang diperbarui
+    # Hanya simpan user dan assistant messages yang bersih
+    filtered_history = []
+    for m in messages[-20:]:
+        if m.get("role") in {"user", "assistant"}:
+            c = m.get("content")
+            if c:
+                filtered_history.append({"role": m["role"], "content": str(c)})
+    save_chat_history(active_ws, filtered_history)
 
     return {
         "status": "ok",
         "mode": "agent",
-        "active_workspace": session.get("active_workspace", ""),
-        "reply": final_reply,
-        "logs": logs,
-        "steps": steps,
-        "action_cards": action_cards
+        "active_workspace": active_ws,
+        "reply": final_reply or "Instruksi telah diproses sepenuhnya.",
+        "steps": steps_recorded,
+        "action_cards": action_cards,
+        "logs": [f"Eksekusi {len(steps_recorded)} langkah selesai."]
     }
 
 # ==============================================================================
-# 4. FUNGSI UTAMA EKSEKUSI (execute_command)
+# CLI COMMAND PROCESSOR (MODE '/')
 # ==============================================================================
-def execute_command(
-    input_text: str,
-    attached_files: Optional[List[str]] = None,
-    event_callback: Optional[Callable] = None
-) -> Dict[str, Any]:
-    """
-    Titik masuk utama eksekusi untuk Kotlin Chaquopy dan terminal console.
-    Mendeteksi otomatis:
-    - Jika input_text diawali '/' -> Mode CLI Langsung (0 token AI)
-    - Jika input_text bebas -> Mode Autonomous Agent (loop maks 8 langkah, streaming steps)
-    """
-    if not input_text or not input_text.strip():
-        session = load_session()
+
+def handle_slash_command(cmd_text: str, session: Dict[str, Any], event_callback: Optional[Callable] = None) -> Dict[str, Any]:
+    """Menangani perintah cepat diawali '/' secara instan (0 Token AI)."""
+    parts = cmd_text.strip().split()
+    cmd = parts[0].lower()
+    args = parts[1:]
+    root_d = get_root_dir()
+
+    if cmd in {"/use", "/switch"}:
+        if not args:
+            return {
+                "status": "ok", "mode": "cli", "active_workspace": session.get("active_workspace", "hok_insights"),
+                "reply": f"Workspace aktif saat ini: '{session.get('active_workspace')}'.\nGunakan '/use <nama_workspace>' untuk berpindah.",
+                "steps": [], "action_cards": []
+            }
+        target_ws = args[0].strip().lower()
+        ws_path = os.path.join(get_workspaces_dir(), target_ws)
+        if not os.path.exists(ws_path):
+            return {
+                "status": "error", "mode": "cli", "active_workspace": session.get("active_workspace", "hok_insights"),
+                "reply": f"[ERR] Workspace '{target_ws}' tidak ditemukan di {ws_path}",
+                "steps": [], "action_cards": []
+            }
+        session["active_workspace"] = target_ws
+        save_session(session)
         return {
-            "status": "ok",
-            "mode": "cli",
-            "active_workspace": session.get("active_workspace", ""),
-            "reply": "[INFO] Input kosong. Ketik /help untuk melihat daftar perintah.",
-            "logs": ["[INFO] Input kosong."],
-            "steps": [],
+            "status": "ok", "mode": "cli", "active_workspace": target_ws,
+            "reply": f"[OK] Beralih ke workspace '{target_ws}'.",
+            "steps": [{"tool": "switch_workspace", "status": "done", "detail": target_ws}],
             "action_cards": []
         }
 
-    raw = input_text.strip()
-    session = load_session()
+    elif cmd == "/workspaces":
+        ws_dir = get_workspaces_dir()
+        entries = sorted([d for d in os.listdir(ws_dir) if os.path.isdir(os.path.join(ws_dir, d)) and not d.startswith(".")])
+        cur = session.get("active_workspace")
+        lines = ["Daftar Akun / Workspace ContentStudio:"]
+        for e in entries:
+            mark = "* [AKTIF]" if e == cur else " "
+            lines.append(f"{mark} {e}")
+        return {
+            "status": "ok", "mode": "cli", "active_workspace": cur,
+            "reply": "\n".join(lines),
+            "steps": [], "action_cards": []
+        }
 
-    if raw.startswith("/"):
-        return handle_cli_command(raw, attached_files=attached_files, session=session, event_callback=event_callback)
-    else:
-        return handle_agent_instruction(raw, attached_files=attached_files, session=session, event_callback=event_callback)
+    elif cmd == "/clear":
+        active_ws = session.get("active_workspace", "hok_insights")
+        clear_chat_history(active_ws)
+        return {
+            "status": "ok", "mode": "cli", "active_workspace": active_ws,
+            "reply": f"[OK] Riwayat percakapan untuk workspace '{active_ws}' telah dibersihkan.",
+            "steps": [{"tool": "clear_history", "status": "done", "detail": active_ws}],
+            "action_cards": []
+        }
 
-# ==============================================================================
-# 5. REPL TERMINAL & STANDALONE CLI
-# ==============================================================================
-def main():
-    parser = argparse.ArgumentParser(description="ContentStudio Autonomous Agent Console")
-    parser.add_argument("-c", "--command", default=None, help="Jalankan satu perintah/instruksi lalu keluar")
-    parser.add_argument("--files", nargs="*", default=[], help="File lampiran opsional")
-    args = parser.parse_args()
+    elif cmd == "/status":
+        st = get_storage_info()
+        provs = get_all_providers_status()
+        prov_lines = []
+        for p_name, p_st in provs.get("providers", {}).items():
+            prov_lines.append(f"- {p_name.upper()}: {p_st.get('status')} ({p_st.get('ready')} ready)")
+        msg = f"""=== STATUS SISTEM CONTENTSTUDIO ===
+Workspace Aktif: {session.get('active_workspace')}
+Penyimpanan: {st.get('free_gb')} GB bebas dari {st.get('total_gb')} GB ({st.get('pct_used')}% terpakai)
+Kesiapan Provider AI:
+{chr(10).join(prov_lines)}
+"""
+        return {
+            "status": "ok", "mode": "cli", "active_workspace": session.get("active_workspace", "hok_insights"),
+            "reply": msg,
+            "steps": [], "action_cards": []
+        }
 
-    load_runtime_env()
-
-    def _term_callback(ev: Dict[str, Any]):
-        t_type = ev.get("type")
-        if t_type == "step":
-            print(f"  --> [STEP] {ev.get('tool')}: {ev.get('status')} ({ev.get('detail')})")
-        elif t_type == "progress":
-            print(f"  --> [PROG] {ev.get('stage')}: {ev.get('pct')}% - {ev.get('msg')}")
+    elif cmd == "/render":
+        if not args:
+            last_p = session.get("last_plan_path")
+            if not last_p or not os.path.exists(last_p):
+                return {
+                    "status": "error", "mode": "cli", "active_workspace": session.get("active_workspace"),
+                    "reply": "Harap tentukan path plan.json: /render <path_plan.json>",
+                    "steps": [], "action_cards": []
+                }
+            plan_path = last_p
         else:
-            pct = ev.get("pct", 0)
-            msg = ev.get("msg", "")
-            if msg:
-                print(f"  --> [{pct}%] {msg}")
+            plan_path = resolve_path(args[0])
 
-    if args.command:
-        res = execute_command(args.command, attached_files=args.files, event_callback=_term_callback)
-        print("\n" + res.get("reply", ""))
-        steps = res.get("steps", [])
-        if steps:
-            print("\n[STEPS]:")
-            for s in steps:
-                print(f"  * {s.get('tool')}: {s.get('status')} - {s.get('detail')}")
-        cards = res.get("action_cards", [])
-        if cards:
-            print("\n[ACTION CARDS]:")
-            for c in cards:
-                print(f"  * [{c.get('type', '').upper()}] {c.get('title', '')} -> {c.get('primary_cmd', c.get('path', ''))}")
-        sys.exit(0)
+        if not os.path.exists(plan_path):
+            return {
+                "status": "error", "mode": "cli", "active_workspace": session.get("active_workspace"),
+                "reply": f"[ERR] File plan tidak ditemukan: {plan_path}",
+                "steps": [], "action_cards": []
+            }
 
-    # Mode Interaktif REPL
-    session = load_session()
-    print("=" * 72)
-    print(" CONTENTSTUDIO AUTONOMOUS AGENT CONSOLE (100% IN-PROCESS & ANDROID-SAFE) ".center(72))
-    print(" Ketik /help untuk daftar perintah CLI, atau ketik langsung instruksi AI. ".center(72))
-    print("=" * 72)
-
-    while True:
         try:
-            session = load_session()
-            active_ws = session.get("active_workspace", "default")
-            prompt_str = f"[{active_ws}] > "
-            user_in = input(prompt_str).strip()
-            if not user_in:
-                continue
-            if user_in.lower() in ("exit", "quit", "q"):
-                print("[OK] Selesai. Keluar dari console.")
-                break
-
-            res = execute_command(user_in, event_callback=_term_callback)
-            print("\n" + res.get("reply", "") + "\n")
-            steps = res.get("steps", [])
-            if steps:
-                print("[STEPS]:")
-                for s in steps:
-                    print(f"  * {s.get('tool')}: {s.get('status')} - {s.get('detail')}")
-                print()
-            cards = res.get("action_cards", [])
-            if cards:
-                print("[ACTION CARDS]:")
-                for c in cards:
-                    print(f"  * [{c.get('type', '').upper()}] {c.get('title', '')} -> {c.get('primary_cmd', c.get('path', ''))}\n")
-        except (KeyboardInterrupt, EOFError):
-            print("\n[OK] Selesai. Keluar dari console.")
-            break
+            from engine.bridge import render_project
+            render_res_str = render_project(plan_path, event_callback)
+            render_res = json.loads(render_res_str)
+            if render_res.get("status") == "ok":
+                v_out = render_res.get("output_video")
+                session["last_output_video"] = v_out
+                save_session(session)
+                return {
+                    "status": "ok", "mode": "cli", "active_workspace": session.get("active_workspace"),
+                    "reply": f"[SUKSES] Video Full HD 1080p berhasil dirender:\n{v_out}",
+                    "steps": [{"tool": "render_project", "status": "done", "detail": os.path.basename(v_out)}],
+                    "action_cards": [{
+                        "type": "video_ready",
+                        "title": "VIDEO SELESAI DIRENDER",
+                        "hook": f"Resolusi {render_res.get('resolution')} ({(render_res.get('size_bytes', 0)/(1024*1024)):.2f} MB)",
+                        "path": v_out
+                    }]
+                }
+            else:
+                return {
+                    "status": "error", "mode": "cli", "active_workspace": session.get("active_workspace"),
+                    "reply": f"[ERR] Render gagal: {render_res.get('message')}",
+                    "steps": [{"tool": "render_project", "status": "error", "detail": render_res.get('message', '')}],
+                    "action_cards": []
+                }
         except Exception as e:
-            print(f"\n[ERR] Terjadi kesalahan: {e}\n")
+            return {
+                "status": "error", "mode": "cli", "active_workspace": session.get("active_workspace"),
+                "reply": f"[ERR] Error saat rendering: {e}",
+                "steps": [], "action_cards": []
+            }
+
+    elif cmd == "/help":
+        msg = """=== DAFTAR PERINTAH CEPAT (MODE CLI) ===
+/use <workspace>    : Berpindah ke akun / workspace lain
+/workspaces         : Menampilkan daftar seluruh akun
+/clear              : Mereset percakapan akun aktif
+/render [plan.json] : Menjalankan render video 1080p
+/status             : Mengecek sisa penyimpanan & status API
+/help               : Menampilkan bantuan ini
+
+Atau ketik instruksi bahasa alami bebas untuk memerintahkan AI Agent menyusun dan memproduksi konten secara otonom.
+"""
+        return {
+            "status": "ok", "mode": "cli", "active_workspace": session.get("active_workspace"),
+            "reply": msg,
+            "steps": [], "action_cards": []
+        }
+
+    return {
+        "status": "error", "mode": "cli", "active_workspace": session.get("active_workspace"),
+        "reply": f"[ERR] Perintah CLI '{cmd}' tidak dikenali. Ketik /help untuk panduan.",
+        "steps": [], "action_cards": []
+    }
+
+# ==============================================================================
+# MAIN CONSOLE ENTRYPOINT FOR CHAQUOPY & CLI
+# ==============================================================================
+
+def execute_command(
+    input_text: str,
+    attached_files: List[str] = [],
+    event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+) -> Dict[str, Any]:
+    """
+    Pintu masuk interaktif utama yang dipanggil oleh bridge.run_console:
+    Mendukung instruksi natural language (Autonomous Agent) maupun perintah cepat ('/').
+    """
+    session = load_session()
+    text = (input_text or "").strip()
+
+    if text.startswith("/"):
+        return handle_slash_command(text, session, event_callback)
+
+    return execute_autonomous_agent(
+        user_prompt=text,
+        attached_files=attached_files,
+        session=session,
+        event_callback=event_callback
+    )
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="ContentStudio Autonomous CLI Agent")
+    parser.add_argument("prompt", nargs="?", default="", help="Instruksi untuk agen atau perintah '/'")
+    parser.add_argument("--file", action="append", default=[], help="Lampiran file media")
+    args = parser.parse_args()
+
+    if args.prompt:
+        res = execute_command(args.prompt, args.file)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    else:
+        print("ContentStudio Autonomous CLI Agent Ready.")
+        print(f"Active Workspace: {load_session().get('active_workspace')}")

@@ -395,6 +395,347 @@ def call_openrouter_api(key: str, prompt: str, image_path: Optional[str] = None,
         return choices[0].get("message", {}).get("content", "")
 
 # ==============================================================================
+# NATIVE TOOL-CALLING SUITE (GROQ, GEMINI, OPENROUTER)
+# ==============================================================================
+
+def to_gemini_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Konversi OpenAPI JSON schema standar ke format Type Gemini v1beta."""
+    if not isinstance(schema, dict):
+        return {}
+    res: Dict[str, Any] = {}
+    type_map = {
+        "string": "STRING",
+        "number": "NUMBER",
+        "integer": "INTEGER",
+        "boolean": "BOOLEAN",
+        "array": "ARRAY",
+        "object": "OBJECT"
+    }
+    s_type = str(schema.get("type", "object")).lower()
+    res["type"] = type_map.get(s_type, "OBJECT")
+    if "description" in schema:
+        res["description"] = str(schema["description"])
+    if "properties" in schema and isinstance(schema["properties"], dict):
+        res["properties"] = {k: to_gemini_schema(v) for k, v in schema["properties"].items()}
+    if "required" in schema and isinstance(schema["required"], list):
+        res["required"] = [str(x) for x in schema["required"]]
+    if "items" in schema and isinstance(schema["items"], dict):
+        res["items"] = to_gemini_schema(schema["items"])
+    return res
+
+def call_groq_tools(key: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+                    system_prompt: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+    """Panggilan native tool-calling Groq OpenAI-compatible via urllib."""
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    models_to_try = [model] if model else ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.1-8b-instant"]
+
+    full_msgs = []
+    if system_prompt:
+        full_msgs.append({"role": "system", "content": system_prompt})
+    for m in messages:
+        full_msgs.append(dict(m))
+
+    last_err = None
+    for m_name in models_to_try:
+        payload: Dict[str, Any] = {
+            "model": m_name,
+            "messages": full_msgs,
+            "temperature": 0.2
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        body_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body_bytes,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "User-Agent": "ContentStudio-Router/1.0"
+            },
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+                choice = resp_data.get("choices", [{}])[0]
+                msg = choice.get("message", {})
+                content = msg.get("content") or ""
+                tool_calls = []
+                for tc in msg.get("tool_calls") or []:
+                    fn = tc.get("function", {})
+                    args_str = fn.get("arguments", "{}")
+                    try:
+                        args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
+                    except Exception:
+                        args_dict = {}
+                    tool_calls.append({
+                        "id": tc.get("id") or f"call_{len(tool_calls)+1}",
+                        "name": fn.get("name", ""),
+                        "arguments": args_dict
+                    })
+
+                raw_msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": content or None
+                }
+                if tool_calls:
+                    raw_msg["tool_calls"] = msg.get("tool_calls")
+
+                return {
+                    "provider": "groq",
+                    "model": m_name,
+                    "content": content,
+                    "tool_calls": tool_calls,
+                    "raw_assistant_msg": raw_msg
+                }
+        except urllib.error.HTTPError as he:
+            err_b = ""
+            try:
+                err_b = he.read().decode("utf-8")
+            except Exception:
+                pass
+            if he.code == 404:
+                last_err = f"Model {m_name} 404: {err_b[:80]}"
+                continue
+            raise RuntimeError(f"Groq tool-calling HTTP {he.code}: {err_b[:120]}")
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    raise RuntimeError(f"Groq tools failed with all models: {last_err}")
+
+def call_openrouter_tools(key: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+                          system_prompt: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+    """Panggilan native tool-calling OpenRouter via urllib."""
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    selected_model = model or DEFAULT_MODELS.get("openrouter_text", "meta-llama/llama-3.3-70b-instruct:free")
+
+    full_msgs = []
+    if system_prompt:
+        full_msgs.append({"role": "system", "content": system_prompt})
+    for m in messages:
+        full_msgs.append(dict(m))
+
+    payload: Dict[str, Any] = {
+        "model": selected_model,
+        "messages": full_msgs,
+        "temperature": 0.2
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    body_bytes = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body_bytes,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://contentstudio.local",
+            "X-Title": "ContentStudio Router"
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        resp_data = json.loads(resp.read().decode("utf-8"))
+        choice = resp_data.get("choices", [{}])[0]
+        msg = choice.get("message", {})
+        content = msg.get("content") or ""
+        tool_calls = []
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function", {})
+            args_str = fn.get("arguments", "{}")
+            try:
+                args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
+            except Exception:
+                args_dict = {}
+            tool_calls.append({
+                "id": tc.get("id") or f"call_{len(tool_calls)+1}",
+                "name": fn.get("name", ""),
+                "arguments": args_dict
+            })
+
+        raw_msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": content or None
+        }
+        if tool_calls:
+            raw_msg["tool_calls"] = msg.get("tool_calls")
+
+        return {
+            "provider": "openrouter",
+            "model": selected_model,
+            "content": content,
+            "tool_calls": tool_calls,
+            "raw_assistant_msg": raw_msg
+        }
+
+def call_gemini_tools(key: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+                      system_prompt: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+    """Panggilan native tool-calling Gemini v1beta REST API via urllib."""
+    selected_model = model or DEFAULT_MODELS.get("gemini", "gemini-2.5-flash")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent?key={key}"
+
+    # 1. Konversi tools ke functionDeclarations
+    gemini_tools = []
+    if tools:
+        func_decls = []
+        for t in tools:
+            fn = t.get("function", {})
+            func_decls.append({
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "parameters": to_gemini_schema(fn.get("parameters", {}))
+            })
+        gemini_tools = [{"functionDeclarations": func_decls}]
+
+    # 2. Konversi percakapan ke format contents Gemini
+    contents = []
+    for m in messages:
+        role = m.get("role")
+        if role == "system":
+            continue
+        elif role == "user":
+            contents.append({"role": "user", "parts": [{"text": str(m.get("content") or "")}]})
+        elif role == "assistant":
+            parts = []
+            if m.get("content"):
+                parts.append({"text": str(m["content"])})
+            if m.get("tool_calls"):
+                for tc in m["tool_calls"]:
+                    fn = tc.get("function", {})
+                    args = fn.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except Exception:
+                            args = {}
+                    parts.append({
+                        "functionCall": {
+                            "name": fn.get("name", tc.get("name", "")),
+                            "args": args
+                        }
+                    })
+            if not parts:
+                parts.append({"text": ""})
+            contents.append({"role": "model", "parts": parts})
+        elif role == "tool":
+            tool_name = m.get("name") or "tool"
+            content_val = str(m.get("content", ""))
+            contents.append({
+                "role": "user",
+                "parts": [{
+                    "functionResponse": {
+                        "name": tool_name,
+                        "response": {"result": content_val}
+                    }
+                }]
+            })
+
+    payload: Dict[str, Any] = {
+        "contents": contents
+    }
+    if gemini_tools:
+        payload["tools"] = gemini_tools
+    if system_prompt:
+        payload["systemInstruction"] = {
+            "parts": [{"text": system_prompt}]
+        }
+
+    body_bytes = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body_bytes,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        resp_data = json.loads(resp.read().decode("utf-8"))
+        candidates = resp_data.get("candidates", [])
+        if not candidates:
+            raise RuntimeError("Gemini mengembalikan response kosong (candidates=[])")
+        first_cand = candidates[0]
+        content_parts = first_cand.get("content", {}).get("parts", [])
+
+        text_content = ""
+        tool_calls = []
+        for p in content_parts:
+            if "functionCall" in p:
+                fc = p["functionCall"]
+                tool_calls.append({
+                    "id": f"call_gemini_{len(tool_calls)+1}",
+                    "name": fc.get("name", ""),
+                    "arguments": fc.get("args", {})
+                })
+            elif "text" in p:
+                text_content += p.get("text", "")
+
+        raw_msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": text_content or None
+        }
+        if tool_calls:
+            raw_msg["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc["arguments"])
+                    }
+                } for tc in tool_calls
+            ]
+
+        return {
+            "provider": "gemini",
+            "model": selected_model,
+            "content": text_content,
+            "tool_calls": tool_calls,
+            "raw_assistant_msg": raw_msg
+        }
+
+def chat_with_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+                    system_prompt: Optional[str] = None, provider: Optional[str] = None,
+                    model: Optional[str] = None, cache_dir: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Eksekusi native tool-calling multi-provider (Groq, Gemini, OpenRouter)
+    dengan failover otomatis jika provider pertama gagal.
+    """
+    env = load_env()
+    if provider:
+        chain = [provider.lower()]
+    else:
+        chain = ["groq", "gemini", "openrouter"]
+
+    last_error = None
+    for prov in chain:
+        keys = parse_keys_for_provider(prov, env)
+        if not keys:
+            continue
+
+        for idx, key in enumerate(keys):
+            try:
+                enforce_pacing(prov, 2.0, cache_dir)
+                if prov == "groq":
+                    return call_groq_tools(key, messages, tools, system_prompt, model)
+                elif prov == "gemini":
+                    return call_gemini_tools(key, messages, tools, system_prompt, model)
+                elif prov == "openrouter":
+                    return call_openrouter_tools(key, messages, tools, system_prompt, model)
+            except Exception as e:
+                last_error = e
+                mark_key_cooldown(prov, key, idx, str(e)[:100], 30, cache_dir)
+                continue
+
+    if last_error:
+        raise RuntimeError(f"Semua provider tool-calling gagal: {last_error}")
+    raise RuntimeError("Tidak ada API key yang terkonfigurasi untuk tool-calling.")
+
+# ==============================================================================
 # MAIN ROUTING ENGINE
 # ==============================================================================
 

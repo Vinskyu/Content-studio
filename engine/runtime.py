@@ -20,12 +20,42 @@ def get_root_dir() -> str:
     return os.path.abspath(os.path.dirname(current_dir))
 
 def get_ffmpeg_bin() -> str:
-    """Membaca binary ffmpeg dari FFMPEG_BIN atau default 'ffmpeg'."""
-    return os.environ.get("FFMPEG_BIN", "ffmpeg")
+    """Membaca binary ffmpeg dari FFMPEG_BIN, shutil.which('ffmpeg'), atau fallback Android."""
+    env_bin = os.environ.get("FFMPEG_BIN")
+    if env_bin and os.path.exists(env_bin):
+        return env_bin
+    import shutil
+    which_bin = shutil.which("ffmpeg")
+    if which_bin:
+        return which_bin
+    known_paths = [
+        "/data/user/0/com.agy/files/usr/bin/ffmpeg",
+        "/data/data/com.agy/files/usr/bin/ffmpeg",
+        "/system/bin/ffmpeg"
+    ]
+    for p in known_paths:
+        if os.path.exists(p):
+            return p
+    return "ffmpeg"
 
 def get_ffprobe_bin() -> str:
-    """Membaca binary ffprobe dari FFPROBE_BIN atau default 'ffprobe'."""
-    return os.environ.get("FFPROBE_BIN", "ffprobe")
+    """Membaca binary ffprobe dari FFPROBE_BIN, shutil.which('ffprobe'), atau fallback Android."""
+    env_bin = os.environ.get("FFPROBE_BIN")
+    if env_bin and os.path.exists(env_bin):
+        return env_bin
+    import shutil
+    which_bin = shutil.which("ffprobe")
+    if which_bin:
+        return which_bin
+    known_paths = [
+        "/data/user/0/com.agy/files/usr/bin/ffprobe",
+        "/data/data/com.agy/files/usr/bin/ffprobe",
+        "/system/bin/ffprobe"
+    ]
+    for p in known_paths:
+        if os.path.exists(p):
+            return p
+    return "ffprobe"
 
 def get_output_base_dir() -> str:
     """Membaca base output direktori dari CONTENTSTUDIO_OUT_DIR atau fallback Android-safe."""
@@ -50,15 +80,24 @@ def get_fonts_dir() -> str:
     return os.path.join(get_root_dir(), "assets", "fonts")
 
 def get_assets_dir() -> str:
-    """Membaca direktori assets ContentStudio."""
+    """Membaca direktori assets ContentStudio (memprioritaskan persistent storage jika ada)."""
+    if os.path.exists("/sdcard/ContentStudio/assets") and os.access("/sdcard/ContentStudio/assets", os.W_OK):
+        return "/sdcard/ContentStudio/assets"
     return os.path.join(get_root_dir(), "assets")
 
 def get_workspaces_dir() -> str:
-    """Membaca direktori workspaces ContentStudio."""
+    """Membaca direktori workspaces ContentStudio (memprioritaskan persistent storage jika ada)."""
+    if os.path.exists("/sdcard/ContentStudio/workspaces") and os.access("/sdcard/ContentStudio/workspaces", os.W_OK):
+        return "/sdcard/ContentStudio/workspaces"
     return os.path.join(get_root_dir(), "workspaces")
 
 def get_skills_dir() -> str:
-    """Membaca direktori skills ContentStudio."""
+    """Membaca direktori skills ContentStudio (memprioritaskan persistent storage jika ada)."""
+    if os.path.exists("/sdcard/ContentStudio/skills") and os.access("/sdcard/ContentStudio/skills", os.W_OK):
+        return "/sdcard/ContentStudio/skills"
+    p_skills = os.path.join(get_root_dir(), "skills")
+    if os.path.exists(p_skills):
+        return p_skills
     return os.path.join(get_root_dir(), ".agents", "skills")
 
 def get_cache_dir() -> str:
