@@ -20,13 +20,6 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
-
-        python {
-            version = "3.11"
-            pip {
-                install("yt-dlp")
-            }
-        }
     }
 
     buildTypes {
@@ -65,6 +58,22 @@ android {
         }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+// Konfigurasi Chaquopy 16.0.0 untuk Kotlin DSL
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        val pyLoc = System.getenv("pythonLocation")
+        if (!pyLoc.isNullOrBlank()) {
+            buildPython("$pyLoc/bin/python3")
+        } else {
+            buildPython("python3.11")
+        }
+        pip {
+            install("yt-dlp")
         }
     }
 }
