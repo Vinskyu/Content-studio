@@ -1,0 +1,79 @@
+{
+  "meta": {
+    "id": "ref_01",
+    "title": "Hero Paling Gak Laku Di Honor Of Kings",
+    "url": "https://www.youtube.com/watch?v=w_bzlHX7ux4",
+    "duration": 53.43,
+    "views": 29385,
+    "topic_summary": "Bedah popularitas hero Athena dan Menki yang memiliki pick-rate terendah di server Global dan China"
+  },
+  "hook": {
+    "visual_type": "hero_lobby_vertical_with_arrow",
+    "opening_text": "HERO PALING GAK LAKU HONOR OF KINGS",
+    "curiosity_trigger": "superlative_controversy_question",
+    "initial_cut_sec": 2.9
+  },
+  "pacing": {
+    "avg_shot_sec": 2.14,
+    "total_shots": 25,
+    "cut_type": "fast_jump",
+    "transition_types": ["hard_cut", "icon_pop"]
+  },
+  "visual": {
+    "aspect_ratio": "9:16",
+    "framing": "hybrid_blur_fill_and_vertical_ui",
+    "safe_zone_y": "lower_third",
+    "dim": 0.0,
+    "vignette": 0.1,
+    "color_preset": "vibrant_gameplay"
+  },
+  "typography": {
+    "font_family": "Montserrat",
+    "font_style": "extrabold",
+    "y_position": "bottom",
+    "animation": "pop_punch",
+    "max_chars_per_line": 24,
+    "avg_words_per_display": 3,
+    "color_scheme": {
+      "primary": "#FFFFFF",
+      "outline": "#000000",
+      "shadow": "#000000"
+    }
+  },
+  "audio": {
+    "structure": "voiceover_with_bgm",
+    "energy_profile": {
+      "chorus_start": 30.0,
+      "chorus_end": 50.0,
+      "energy_score": 0.564
+    },
+    "tempo_bpm": 128.0,
+    "dual_audio": true
+  },
+  "topic_specific_elements": [
+    "Hero Athena",
+    "Hero Menki",
+    "Server China vs Global",
+    "Meme monyet jarum 1",
+    "Meme kucing jempol",
+    "Emoji sedih kuning"
+  ],
+  "production_insights": {
+    "speaking_wpm": 184.2,
+    "hook_title_layout": {
+      "line1": { "text": "HERO PALING", "color": "#FFEE00" },
+      "line2": { "text": "GAK LAKU", "color": "#FF2222", "scale": "1.3x" },
+      "line3": { "text": "HONOR OF KINGS", "color": "#FFFFFF" },
+      "pointer": "red_curved_arrow_png"
+    },
+    "background_composition": {
+      "gameplay_16x9": "center_with_blurred_top_bottom_mirrored",
+      "special_scenes": "dark_grid_background_with_floating_icons"
+    },
+    "overlay_elements": [
+      "avatar_floating_badges",
+      "pop_up_reaction_meme",
+      "stat_table_screenshot"
+    ]
+  }
+}

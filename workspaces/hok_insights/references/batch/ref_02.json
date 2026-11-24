@@ -1,0 +1,77 @@
+{
+  "meta": {
+    "id": "ref_02",
+    "title": "Skin Limbo Terbaru Terinspirasi Dari Kaneki Kah?",
+    "url": "https://www.youtube.com/watch?v=u2QbjFCYoo0",
+    "duration": 47.51,
+    "views": 3760,
+    "topic_summary": "Bedah kemiripan skin Limbo hero Gao Changong dengan karakter Kaneki Tokyo Ghoul dan mitologi hantu Aswang Filipina"
+  },
+  "hook": {
+    "visual_type": "skin_artwork_vertical_with_anime_popup",
+    "opening_text": "SKIN TERBARU HOK INI TERINSPIRASI DARI KANEKI?",
+    "curiosity_trigger": "pop_culture_anime_comparison",
+    "initial_cut_sec": 3.5
+  },
+  "pacing": {
+    "avg_shot_sec": 3.95,
+    "total_shots": 12,
+    "cut_type": "hybrid",
+    "transition_types": ["hard_cut", "fade_black"]
+  },
+  "visual": {
+    "aspect_ratio": "9:16",
+    "framing": "hybrid_blur_fill_and_article_paper",
+    "safe_zone_y": "lower_third",
+    "dim": 0.0,
+    "vignette": 0.1,
+    "color_preset": "vibrant_red_accent"
+  },
+  "typography": {
+    "font_family": "Montserrat",
+    "font_style": "extrabold",
+    "y_position": "bottom",
+    "animation": "pop_punch",
+    "max_chars_per_line": 24,
+    "avg_words_per_display": 3,
+    "color_scheme": {
+      "primary": "#FFFFFF",
+      "outline": "#000000",
+      "shadow": "#000000"
+    }
+  },
+  "audio": {
+    "structure": "voiceover_with_bgm",
+    "energy_profile": {
+      "chorus_start": 22.0,
+      "chorus_end": 42.0,
+      "energy_score": 0.625
+    },
+    "tempo_bpm": 120.0,
+    "dual_audio": true
+  },
+  "topic_specific_elements": [
+    "Skin Limbo Gao Changong",
+    "Kaneki Ken (Tokyo Ghoul)",
+    "Hantu Aswang Filipina",
+    "Wikipedia paper background",
+    "Meme kucing jempol outro"
+  ],
+  "production_insights": {
+    "speaking_wpm": 155.4,
+    "hook_title_layout": {
+      "line1": { "text": "SKIN TERBARU", "color": "#FFEE00" },
+      "line2": { "text": "HOK INI TERINSPIRASI", "color": "#FFFFFF" },
+      "line3": { "text": "DARI KANEKI?", "color": "#FF2222", "delay_sec": 2.0 },
+      "pointer": "red_curved_arrow_png_to_anime_head"
+    },
+    "background_composition": {
+      "gameplay_16x9": "center_with_blurred_top_bottom_mirrored",
+      "article_scenes": "white_crumpled_paper_texture_with_centered_screenshot"
+    },
+    "overlay_elements": [
+      "transparent_anime_cutout_png",
+      "outro_cat_thumb_meme"
+    ]
+  }
+}

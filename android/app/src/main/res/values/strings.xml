@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ContentStudio</string>
+    <string name="channel_name">Agent Background Service</string>
+    <string name="channel_desc">Notifikasi progres eksekusi agent dan rendering video</string>
+</resources>

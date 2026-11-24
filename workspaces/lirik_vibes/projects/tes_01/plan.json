@@ -1,0 +1,44 @@
+{
+  "output": {
+    "filename": "tes_01.mp4",
+    "out_dir": "/sdcard/ContentStudio/out/lirik_vibes/tes_01",
+    "resolution": "720p",
+    "aspect": "9:16",
+    "fps": 30,
+    "audio_strategy": "viral_sync",
+    "dual_audio": true,
+    "export_stems": false
+  },
+  "segments": [
+    {
+      "source": "/sdcard/Download/JDS_REAL_4K.mp4",
+      "start": 0.0,
+      "end": 7.425,
+      "framing": "crop",
+      "cx": 0.5,
+      "cy": 0.5,
+      "speed": 1.0
+    },
+    {
+      "source": "/sdcard/Download/457771254_1793587505291458.mp4",
+      "start": 0.0,
+      "end": 7.575,
+      "framing": "crop",
+      "cx": 0.5,
+      "cy": 0.5,
+      "speed": 1.0
+    }
+  ],
+  "texts": [],
+  "audio_tracks": {
+    "clip_audio_volume": 0.0,
+    "auto_ducking": false,
+    "bgm": {
+      "source": "/sdcard/Download/Pulang Ke Asal.mp3",
+      "start": 0.0,
+      "offset": 34.5,
+      "volume": 1.0,
+      "loop": false
+    }
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "fonts": {
+    "BebasNeue-Regular.ttf": {
+      "file": "BebasNeue-Regular.ttf",
+      "libass_name": "Bebas Neue",
+      "family": "Bebas Neue",
+      "subfamily": "Regular",
+      "full_name": "Bebas Neue Regular",
+      "postscript_name": "BebasNeue-Regular",
+      "category": "condensed",
+      "aliases": [
+        "bebasneue-regular.ttf",
+        "bebasneue-regular",
+        "bebas neue",
+        "bebas",
+        "bebas_neue",
+        "bebasneue",
+        "condensed",
+        "headline"
+      ]
+    },
+    "DroidSans-Bold.ttf": {
+      "file": "DroidSans-Bold.ttf",
+      "libass_name": "Roboto",
+      "family": "Roboto",
+      "subfamily": "Regular",
+      "full_name": "Roboto",
+      "postscript_name": "Roboto-Regular",
+      "category": "default",
+      "aliases": [
+        "droidsans-bold.ttf",
+        "droidsans-bold",
+        "roboto",
+        "roboto regular",
+        "default",
+        "sans_clean"
+      ]
+    },
+    "Montserrat-ExtraBold.ttf": {
+      "file": "Montserrat-ExtraBold.ttf",
+      "libass_name": "Montserrat ExtraBold",
+      "family": "Montserrat ExtraBold",
+      "subfamily": "Regular",
+      "full_name": "Montserrat ExtraBold",
+      "postscript_name": "Montserrat-ExtraBold",
+      "category": "sans_bold",
+      "aliases": [
+        "montserrat-extrabold.ttf",
+        "montserrat-extrabold",
+        "montserrat extrabold",
+        "montserrat"
+      ]
+    },
+    "PlayfairDisplay-SemiBold.ttf": {
+      "file": "PlayfairDisplay-SemiBold.ttf",
+      "libass_name": "Playfair Display",
+      "family": "Playfair Display",
+      "subfamily": "Regular",
+      "full_name": "Playfair Display Regular",
+      "postscript_name": "PlayfairDisplay-Regular",
+      "category": "serif",
+      "aliases": [
+        "playfairdisplay-semibold.ttf",
+        "playfairdisplay-semibold",
+        "playfair display",
+        "playfair",
+        "playfair_display",
+        "serif"
+      ]
+    },
+    "PlusJakartaSans-SemiBold.ttf": {
+      "file": "PlusJakartaSans-SemiBold.ttf",
+      "libass_name": "Plus Jakarta Sans",
+      "family": "Plus Jakarta Sans",
+      "subfamily": "Regular",
+      "full_name": "Plus Jakarta Sans Regular",
+      "postscript_name": "PlusJakartaSans-Regular",
+      "category": "sans",
+      "aliases": [
+        "plusjakartasans-semibold.ttf",
+        "plusjakartasans-semibold",
+        "plus jakarta sans",
+        "jakarta",
+        "plus_jakarta_sans",
+        "plusjakartasans",
+        "sans"
+      ]
+    },
+    "Poppins-ExtraBold.ttf": {
+      "file": "Poppins-ExtraBold.ttf",
+      "libass_name": "Poppins ExtraBold",
+      "family": "Poppins ExtraBold",
+      "subfamily": "Regular",
+      "full_name": "Poppins ExtraBold",
+      "postscript_name": "Poppins-ExtraBold",
+      "category": "sans_bold",
+      "aliases": [
+        "poppins-extrabold.ttf",
+        "poppins-extrabold",
+        "poppins extrabold",
+        "poppins",
+        "bold_sans",
+        "impact_sans"
+      ]
+    },
+    "Roboto-Regular.ttf": {
+      "file": "Roboto-Regular.ttf",
+      "libass_name": "Roboto",
+      "family": "Roboto",
+      "subfamily": "Regular",
+      "full_name": "Roboto",
+      "postscript_name": "Roboto-Regular",
+      "category": "default",
+      "aliases": [
+        "roboto-regular.ttf",
+        "roboto-regular",
+        "roboto",
+        "roboto regular",
+        "default",
+        "sans_clean"
+      ]
+    }
+  },
+  "alias_map": {
+    "bebasneue-regular.ttf": "Bebas Neue",
+    "bebasneue-regular": "Bebas Neue",
+    "bebas neue": "Bebas Neue",
+    "bebas": "Bebas Neue",
+    "bebas_neue": "Bebas Neue",
+    "bebasneue": "Bebas Neue",
+    "condensed": "Bebas Neue",
+    "headline": "Bebas Neue",
+    "droidsans-bold.ttf": "Roboto",
+    "droidsans-bold": "Roboto",
+    "roboto": "Roboto",
+    "roboto regular": "Roboto",
+    "default": "Roboto",
+    "sans_clean": "Roboto",
+    "montserrat-extrabold.ttf": "Montserrat ExtraBold",
+    "montserrat-extrabold": "Montserrat ExtraBold",
+    "montserrat extrabold": "Montserrat ExtraBold",
+    "montserrat": "Montserrat ExtraBold",
+    "playfairdisplay-semibold.ttf": "Playfair Display",
+    "playfairdisplay-semibold": "Playfair Display",
+    "playfair display": "Playfair Display",
+    "playfair": "Playfair Display",
+    "playfair_display": "Playfair Display",
+    "serif": "Playfair Display",
+    "plusjakartasans-semibold.ttf": "Plus Jakarta Sans",
+    "plusjakartasans-semibold": "Plus Jakarta Sans",
+    "plus jakarta sans": "Plus Jakarta Sans",
+    "jakarta": "Plus Jakarta Sans",
+    "plus_jakarta_sans": "Plus Jakarta Sans",
+    "plusjakartasans": "Plus Jakarta Sans",
+    "sans": "Plus Jakarta Sans",
+    "poppins-extrabold.ttf": "Poppins ExtraBold",
+    "poppins-extrabold": "Poppins ExtraBold",
+    "poppins extrabold": "Poppins ExtraBold",
+    "poppins": "Poppins ExtraBold",
+    "bold_sans": "Poppins ExtraBold",
+    "impact_sans": "Poppins ExtraBold",
+    "roboto-regular.ttf": "Roboto",
+    "roboto-regular": "Roboto"
+  }
+}

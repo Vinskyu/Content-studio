@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReferenceVideoDNASchema",
+  "description": "Skema baku data ekstraksi DNA video referensi (ref_0i.json) untuk ContentStudio",
+  "type": "object",
+  "required": [
+    "meta",
+    "hook",
+    "pacing",
+    "visual",
+    "typography",
+    "audio",
+    "topic_specific_elements"
+  ],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["id", "title", "url", "duration", "views", "topic_summary"],
+      "properties": {
+        "id": { "type": "string", "description": "ID unik video (misal id YouTube atau ref_01)" },
+        "title": { "type": "string", "description": "Judul lengkap video referensi" },
+        "url": { "type": "string", "description": "URL sumber video" },
+        "duration": { "type": "number", "description": "Durasi video dalam detik" },
+        "views": { "type": "number", "description": "Jumlah penonton / view count" },
+        "topic_summary": { "type": "string", "description": "Ringkasan 1 kalimat topik spesifik video ini" }
+      }
+    },
+    "hook": {
+      "type": "object",
+      "required": [
+        "visual_type",
+        "opening_text",
+        "curiosity_trigger",
+        "initial_cut_sec"
+      ],
+      "properties": {
+        "visual_type": {
+          "type": "string",
+          "description": "Karakter visual 0-3 detik (contoh: b_roll_cinematic, talking_head, reaction, fast_montage, screen_recording)"
+        },
+        "opening_text": {
+          "type": "string",
+          "description": "Teks pembuka hook pada detik 0-3 (kosong jika tanpa teks)"
+        },
+        "curiosity_trigger": {
+          "type": "string",
+          "description": "Pemicu retensi audiens (contoh: contradictory_question, shocking_fact, high_stakes, visual_disruption, emotional_relatability)"
+        },
+        "initial_cut_sec": {
+          "type": "number",
+          "description": "Detik terjadinya perpindahan adegan/shot pertama"
+        }
+      }
+    },
+    "pacing": {
+      "type": "object",
+      "required": ["avg_shot_sec", "total_shots", "cut_type", "transition_types"],
+      "properties": {
+        "avg_shot_sec": {
+          "type": "number",
+          "description": "Rata-rata durasi per shot potongan video"
+        },
+        "total_shots": {
+          "type": "integer",
+          "description": "Jumlah total shot/potongan adegan dalam video"
+        },
+        "cut_type": {
+          "type": "string",
+          "enum": ["hard_cut", "fast_jump", "smooth_transition", "hybrid"],
+          "description": "Gaya potongan transisi dominan"
+        },
+        "transition_types": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Daftar efek transisi yang terdeteksi (contoh: xfade, zoom, none)"
+        }
+      }
+    },
+    "visual": {
+      "type": "object",
+      "required": [
+        "aspect_ratio",
+        "framing",
+        "safe_zone_y",
+        "dim",
+        "vignette",
+        "color_preset"
+      ],
+      "properties": {
+        "aspect_ratio": {
+          "type": "string",
+          "enum": ["9:16", "16:9", "1:1", "4:5"],
+          "description": "Rasio aspek video"
+        },
+        "framing": {
+          "type": "string",
+          "description": "Komposisi kamera dominan (contoh: close_up, medium_shot, wide_cinematic, top_down)"
+        },
+        "safe_zone_y": {
+          "type": "string",
+          "enum": ["lower_third", "middle", "upper_third"],
+          "description": "Zona aman peletakan teks dan subjek visual"
+        },
+        "dim": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Tingkat penggelapan latar belakang visual"
+        },
+        "vignette": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Kekuatan efek vignette di pinggiran frame"
+        },
+        "color_preset": {
+          "type": "string",
+          "description": "Nuansa warna visual (contoh: warm, cool, high_contrast_cinematic, natural)"
+        }
+      }
+    },
+    "typography": {
+      "type": "object",
+      "required": [
+        "font_family",
+        "font_style",
+        "y_position",
+        "animation",
+        "max_chars_per_line",
+        "avg_words_per_display",
+        "color_scheme"
+      ],
+      "properties": {
+        "font_family": {
+          "type": "string",
+          "description": "Nama keluarga font (misal: Plus Jakarta Sans, Playfair Display, Montserrat, Bebas Neue)"
+        },
+        "font_style": {
+          "type": "string",
+          "description": "Gaya font (bold, semibold, regular, condensed)"
+        },
+        "y_position": {
+          "type": "string",
+          "enum": ["bottom", "center", "top"],
+          "description": "Posisi vertikal teks subtitle / teks utama"
+        },
+        "animation": {
+          "type": "string",
+          "enum": [
+            "cinematic_fade",
+            "slide_up",
+            "karaoke_word",
+            "pop_punch",
+            "clean_minimal",
+            "none"
+          ],
+          "description": "Preset animasi teks .ass yang digunakan"
+        },
+        "max_chars_per_line": {
+          "type": "integer",
+          "description": "Batas karakter per baris sebelum line-break (rekomendasi: 22-26)"
+        },
+        "avg_words_per_display": {
+          "type": "integer",
+          "description": "Rata-rata jumlah kata per kemunculan teks"
+        },
+        "color_scheme": {
+          "type": "object",
+          "required": ["primary", "outline", "shadow"],
+          "properties": {
+            "primary": { "type": "string", "description": "Warna utama teks hex/nama" },
+            "outline": { "type": "string", "description": "Warna outline teks" },
+            "shadow": { "type": "string", "description": "Warna bayangan teks" }
+          }
+        }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "required": ["structure", "energy_profile", "tempo_bpm", "dual_audio"],
+      "properties": {
+        "structure": {
+          "type": "string",
+          "enum": [
+            "voiceover_with_bgm",
+            "music_only_beat_sync",
+            "dialogue_live",
+            "ambient_sfx_only"
+          ],
+          "description": "Struktur komposisi audio"
+        },
+        "energy_profile": {
+          "type": "object",
+          "required": ["chorus_start", "chorus_end", "energy_score"],
+          "properties": {
+            "chorus_start": { "type": "number", "description": "Detik awal chorus/drop" },
+            "chorus_end": { "type": "number", "description": "Detik akhir chorus/drop" },
+            "energy_score": { "type": "number", "description": "Skor energi RMS rentang (0.0-1.0)" }
+          }
+        },
+        "tempo_bpm": {
+          "type": "number",
+          "description": "Estimasi tempo musik (BPM)"
+        },
+        "dual_audio": {
+          "type": "boolean",
+          "description": "Apakah menggunakan dual audio (voice + bgm)"
+        }
+      }
+    },
+    "topic_specific_elements": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Elemen spesifik topik/materi video ini yang BUKAN merupakan DNA akun (contoh: nama tokoh, tema spesifik, warna objek props)"
+    }
+  }
+}

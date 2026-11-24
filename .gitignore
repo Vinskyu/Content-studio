@@ -1,0 +1,27 @@
+# Secrets & Environments
+.env
+.env.*
+!.env.example
+
+# Caches & Temp files
+.cache/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.tmp
+
+# Android build outputs & local Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+android/app/src/main/python/engine/
+android/app/src/main/assets/bundle/
+android/local.properties
+*.apk
+*.aab
+
+# OS files
+.DS_Store
+Thumbs.db

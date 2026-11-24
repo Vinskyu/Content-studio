@@ -1,0 +1,23 @@
+#!/bin/sh
+# Custom minimal Gradle wrapper runner
+set -e
+
+DIR=$(cd "$(dirname "$0")" && pwd)
+WRAPPER_JAR="$DIR/gradle/wrapper/gradle-wrapper.jar"
+
+if [ -f "$WRAPPER_JAR" ]; then
+    exec java -jar "$WRAPPER_JAR" "$@"
+fi
+
+if command -v gradle >/dev/null 2>&1; then
+    exec gradle "$@"
+fi
+
+echo "Downloading gradle-wrapper.jar..."
+mkdir -p "$DIR/gradle/wrapper"
+curl -sSL "https://raw.githubusercontent.com/gradle/gradle/v8.7.0/gradle/wrapper/gradle-wrapper.jar" -o "$WRAPPER_JAR" || {
+    echo "Error: Failed to obtain gradle-wrapper.jar and no gradle installation found."
+    exit 1
+}
+
+exec java -jar "$WRAPPER_JAR" "$@"

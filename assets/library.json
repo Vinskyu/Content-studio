@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "id": "sticker:arrow_red_hook.png",
+      "name": "Arrow Red Hook",
+      "type": "sticker",
+      "filename": "arrow_red_hook.png",
+      "path": "assets/stickers/arrow_red_hook.png",
+      "tags": [
+        "hook",
+        "arrow",
+        "pointer",
+        "red"
+      ],
+      "meta": {
+        "width": 200,
+        "height": 200
+      }
+    },
+    {
+      "id": "background:dark_grid_9x16.png",
+      "name": "Dark Grid 9X16",
+      "type": "background",
+      "filename": "dark_grid_9x16.png",
+      "path": "assets/backgrounds/dark_grid_9x16.png",
+      "tags": [
+        "dark",
+        "grid",
+        "editorial",
+        "clean"
+      ],
+      "meta": {
+        "width": 1080,
+        "height": 1920
+      }
+    }
+  ]
+}
