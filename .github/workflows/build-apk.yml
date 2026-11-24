@@ -20,6 +20,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -33,7 +38,7 @@ jobs:
           mkdir -p /tmp/ffmpeg-arm64
           cd /tmp/ffmpeg-arm64
           echo "[*] Mengunduh binary statis ARM64 FFmpeg..."
-          curl -sSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" -o ffmpeg.tar.xz
+          curl -fSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" -o ffmpeg.tar.xz
           tar -xf ffmpeg.tar.xz --strip-components=1
           
           echo "[*] Memverifikasi static linking dengan readelf..."
@@ -47,17 +52,20 @@ jobs:
           cp ffmpeg "$TARGET_JNI_DIR/libffmpeg.so"
           cp ffprobe "$TARGET_JNI_DIR/libffprobe.so"
           chmod +x "$TARGET_JNI_DIR/libffmpeg.so" "$TARGET_JNI_DIR/libffprobe.so"
-          
-          echo "[OK] FFmpeg & FFprobe ARM64 berhasil dipasang di jniLibs:"
-          ls -lh "$TARGET_JNI_DIR"
 
-      - name: Grant Execute Permission to Gradlew
-        run: chmod +x android/gradlew
+          # Validasi non-zero bytes
+          if [ ! -s "$TARGET_JNI_DIR/libffmpeg.so" ] || [ ! -s "$TARGET_JNI_DIR/libffprobe.so" ]; then
+            echo "[ERR] libffmpeg.so atau libffprobe.so tidak ditemukan atau kosong (0 bytes)!"
+            exit 1
+          fi
+
+          echo "[OK] FFmpeg & FFprobe ARM64 berhasil diverifikasi di jniLibs:"
+          ls -lh "$TARGET_JNI_DIR"
 
       - name: Build Android Debug APK
         run: |
           cd android
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
