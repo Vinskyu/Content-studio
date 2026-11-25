@@ -181,7 +181,7 @@ fun ChatScreen(
 
         inputText = ""
         isStreaming = true
-        liveStatus = "Mengirim ke Gemini CLI..."
+        liveStatus = "Mengirim ke Antigravity..."
 
         messages.add(ChatMessageItem(isUser = true, text = cleanPrompt))
         val agentId = java.util.UUID.randomUUID().toString()
@@ -286,7 +286,7 @@ fun ChatScreen(
                         .padding(horizontal = 7.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = "[GEMINI CLI]",
+                        text = "[ANTIGRAVITY]",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -475,7 +475,7 @@ fun ChatScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "[GEMINI]",
+                                            text = "[ANTIGRAVITY]",
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
@@ -639,7 +639,7 @@ fun ChatScreen(
                 ) {
                     if (inputText.isEmpty()) {
                         Text(
-                            text = "Tulis instruksi atau brief...",
+                            text = "Tulis instruksi untuk Antigravity...",
                             fontFamily = FontFamily.Default,
                             fontSize = 13.sp,
                             color = TextMuted

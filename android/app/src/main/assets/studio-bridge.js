@@ -1,7 +1,6 @@
 'use strict';
 
 const http = require('http');
-const https = require('https');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -15,142 +14,51 @@ const PREFIX_DIR = process.env.PREFIX || '/usr';
 const SESSIONS_DIR = path.join(HOME_DIR, '.contentstudio', 'sessions');
 const STATE_FILE = path.join(HOME_DIR, '.contentstudio', 'state.json');
 
-// Konstanta URL & scope resmi google-gemini/gemini-cli; Client ID/Secret dibaca dinamis dari paket lokal
-const OAUTH_SCOPES = [
-  'https://www.googleapis.com/auth/cloud-platform',
-  'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/userinfo.profile',
-];
-const CA_CERT_PATH = path.join(PREFIX_DIR, 'etc', 'tls', 'cert.pem');
-let cachedCaCert = undefined;
-
-function getCaCert() {
-  if (cachedCaCert !== undefined) return cachedCaCert;
-  try {
-    if (fs.existsSync(CA_CERT_PATH)) {
-      cachedCaCert = fs.readFileSync(CA_CERT_PATH, 'utf8');
-      return cachedCaCert;
-    }
-  } catch (_) {}
-  cachedCaCert = null;
-  return null;
-}
-
-function extractOAuthPairFromText(txt, filePath) {
-  if (!txt) return null;
-
-  // Prioritas 1: File mengandung OAUTH_CLIENT_ID dan OAUTH_CLIENT_SECRET eksplisit
-  if (txt.includes('OAUTH_CLIENT_ID') && txt.includes('OAUTH_CLIENT_SECRET')) {
-    const idMatch = txt.match(/OAUTH_CLIENT_ID\s*[:=]\s*['"]([^'"]+\.apps\.googleusercontent\.com)['"]/);
-    const secMatch = txt.match(/OAUTH_CLIENT_SECRET\s*[:=]\s*['"](GOCSPX-[^'"]+)['"]/);
-    if (idMatch && secMatch) {
-      const clientId = idMatch[1].trim();
-      const clientSecret = secMatch[1].trim();
-      if (clientId && clientSecret) {
-        return { clientId, clientSecret, sourceFile: filePath, priority: 1 };
-      }
-    }
-  }
-
-  return null;
-}
-
-function extractClosestOAuthPairFromText(txt, filePath) {
-  if (!txt) return null;
-
-  // Prioritas 2: Fallback jika nama variabel di-minify, cari pasangan terdekat (< 2000 karakter) dalam file yang sama
-  const ids = [];
-  for (const m of txt.matchAll(/['"]([0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com)['"]/g)) {
-    ids.push({ val: m[1].trim(), idx: m.index });
-  }
-  const secs = [];
-  for (const m of txt.matchAll(/['"](GOCSPX-[A-Za-z0-9_-]+)['"]/g)) {
-    secs.push({ val: m[1].trim(), idx: m.index });
-  }
-  if (ids.length === 0 || secs.length === 0) return null;
-
-  let best = null;
-  let bestDist = 2000;
-  for (const idItem of ids) {
-    for (const secItem of secs) {
-      const dist = Math.abs(idItem.idx - secItem.idx);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = {
-          clientId: idItem.val,
-          clientSecret: secItem.val,
-          sourceFile: filePath,
-          priority: 2,
-        };
-      }
-    }
-  }
-  return best;
-}
-
-function resolveOAuthClientConfig(customRoots) {
-  const roots = Array.isArray(customRoots) && customRoots.length > 0
-    ? customRoots
-    : [
-        path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli', 'node_modules', '@google', 'gemini-cli-core'),
-        path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli'),
-      ];
-  const queue = [];
-  for (const r of roots) {
-    if (fs.existsSync(r)) queue.push(r);
-  }
-  const visited = new Set();
-  const candidates = [];
-
-  while (queue.length > 0) {
-    const dir = queue.shift();
-    let realDir = dir;
-    try { realDir = fs.realpathSync(dir); } catch (_) {}
-    if (visited.has(realDir)) continue;
-    visited.add(realDir);
-
-    let entries = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
-    for (const ent of entries) {
-      const full = path.join(dir, ent.name);
-      if (ent.isDirectory()) {
-        if (ent.name === '.git' || ent.name === 'docs' || ent.name === 'test' || ent.name === 'tests' || ent.name === '__tests__') continue;
-        queue.push(full);
-      } else if (ent.isFile()) {
-        if (ent.name.endsWith('.map') || ent.name.endsWith('.d.ts') || ent.name.endsWith('.md')) continue;
-        if (!ent.name.endsWith('.js') && !ent.name.endsWith('.mjs') && !ent.name.endsWith('.cjs')) continue;
-        if (ent.name === 'oauth2.js' || full.includes(`${path.sep}bundle${path.sep}`)) {
-          candidates.unshift(full);
-        } else {
-          candidates.push(full);
-        }
-      }
-    }
-  }
-
-  let fallbackMatch = null;
-  for (const filePath of candidates) {
-    try {
-      const txt = fs.readFileSync(filePath, 'utf8');
-      const p1 = extractOAuthPairFromText(txt, filePath);
-      if (p1) return p1;
-      if (!fallbackMatch) {
-        fallbackMatch = extractClosestOAuthPairFromText(txt, filePath);
-      }
-    } catch (_) {}
-  }
-  return fallbackMatch;
-}
+const ANTIGRAVITY_BIN = path.join(PREFIX_DIR, 'bin', 'antigravity');
+const AUTH_MARKER_FILE = path.join(HOME_DIR, '.antigravity_auth_ok');
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
-let activeOAuthServer = null;
-let activeOAuthRedirectUri = '';
-let activeOAuthCfg = null;
-const activeOAuthStates = new Set();
 let activeChatProc = null;
-let oauthSucceeded = false;
+let activeAuthProc = null;
 let lastAuthError = null;
+
+function getAntigravityEnv() {
+  return {
+    ...process.env,
+    HOME: HOME_DIR,
+    XDG_CONFIG_HOME: path.join(HOME_DIR, '.config'),
+    XDG_DATA_HOME: path.join(HOME_DIR, '.local', 'share'),
+    SSL_CERT_FILE: path.join(PREFIX_DIR, 'etc', 'tls', 'cert.pem'),
+    TERM: 'dumb',
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+    ANTIGRAVITY_SAFECLIS_SOURCE: '1',
+  };
+}
+
+function stripAnsi(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1B[@-Z\\-_]/g, '');
+}
+
+function cleanStderr(rawStderr) {
+  const clean = stripAnsi(rawStderr || '');
+  const lines = clean.split(/\r?\n/);
+  const kept = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.includes('logging before google.Init')) continue;
+    if (trimmed.includes('Initialized Android local timezone')) continue;
+    kept.push(trimmed);
+  }
+
+  return kept.join('\n').trim();
+}
 
 function readState() {
   try {
@@ -166,112 +74,6 @@ function writeState(state) {
     fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
   } catch (_) {}
-}
-
-function isGeminiInstalled() {
-  const binPath = path.join(PREFIX_DIR, 'bin', 'gemini');
-  const modPath = path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli');
-  return fs.existsSync(binPath) || fs.existsSync(modPath);
-}
-
-function ensureGeminiSettings() {
-  const geminiDir = path.join(HOME_DIR, '.gemini');
-  const settingsPath = path.join(geminiDir, 'settings.json');
-  fs.mkdirSync(geminiDir, { recursive: true });
-  let cfg = {};
-  try {
-    if (fs.existsSync(settingsPath)) {
-      cfg = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) || {};
-    }
-  } catch (_) {}
-  let changed = false;
-  if (!cfg.security || typeof cfg.security !== 'object') {
-    cfg.security = {};
-    changed = true;
-  }
-  if (!cfg.security.auth || typeof cfg.security.auth !== 'object') {
-    cfg.security.auth = {};
-    changed = true;
-  }
-  if (cfg.security.auth.selectedType !== 'oauth-personal') {
-    cfg.security.auth.selectedType = 'oauth-personal';
-    changed = true;
-  }
-  if (changed) {
-    fs.writeFileSync(settingsPath, JSON.stringify(cfg, null, 2));
-  }
-
-  // Siapkan $HOME/.gemini/trustedFolders.json untuk memastikan direktori kerja dipercaya
-  try {
-    const trustedPath = path.join(geminiDir, 'trustedFolders.json');
-    let trusted = {};
-    if (fs.existsSync(trustedPath)) {
-      try {
-        trusted = JSON.parse(fs.readFileSync(trustedPath, 'utf8')) || {};
-      } catch (_) {}
-    }
-    const currentCwd = process.cwd();
-    trusted[HOME_DIR] = 'TRUSTED';
-    if (currentCwd) {
-      trusted[currentCwd] = 'TRUSTED';
-    }
-    fs.writeFileSync(trustedPath, JSON.stringify(trusted, null, 2));
-  } catch (_) {}
-}
-
-function isLoggedIn() {
-  if (oauthSucceeded) return true;
-  const geminiDir = path.join(HOME_DIR, '.gemini');
-  const oauthCreds = path.join(geminiDir, 'oauth_creds.json');
-  try {
-    if (fs.existsSync(oauthCreds)) {
-      const creds = JSON.parse(fs.readFileSync(oauthCreds, 'utf8'));
-      if (creds && (creds.refresh_token || creds.access_token)) {
-        return true;
-      }
-    }
-  } catch (_) {}
-  return false;
-}
-
-function resolveGeminiEntry() {
-  const pkgDir = path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli');
-  const pkgJsonPath = path.join(pkgDir, 'package.json');
-  try {
-    if (fs.existsSync(pkgJsonPath)) {
-      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
-      let relBin = null;
-      if (typeof pkg.bin === 'string') {
-        relBin = pkg.bin;
-      } else if (pkg.bin && typeof pkg.bin === 'object') {
-        relBin = pkg.bin.gemini || Object.values(pkg.bin)[0];
-      }
-      if (relBin) {
-        const resolved = path.resolve(pkgDir, relBin);
-        if (fs.existsSync(resolved)) return resolved;
-      }
-    }
-  } catch (_) {}
-
-  const binPath = path.join(PREFIX_DIR, 'bin', 'gemini');
-  try {
-    if (fs.existsSync(binPath)) {
-      const real = fs.realpathSync(binPath);
-      if (real.endsWith('.js') || real.endsWith('.mjs')) {
-        return real;
-      }
-    }
-  } catch (_) {}
-
-  const entryCandidates = [
-    path.join(pkgDir, 'dist', 'index.js'),
-    path.join(pkgDir, 'bundle', 'gemini.js'),
-    path.join(pkgDir, 'index.js'),
-  ];
-  for (const entry of entryCandidates) {
-    if (fs.existsSync(entry)) return entry;
-  }
-  return null;
 }
 
 function listSessions() {
@@ -377,406 +179,187 @@ function readJsonBody(req) {
   });
 }
 
-function httpsRequest(urlStr, method, headers, bodyStr) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(urlStr);
-    const ca = getCaCert();
-    const reqOpts = {
-      hostname: u.hostname,
-      port: u.port || 443,
-      path: u.pathname + u.search,
-      method: method || 'GET',
-      headers: headers || {},
-      timeout: 20000,
-    };
-    if (ca) {
-      reqOpts.ca = ca;
-    }
-    const req = https.request(
-      reqOpts,
-      (resp) => {
-        let data = '';
-        resp.on('data', (chunk) => {
-          data += chunk.toString('utf8');
-        });
-        resp.on('end', () => {
-          resolve({ statusCode: resp.statusCode || 0, body: data });
-        });
-      },
-    );
-    req.on('error', reject);
-    req.on('timeout', () => {
-      req.destroy(new Error('HTTPS request timeout'));
-    });
-    if (bodyStr) {
-      req.write(bodyStr);
-    }
-    req.end();
-  });
-}
-
-function stripAnsi(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/\x1B[@-Z\\-_]/g, '');
-}
-
-function cleanStderr(rawStderr) {
-  const clean = stripAnsi(rawStderr || '');
-  const lines = clean.split(/\r?\n/);
-  const kept = [];
-  let skippingNoise = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    if (
-      trimmed.includes('pty.node') ||
-      trimmed.includes('node-pty') ||
-      trimmed.includes('ExperimentalWarning')
-    ) {
-      skippingNoise = true;
-      continue;
-    }
-
-    if (skippingNoise) {
-      if (
-        trimmed.startsWith('at ') ||
-        trimmed.startsWith('Require stack:') ||
-        trimmed.startsWith('- ') ||
-        trimmed.startsWith('^') ||
-        trimmed.startsWith('code:') ||
-        trimmed.startsWith('requireStack:') ||
-        trimmed.startsWith(']') ||
-        trimmed.startsWith('}') ||
-        trimmed.includes('node:internal')
-      ) {
-        continue;
-      }
-      skippingNoise = false;
-    }
-
-    if (trimmed.includes('throw err;') || trimmed === '^' || (trimmed.startsWith('node:') && trimmed.includes('loader'))) {
-      continue;
-    }
-
-    kept.push(trimmed);
+function handleAuthStart(res) {
+  if (activeAuthProc) {
+    try { activeAuthProc.kill('SIGTERM'); } catch (_) {}
+    activeAuthProc = null;
   }
 
-  return kept.join('\n').trim();
-}
-
-function escapeHtml(str) {
-  return String(str || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function sanitizeTokenBody(bodyStr) {
-  if (!bodyStr) return '(empty body)';
-  try {
-    const parsed = JSON.parse(bodyStr);
-    if (parsed && typeof parsed === 'object') {
-      const redacted = { ...parsed };
-      for (const secretKey of ['access_token', 'refresh_token', 'id_token', 'client_secret']) {
-        if (secretKey in redacted) {
-          redacted[secretKey] = '[REDACTED]';
-        }
-      }
-      return JSON.stringify(redacted);
-    }
-  } catch (_) {}
-  return String(bodyStr).slice(0, 1200);
-}
-
-function sendCallbackHtml(cbRes, statusCode, title, heading, detail, isSuccess) {
-  const accent = isSuccess ? '#4ade80' : '#f87171';
-  const html = `<!doctype html>
-<html lang="id">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title)}</title>
-  <style>
-    body { margin: 0; padding: 24px; background: #0f1115; color: #e5e7eb; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; box-sizing: border-box; }
-    .card { width: 100%; max-width: 520px; background: #171a21; border: 1px solid #2b313c; border-radius: 10px; padding: 20px; box-sizing: border-box; }
-    .badge { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; color: ${accent}; margin-bottom: 10px; }
-    h1 { font-size: 18px; margin: 0 0 12px 0; color: #f9fafb; }
-    pre { margin: 0; padding: 12px; background: #0b0d10; border: 1px solid #262b35; border-radius: 8px; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; color: #d1d5db; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="badge">${isSuccess ? 'OAUTH2 BERHASIL' : 'OAUTH2 GAGAL'}</div>
-    <h1>${escapeHtml(heading)}</h1>
-    <pre>${escapeHtml(detail)}</pre>
-  </div>
-</body>
-</html>`;
-  cbRes.writeHead(statusCode, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'no-store',
-  });
-  cbRes.end(html);
-}
-
-function buildAuthUrl(redirectUri, clientId, state) {
-  const authParams = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: OAUTH_SCOPES.join(' '),
-    access_type: 'offline',
-    prompt: 'consent',
-    state,
-  });
-  return `https://accounts.google.com/o/oauth2/v2/auth?${authParams.toString()}`;
-}
-
-function handleAuthStart(res) {
   lastAuthError = null;
 
-  if (isLoggedIn()) {
-    ensureGeminiSettings();
-    return sendJson(res, 200, { status: 'already_logged_in', logged_in: true, auth_url: '' });
+  if (!fs.existsSync(ANTIGRAVITY_BIN)) {
+    lastAuthError = `Binary Antigravity tidak ditemukan di ${ANTIGRAVITY_BIN}`;
+    return sendJson(res, 500, { status: 'error', error: lastAuthError });
   }
 
-  const oauthCfg = resolveOAuthClientConfig();
-  if (!oauthCfg) {
-    lastAuthError = 'oauth_config_missing: Konfigurasi OAuth tidak ditemukan di paket @google/gemini-cli lokal.';
-    return sendJson(res, 500, {
-      status: 'error',
-      error: lastAuthError,
-    });
+  let responded = false;
+  let combinedOutput = '';
+
+  const proc = spawn(ANTIGRAVITY_BIN, ['-p', 'ping'], {
+    env: getAntigravityEnv(),
+    cwd: HOME_DIR,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  activeAuthProc = proc;
+
+  const urlRegex = /(https:\/\/accounts\.google\.com\/o\/oauth2\/[^\s'"]+)/;
+
+  function checkForAuthUrl(chunk) {
+    if (responded) return;
+    combinedOutput += chunk.toString('utf8');
+    const match = combinedOutput.match(urlRegex);
+    if (match) {
+      responded = true;
+      clearTimeout(authTimeout);
+      const authUrl = match[1].trim();
+      sendJson(res, 200, { status: 'ok', auth_url: authUrl });
+    }
   }
 
-  const state = crypto.randomBytes(32).toString('hex');
+  proc.stdout.on('data', checkForAuthUrl);
+  proc.stderr.on('data', checkForAuthUrl);
 
-  // Gunakan ulang server callback yang masih hidup agar sesi login sebelumnya tidak terkena state mismatch
-  if (activeOAuthServer && activeOAuthServer.listening && activeOAuthRedirectUri) {
-    activeOAuthCfg = oauthCfg;
-    activeOAuthStates.add(state);
-    setTimeout(() => {
-      activeOAuthStates.delete(state);
-    }, 5 * 60 * 1000).unref();
-    return sendJson(res, 200, {
-      status: 'ok',
-      auth_url: buildAuthUrl(activeOAuthRedirectUri, oauthCfg.clientId, state),
-    });
-  }
+  const authTimeout = setTimeout(() => {
+    if (!responded) {
+      responded = true;
+      if (activeAuthProc === proc) {
+        try { proc.kill('SIGTERM'); } catch (_) {}
+        activeAuthProc = null;
+      }
+      lastAuthError = 'Timeout 15 detik: URL login OAuth tidak ditemukan dari Antigravity CLI.';
+      sendJson(res, 500, { status: 'error', error: lastAuthError });
+    }
+  }, 15000);
 
-  if (activeOAuthServer) {
-    try { activeOAuthServer.close(); } catch (_) {}
-    activeOAuthServer = null;
-    activeOAuthRedirectUri = '';
-    activeOAuthStates.clear();
-  }
+  proc.on('close', (code) => {
+    clearTimeout(authTimeout);
+    if (activeAuthProc === proc) {
+      activeAuthProc = null;
+    }
 
-  activeOAuthCfg = oauthCfg;
-  activeOAuthStates.add(state);
-
-  const oauthServer = http.createServer(async (req, cbRes) => {
-    const failCallback = (detailMsg) => {
-      lastAuthError = detailMsg;
-      console.error('[studio-bridge] OAuth callback error:', detailMsg);
+    if (code === 0) {
       try {
-        sendCallbackHtml(
-          cbRes,
-          200,
-          'Login Gagal - ContentStudio',
-          'Autentikasi Google Gagal',
-          detailMsg,
-          false,
-        );
+        fs.writeFileSync(AUTH_MARKER_FILE, String(Date.now()));
       } catch (_) {}
-    };
-
-    try {
-      const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
-      if (reqUrl.pathname !== '/oauth2callback') {
-        cbRes.writeHead(404);
-        cbRes.end('Not found');
-        return;
-      }
-
-      const qs = reqUrl.searchParams;
-      const errParam = qs.get('error');
-      if (errParam) {
-        const errDesc = qs.get('error_description') || '';
-        failCallback(`oauth_provider_error | code=${errParam}${errDesc ? ` | description=${errDesc}` : ''}`);
-        return;
-      }
-
-      const code = qs.get('code');
-      const retState = qs.get('state');
-      if (!code || !retState || !activeOAuthStates.has(retState)) {
-        failCallback(
-          `state_mismatch | has_code=${Boolean(code)} | state_valid=${Boolean(retState && activeOAuthStates.has(retState))}`,
-        );
-        return;
-      }
-      activeOAuthStates.delete(retState);
-
-      const cfg = activeOAuthCfg || oauthCfg;
-      const redirectUri = activeOAuthRedirectUri;
-      const diagInfo = `src=${cfg.sourceFile ? path.basename(cfg.sourceFile) : 'unknown'}, secretLen=${cfg.clientSecret ? cfg.clientSecret.length : 0}, idPrefix=${cfg.clientId ? cfg.clientId.slice(0, 6) : ''}`;
-
-      // Tukar authorization code menjadi token OAuth2 resmi Gemini CLI
-      const formBody = new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        client_id: cfg.clientId,
-        client_secret: cfg.clientSecret,
-        redirect_uri: redirectUri,
-      }).toString();
-
-      let tokResp;
-      try {
-        tokResp = await httpsRequest(
-          'https://oauth2.googleapis.com/token',
-          'POST',
-          {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Content-Length': String(Buffer.byteLength(formBody)),
-          },
-          formBody,
-        );
-      } catch (tokErr) {
-        failCallback(`token_exchange_network_error | ${tokErr.code || 'ERR'} | ${diagInfo} | ${tokErr.message}`);
-        return;
-      }
-
-      if (tokResp.statusCode < 200 || tokResp.statusCode >= 300) {
-        failCallback(`token_exchange_failed | HTTP ${tokResp.statusCode} | ${diagInfo} | ${sanitizeTokenBody(tokResp.body)}`);
-        return;
-      }
-
-      let tokData;
-      try {
-        tokData = JSON.parse(tokResp.body);
-      } catch (parseErr) {
-        failCallback(`token_response_invalid_json | HTTP ${tokResp.statusCode} | ${diagInfo} | ${parseErr.message}`);
-        return;
-      }
-
-      if (!tokData || !tokData.access_token) {
-        failCallback(`token_missing_access_token | HTTP ${tokResp.statusCode} | ${diagInfo} | ${sanitizeTokenBody(tokResp.body)}`);
-        return;
-      }
-
-      // Ambil email user untuk google_accounts.json
-      let uiResp;
-      try {
-        uiResp = await httpsRequest(
-          'https://www.googleapis.com/oauth2/v2/userinfo',
-          'GET',
-          { Authorization: `Bearer ${tokData.access_token}` },
-          null,
-        );
-      } catch (uiErr) {
-        failCallback(`userinfo_network_error | ${uiErr.code || 'ERR'} | ${uiErr.message}`);
-        return;
-      }
-
-      if (uiResp.statusCode < 200 || uiResp.statusCode >= 300) {
-        failCallback(`userinfo_failed | HTTP ${uiResp.statusCode} | ${sanitizeTokenBody(uiResp.body)}`);
-        return;
-      }
-
-      let uiData = null;
-      try {
-        uiData = JSON.parse(uiResp.body);
-      } catch (uiParseErr) {
-        failCallback(`userinfo_invalid_json | HTTP ${uiResp.statusCode} | ${uiParseErr.message}`);
-        return;
-      }
-
-      const expiryDate = Date.now() + (Number(tokData.expires_in) || 3600) * 1000;
-      const credsToSave = {
-        access_token: tokData.access_token,
-        refresh_token: tokData.refresh_token,
-        scope: tokData.scope || OAUTH_SCOPES.join(' '),
-        token_type: tokData.token_type || 'Bearer',
-        id_token: tokData.id_token,
-        expiry_date: expiryDate,
-      };
-
-      const geminiDir = path.join(HOME_DIR, '.gemini');
-      fs.mkdirSync(geminiDir, { recursive: true });
-      const credsPath = path.join(geminiDir, 'oauth_creds.json');
-      fs.writeFileSync(credsPath, JSON.stringify(credsToSave, null, 2), { mode: 0o600 });
-
-      if (uiData && uiData.email) {
-        const accPath = path.join(geminiDir, 'google_accounts.json');
-        fs.writeFileSync(
-          accPath,
-          JSON.stringify({ active: uiData.email, old: [] }, null, 2),
-        );
-      }
-
-      ensureGeminiSettings();
-      oauthSucceeded = true;
       lastAuthError = null;
 
-      sendCallbackHtml(
-        cbRes,
-        200,
-        'Login Berhasil - ContentStudio',
-        'Login berhasil. Kembali ke aplikasi ContentStudio.',
-        'Autentikasi Google OAuth2 selesai. Silakan kembali ke aplikasi ContentStudio.',
-        true,
-      );
-    } catch (e) {
-      failCallback(`oauth_callback_exception | ${e.code || 'ERR'} | ${e.message}`);
-    } finally {
-      if (activeOAuthStates.size === 0) {
-        setTimeout(() => {
-          if (activeOAuthServer === oauthServer && activeOAuthStates.size === 0) {
-            try { oauthServer.close(); } catch (_) {}
-            activeOAuthServer = null;
-            activeOAuthRedirectUri = '';
-          }
-        }, 500);
+      if (!responded) {
+        responded = true;
+        sendJson(res, 200, { status: 'already_authenticated', authenticated: true, auth_url: '' });
+      }
+    } else {
+      const cleanErr = cleanStderr(combinedOutput) || `Antigravity CLI keluar dengan kode ${code}`;
+      lastAuthError = cleanErr;
+
+      if (!responded) {
+        responded = true;
+        sendJson(res, 400, { status: 'error', error: cleanErr });
       }
     }
   });
 
-  oauthServer.on('error', (err) => {
-    if (activeOAuthServer === oauthServer) {
-      activeOAuthServer = null;
-      activeOAuthRedirectUri = '';
-      activeOAuthStates.clear();
+  proc.on('error', (err) => {
+    clearTimeout(authTimeout);
+    if (activeAuthProc === proc) {
+      activeAuthProc = null;
     }
-    lastAuthError = `oauth_server_error | ${err.code || 'ERR'} | ${err.message}`;
-    if (!res.headersSent) {
-      sendJson(res, 500, { status: 'error', error: `Gagal membuka server callback OAuth: ${err.message}` });
+    lastAuthError = err.message;
+    if (!responded) {
+      responded = true;
+      sendJson(res, 500, { status: 'error', error: `Gagal menjalankan Antigravity: ${err.message}` });
+    }
+  });
+}
+
+async function handleAuthCode(req, res) {
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { status: 'error', error: 'JSON tidak valid' });
+  }
+
+  const code = String(body.code || '').trim();
+  if (!code) {
+    return sendJson(res, 400, { status: 'error', error: 'Kode autentikasi tidak boleh kosong' });
+  }
+
+  if (
+    !activeAuthProc ||
+    !activeAuthProc.stdin ||
+    activeAuthProc.stdin.destroyed ||
+    !activeAuthProc.stdin.writable
+  ) {
+    return sendJson(res, 400, {
+      status: 'error',
+      error: 'Tidak ada proses login yang sedang aktif. Silakan tekan tombol Login Akun Google terlebih dahulu.',
+    });
+  }
+
+  const proc = activeAuthProc;
+  let procOut = '';
+  let procErr = '';
+
+  const onDataOut = (c) => { procOut += c.toString('utf8'); };
+  const onDataErr = (c) => { procErr += c.toString('utf8'); };
+  proc.stdout.on('data', onDataOut);
+  proc.stderr.on('data', onDataErr);
+
+  try {
+    proc.stdin.write(code + '\n');
+  } catch (err) {
+    return sendJson(res, 500, {
+      status: 'error',
+      error: `Gagal menulis kode ke stdin Antigravity: ${err.message}`,
+    });
+  }
+
+  let finished = false;
+  const timeoutTimer = setTimeout(() => {
+    if (!finished) {
+      finished = true;
+      if (activeAuthProc === proc) {
+        try { proc.kill('SIGTERM'); } catch (_) {}
+        activeAuthProc = null;
+      }
+      lastAuthError = 'Konfirmasi kode autentikasi timed out (25 detik).';
+      sendJson(res, 400, { status: 'error', error: lastAuthError });
+    }
+  }, 25000);
+
+  const cleanupListeners = () => {
+    clearTimeout(timeoutTimer);
+    try {
+      proc.stdout.removeListener('data', onDataOut);
+      proc.stderr.removeListener('data', onDataErr);
+    } catch (_) {}
+  };
+
+  proc.once('close', (exitCode) => {
+    if (finished) return;
+    finished = true;
+    cleanupListeners();
+
+    if (exitCode === 0) {
+      try {
+        fs.writeFileSync(AUTH_MARKER_FILE, String(Date.now()));
+      } catch (_) {}
+      lastAuthError = null;
+      return sendJson(res, 200, { status: 'ok', authenticated: true });
+    } else {
+      const cleanErr = cleanStderr(procErr) || stripAnsi(procOut).trim() || `Autentikasi gagal dengan exit code ${exitCode}`;
+      lastAuthError = cleanErr;
+      return sendJson(res, 400, { status: 'error', error: cleanErr });
     }
   });
 
-  oauthServer.listen(0, '127.0.0.1', () => {
-    activeOAuthServer = oauthServer;
-    const addr = oauthServer.address();
-    const cbPort = addr && typeof addr === 'object' ? addr.port : 0;
-    activeOAuthRedirectUri = `http://127.0.0.1:${cbPort}/oauth2callback`;
-
-    const authUrl = buildAuthUrl(activeOAuthRedirectUri, oauthCfg.clientId, state);
-    sendJson(res, 200, { status: 'ok', auth_url: authUrl });
-
-    // Timeout 5 menit agar server callback tidak menggantung selamanya jika user batal
-    setTimeout(() => {
-      activeOAuthStates.delete(state);
-      if (activeOAuthServer === oauthServer && activeOAuthStates.size === 0) {
-        try { oauthServer.close(); } catch (_) {}
-        activeOAuthServer = null;
-        activeOAuthRedirectUri = '';
-      }
-    }, 5 * 60 * 1000).unref();
+  proc.once('error', (err) => {
+    if (finished) return;
+    finished = true;
+    cleanupListeners();
+    lastAuthError = err.message;
+    return sendJson(res, 400, { status: 'error', error: err.message });
   });
 }
 
@@ -791,6 +374,10 @@ async function handleChat(req, res) {
   const userMsg = String(body.message || '').trim();
   if (!userMsg) {
     return sendJson(res, 400, { status: 'error', error: 'Pesan kosong' });
+  }
+
+  if (!fs.existsSync(ANTIGRAVITY_BIN)) {
+    return sendJson(res, 500, { status: 'error', error: `Binary Antigravity tidak ditemukan di ${ANTIGRAVITY_BIN}` });
   }
 
   let session = body.session_id ? loadSession(body.session_id) : null;
@@ -825,7 +412,7 @@ async function handleChat(req, res) {
     }
   }
 
-  emit({ type: 'status', text: 'Menjalankan Gemini CLI...' });
+  emit({ type: 'status', text: 'Menjalankan Antigravity...' });
 
   const recentHistory = session.messages.slice(-8, -1);
   let promptToSend = userMsg;
@@ -841,25 +428,8 @@ async function handleChat(req, res) {
     activeChatProc = null;
   }
 
-  ensureGeminiSettings();
-
-  const geminiEntry = resolveGeminiEntry();
-  if (!geminiEntry) {
-    emit({ type: 'error', text: 'Entrypoint @google/gemini-cli tidak ditemukan.' });
-    if (!res.writableEnded) res.end();
-    return;
-  }
-  const chatEnv = {
-    ...process.env,
-    TERM: 'dumb',
-    NO_COLOR: '1',
-    FORCE_COLOR: '0',
-    GEMINI_CLI_TRUST_WORKSPACE: 'true',
-    GEMINI_FORCE_ENCRYPTED_FILE: 'false',
-  };
-  delete chatEnv.NO_BROWSER;
-  const proc = spawn(process.execPath, [geminiEntry, '-p', promptToSend], {
-    env: chatEnv,
+  const proc = spawn(ANTIGRAVITY_BIN, ['-p', promptToSend], {
+    env: getAntigravityEnv(),
     cwd: HOME_DIR,
   });
   activeChatProc = proc;
@@ -894,6 +464,18 @@ async function handleChat(req, res) {
     const cleanStdout = stripAnsi(fullOutput).trim();
     const cleanErr = cleanStderr(errOutput);
 
+    // Cek jika proses meminta autentikasi (sesi berakhir)
+    if (
+      cleanStdout.includes('Authentication required') ||
+      cleanErr.includes('Authentication required')
+    ) {
+      try { fs.unlinkSync(AUTH_MARKER_FILE); } catch (_) {}
+      const authErrMsg = 'Sesi login berakhir. Silakan login ulang.';
+      emit({ type: 'error', text: authErrMsg, session_id: session.id, auth_required: true });
+      if (!res.writableEnded) res.end();
+      return;
+    }
+
     if (code === 0) {
       const finalReply = cleanStdout || '(Selesai tanpa output teks)';
       session.messages.push({
@@ -906,7 +488,7 @@ async function handleChat(req, res) {
 
       emit({ type: 'done', text: finalReply, session_id: session.id });
     } else {
-      const errorDetail = cleanErr || cleanStdout || `Gemini CLI keluar dengan kode ${code}`;
+      const errorDetail = cleanErr || cleanStdout || `Antigravity CLI keluar dengan kode ${code}`;
       const finalReply = `[Error kode ${code}] ${errorDetail}`;
       session.messages.push({
         role: 'assistant',
@@ -924,7 +506,7 @@ async function handleChat(req, res) {
   proc.on('error', (err) => {
     if (activeChatProc === proc) activeChatProc = null;
     const cleanMsg = stripAnsi(err.message);
-    emit({ type: 'error', text: `Gagal menjalankan Gemini CLI: ${cleanMsg}` });
+    emit({ type: 'error', text: `Gagal menjalankan Antigravity: ${cleanMsg}` });
     if (!res.writableEnded) res.end();
   });
 }
@@ -935,18 +517,25 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && pathname === '/health') {
     const active = ensureActiveSession();
+    const authenticated = fs.existsSync(AUTH_MARKER_FILE);
     return sendJson(res, 200, {
       status: 'ok',
-      node_version: process.version,
-      gemini_installed: isGeminiInstalled(),
-      logged_in: isLoggedIn(),
+      engine: 'antigravity',
+      authenticated: authenticated,
+      logged_in: authenticated,
+      auth_in_progress: Boolean(activeAuthProc),
       active_session_id: active.id,
       last_auth_error: lastAuthError,
+      antigravity_installed: fs.existsSync(ANTIGRAVITY_BIN),
     });
   }
 
   if (req.method === 'POST' && pathname === '/auth/start') {
     return handleAuthStart(res);
+  }
+
+  if (req.method === 'POST' && pathname === '/auth/code') {
+    return handleAuthCode(req, res);
   }
 
   if (req.method === 'GET' && pathname === '/sessions') {
@@ -1021,9 +610,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  resolveOAuthClientConfig,
-  extractOAuthPairFromText,
-  extractClosestOAuthPairFromText,
   stripAnsi,
   cleanStderr,
 };

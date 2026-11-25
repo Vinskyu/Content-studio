@@ -92,7 +92,8 @@ fun SetupScreen(
     val isAlreadyInstalled = remember {
         val paths = BootstrapInstaller.getPaths(context)
         BootstrapInstaller.isBootstrapInstalled(context) &&
-            File(paths.prefixDir, "bin/node").exists()
+            File(paths.prefixDir, "bin/node").exists() &&
+            File(paths.prefixDir, "bin/antigravity").exists()
     }
 
     val progressAnim = remember { Animatable(0f) }
@@ -209,7 +210,7 @@ fun SetupScreen(
                 text = if (isAlreadyInstalled) {
                     "Menyalakan layanan lokal..."
                 } else {
-                    "Menyiapkan lingkungan Linux lokal, Node.js, Python, dan Gemini CLI (hanya sekali saat pemasangan pertama)."
+                    "Menyiapkan lingkungan Linux lokal, Node.js, Python, dan Antigravity CLI (hanya sekali saat pemasangan pertama)."
                 },
                 fontFamily = FontFamily.Default,
                 fontSize = 13.sp,

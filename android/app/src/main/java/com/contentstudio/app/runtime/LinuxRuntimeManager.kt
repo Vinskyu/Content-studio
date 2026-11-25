@@ -334,31 +334,65 @@ object LinuxRuntimeManager {
                 ensureNodeAndNpmWrappers(paths)
                 patchShebangs(File(prefix, "bin"), prefix)
 
-                // TAHAP 3: Pasang @google/gemini-cli secara global langsung lewat binary node + npm-cli.js
+                // TAHAP 3: Unduh Antigravity CLI (ARM64)
                 _setupStage.value = 3
-                val geminiModDir = File(prefix, "lib/node_modules/@google/gemini-cli")
-                val existingGeminiEntry = resolveGeminiEntry(prefix)
-                if (!geminiModDir.exists() || existingGeminiEntry == null || !isValidJsScript(existingGeminiEntry)) {
-                    _setupMessage.value = "Memasang @google/gemini-cli..."
-                    File(prefix, "bin/gemini").delete()
-                    val nodeBinPath = "$prefix/bin/node"
-                    val npmCliPath = "$prefix/lib/node_modules/npm/bin/npm-cli.js"
-                    appendLog("[3/4] Menjalankan $nodeBinPath $npmCliPath install -g @google/gemini-cli --prefix $prefix")
-                    val npmCode = runBinary(
-                        context,
-                        nodeBinPath,
-                        listOf(npmCliPath, "install", "-g", "@google/gemini-cli", "--prefix", prefix, "--no-audit", "--no-fund")
-                    )
-                    if (npmCode != 0 && !geminiModDir.exists()) {
-                        throw RuntimeException("Gagal memasang @google/gemini-cli (exit=$npmCode)")
+                val agyBin = File(prefix, "bin/antigravity")
+                var agyOk = false
+                if (agyBin.exists()) {
+                    val code = runBinary(context, agyBin.absolutePath, listOf("--help"))
+                    if (code == 0) {
+                        agyOk = true
                     }
-                } else {
-                    appendLog("[3/4] @google/gemini-cli sudah terpasang.")
                 }
-                ensureGeminiWrapper(paths)
+
+                if (!agyOk) {
+                    _setupMessage.value = "Mengunduh Antigravity CLI (ARM64)..."
+                    appendLog("[3/4] Mengunduh Antigravity CLI (ARM64)...")
+
+                    val manifestUrl = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/android_arm64.json"
+                    val fallbackUrl = "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.17-4823843970351104/android-arm/cli_android_arm64.tar.gz"
+
+                    var downloadUrl = fallbackUrl
+                    try {
+                        val conn = URL(manifestUrl).openConnection() as HttpURLConnection
+                        conn.connectTimeout = 8000
+                        conn.readTimeout = 8000
+                        if (conn.responseCode == 200) {
+                            val jsonText = conn.inputStream.bufferedReader().use { it.readText() }
+                            val manifest = JSONObject(jsonText)
+                            val parsedUrl = manifest.optString("url", "")
+                            if (parsedUrl.isNotBlank()) {
+                                downloadUrl = parsedUrl
+                            }
+                        }
+                    } catch (e: Exception) {
+                        appendLog("[3/4] Gagal membaca manifest: ${e.message}, menggunakan fallback URL.")
+                    }
+
+                    appendLog("[3/4] Mengunduh paket dari $downloadUrl...")
+                    val dlScript = """
+                        TMP_DIR="$prefix/tmp/agy_install" &&
+                        mkdir -p "${'$'}TMP_DIR" &&
+                        rm -f "${'$'}TMP_DIR/cli_android_arm64.tar.gz" &&
+                        curl -fsSL --retry 3 "$downloadUrl" -o "${'$'}TMP_DIR/cli_android_arm64.tar.gz" 2>&1 &&
+                        tar -xzf "${'$'}TMP_DIR/cli_android_arm64.tar.gz" -C "$prefix/bin" 2>&1 &&
+                        chmod 755 "$prefix/bin/antigravity" 2>&1 &&
+                        rm -rf "${'$'}TMP_DIR"
+                    """.trimIndent()
+                    val dlCode = runInPrefix(context, dlScript)
+                    if (dlCode != 0 || !agyBin.exists()) {
+                        throw RuntimeException("Gagal mengunduh atau mengekstrak Antigravity CLI (exit=$dlCode)")
+                    }
+                    val verifyCode = runBinary(context, agyBin.absolutePath, listOf("--help"))
+                    if (verifyCode != 0) {
+                        throw RuntimeException("Verifikasi binary Antigravity CLI gagal (exit=$verifyCode)")
+                    }
+                    appendLog("[3/4] Antigravity CLI berhasil dipasang dan diverifikasi.")
+                } else {
+                    appendLog("[3/4] Antigravity CLI ($prefix/bin/antigravity) sudah terpasang dan siap.")
+                }
+
                 patchShebangs(File(prefix, "bin"), prefix)
-                val resolvedEntry = resolveGeminiEntry(prefix)
-                appendLog("[3/4] Entrypoint gemini: ${resolvedEntry?.absolutePath ?: File(prefix, "bin/gemini").absolutePath}")
 
                 // TAHAP 4: Jalankan proxy.js & studio-bridge.js di 127.0.0.1:18950
                 _setupStage.value = 4
@@ -381,7 +415,7 @@ object LinuxRuntimeManager {
                 }
 
                 _isReady.value = true
-                _setupMessage.value = "Lingkungan Linux & Gemini CLI siap."
+                _setupMessage.value = "Lingkungan Linux & Antigravity CLI siap."
                 appendLog("[OK] Setup selesai. Bridge aktif di 127.0.0.1:$BRIDGE_PORT")
             } catch (e: Exception) {
                 val msg = e.message ?: "Terjadi kesalahan saat menyiapkan runtime."
@@ -557,7 +591,8 @@ object LinuxRuntimeManager {
     fun refreshHealth(): JSONObject? {
         return try {
             val res = httpRequest("GET", "/health", timeoutMs = 4000)
-            _isLoggedIn.value = res.optBoolean("logged_in", false)
+            val authOk = res.optBoolean("authenticated", false) || res.optBoolean("logged_in", false)
+            _isLoggedIn.value = authOk
             val sid = res.optString("active_session_id", "")
             if (sid.isNotBlank()) {
                 _activeSessionId.value = sid
@@ -575,6 +610,20 @@ object LinuxRuntimeManager {
             JSONObject().apply {
                 put("status", "error")
                 put("error", e.message ?: "Gagal memulai OAuth login")
+            }
+        }
+    }
+
+    fun submitAuthCode(code: String): JSONObject {
+        return try {
+            val body = JSONObject().apply { put("code", code.trim()) }.toString()
+            val res = httpRequest("POST", "/auth/code", body, timeoutMs = 30000)
+            refreshHealth()
+            res
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal mengirim kode autentikasi")
             }
         }
     }
@@ -667,6 +716,12 @@ object LinuxRuntimeManager {
             OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
 
             val code = conn.responseCode
+            if (code == 401) {
+                _isLoggedIn.value = false
+                refreshHealth()
+                onError("Sesi login berakhir. Silakan login ulang.")
+                return
+            }
             if (code !in 200..299) {
                 val errTxt = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
                 onError(errTxt)
@@ -693,6 +748,10 @@ object LinuxRuntimeManager {
                                     }
                                     "error" -> {
                                         finished = true
+                                        if (text.contains("Sesi login berakhir") || obj.optBoolean("auth_required", false)) {
+                                            _isLoggedIn.value = false
+                                            refreshHealth()
+                                        }
                                         onError(text)
                                     }
                                 }

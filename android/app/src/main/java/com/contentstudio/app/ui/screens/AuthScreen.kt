@@ -8,11 +8,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
@@ -31,6 +33,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,7 +47,9 @@ import com.contentstudio.app.ui.theme.CardHighlight
 import com.contentstudio.app.ui.theme.ErrorCardBg
 import com.contentstudio.app.ui.theme.ErrorCardBorder
 import com.contentstudio.app.ui.theme.ErrorCardText
+import com.contentstudio.app.ui.theme.InputContainerBorder
 import com.contentstudio.app.ui.theme.SurfaceCard
+import com.contentstudio.app.ui.theme.TextMuted
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +73,9 @@ fun AuthScreen(
 
     var isStartingAuth by remember { mutableStateOf(false) }
     var isChecking by remember { mutableStateOf(false) }
+    var isSubmittingCode by remember { mutableStateOf(false) }
+    var showCodePanel by remember { mutableStateOf(false) }
+    var authCodeInput by remember { mutableStateOf("") }
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var lastAuthError by remember { mutableStateOf<String?>(null) }
     var copiedError by remember { mutableStateOf(false) }
@@ -114,7 +122,7 @@ fun AuthScreen(
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = "[OAUTH2 GOOGLE]",
+                        text = "[ANTIGRAVITY CLI]",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -125,14 +133,14 @@ fun AuthScreen(
 
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "AUTENTIKASI GEMINI CLI",
+                    text = "AUTENTIKASI ANTIGRAVITY",
                     fontFamily = FontFamily.Default,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
                 Text(
-                    text = "Masuk menggunakan akun Google Anda via browser perangkat. Token OAuth lokal disimpan aman tanpa API Key manual.",
+                    text = "Masuk menggunakan akun Google Anda via browser perangkat. Token disimpan secara lokal tanpa API Key manual.",
                     fontFamily = FontFamily.Default,
                     fontSize = 13.sp,
                     color = TextSecondary
@@ -210,7 +218,7 @@ fun AuthScreen(
 
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Button(
                     onClick = {
@@ -218,7 +226,7 @@ fun AuthScreen(
                             isStartingAuth = true
                             lastAuthError = null
                             copiedError = false
-                            statusMessage = "Menyiapkan tautan login OAuth Google..."
+                            statusMessage = "Menyiapkan tautan login Antigravity..."
                             scope.launch(Dispatchers.IO) {
                                 val res = LinuxRuntimeManager.startOAuthLogin()
                                 withContext(Dispatchers.Main) {
@@ -226,11 +234,13 @@ fun AuthScreen(
                                     val st = res.optString("status")
                                     val authUrl = res.optString("auth_url")
                                     when {
-                                        st == "already_logged_in" -> {
+                                        st == "already_authenticated" || st == "already_logged_in" -> {
+                                            statusMessage = "Sesi autentikasi aktif."
                                             LinuxRuntimeManager.refreshHealth()
                                         }
                                         st == "ok" && authUrl.isNotBlank() -> {
-                                            statusMessage = "Browser terbuka. Selesaikan login lalu kembali ke aplikasi dan tekan tombol Cek Status Login."
+                                            showCodePanel = true
+                                            statusMessage = "Browser terbuka. Selesaikan login lalu tempel kode autentikasi di bawah atau tekan Cek Status Login."
                                             try {
                                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)).apply {
                                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -241,7 +251,7 @@ fun AuthScreen(
                                             }
                                         }
                                         else -> {
-                                            statusMessage = res.optString("error", "Gagal memulai OAuth login.")
+                                            statusMessage = res.optString("error", "Gagal memulai login Antigravity.")
                                         }
                                     }
                                 }
@@ -264,6 +274,104 @@ fun AuthScreen(
                     )
                 }
 
+                // Panel tempel kode autentikasi dari browser
+                if (showCodePanel) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(BgDark)
+                            .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Tempel kode autentikasi dari browser (jika diminta)",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(SurfaceCard)
+                                    .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 10.dp, vertical = 9.dp)
+                            ) {
+                                if (authCodeInput.isEmpty()) {
+                                    Text(
+                                        text = "Kode otorisasi...",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                                BasicTextField(
+                                    value = authCodeInput,
+                                    onValueChange = { authCodeInput = it },
+                                    textStyle = TextStyle(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        color = TextPrimary
+                                    ),
+                                    cursorBrush = SolidColor(TextPrimary),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+
+                            val canSubmitCode = authCodeInput.isNotBlank() && !isSubmittingCode
+                            Button(
+                                onClick = {
+                                    if (canSubmitCode) {
+                                        isSubmittingCode = true
+                                        lastAuthError = null
+                                        statusMessage = "Mengirim kode autentikasi..."
+                                        scope.launch(Dispatchers.IO) {
+                                            val res = LinuxRuntimeManager.submitAuthCode(authCodeInput)
+                                            withContext(Dispatchers.Main) {
+                                                isSubmittingCode = false
+                                                val ok = res.optBoolean("authenticated", false) || res.optString("status") == "ok"
+                                                if (ok) {
+                                                    statusMessage = "Autentikasi berhasil!"
+                                                    LinuxRuntimeManager.refreshHealth()
+                                                } else {
+                                                    val err = res.optString("error", "Kode autentikasi gagal dikonfirmasi.")
+                                                    lastAuthError = err
+                                                    statusMessage = "Gagal memverifikasi kode."
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = canSubmitCode,
+                                shape = RoundedCornerShape(4.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (canSubmitCode) ActionSolidBg else CardHighlight,
+                                    contentColor = if (canSubmitCode) ActionSolidText else TextMuted,
+                                    disabledContainerColor = CardHighlight,
+                                    disabledContentColor = TextMuted
+                                ),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = if (isSubmittingCode) "PROSES..." else "KONFIRMASI KODE",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+
                 OutlinedButton(
                     onClick = {
                         if (!isChecking) {
@@ -273,7 +381,7 @@ fun AuthScreen(
                                 val h = LinuxRuntimeManager.refreshHealth()
                                 withContext(Dispatchers.Main) {
                                     isChecking = false
-                                    val ok = h?.optBoolean("logged_in", false) ?: false
+                                    val ok = h?.optBoolean("authenticated", false) ?: (h?.optBoolean("logged_in", false) ?: false)
                                     val err = extractLastAuthError(h)
                                     lastAuthError = err
                                     if (!ok) {
