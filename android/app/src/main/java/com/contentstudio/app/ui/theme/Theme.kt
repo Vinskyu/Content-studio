@@ -22,9 +22,9 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 val AppShapes = Shapes(
-    extraSmall = RoundedCornerShape(4.dp),
-    small = RoundedCornerShape(6.dp),
-    medium = RoundedCornerShape(6.dp),
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(8.dp),
     large = RoundedCornerShape(8.dp),
     extraLarge = RoundedCornerShape(8.dp)
 )

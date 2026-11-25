@@ -18,6 +18,7 @@ android/app/build/
 android/app/src/main/jniLibs/
 android/app/src/main/python/engine/
 android/app/src/main/assets/bundle/
+android/app/src/main/assets/bootstrap-*.zip
 android/local.properties
 *.apk
 *.aab

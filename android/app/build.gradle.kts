@@ -1,7 +1,6 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("com.chaquo.python")
 }
 
 android {
@@ -10,10 +9,12 @@ android {
 
     defaultConfig {
         applicationId = "com.contentstudio.app"
-        minSdk = 26
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        minSdk = 24
+        // targetSdk 28 diperlukan agar binary Linux di $PREFIX/bin dapat dieksekusi
+        // tanpa terblokir oleh kebijakan SELinux W^X pada Android 10+ (sama seperti Termux & AnyClaw).
+        targetSdk = 28
+        versionCode = 2
+        versionName = "2.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -60,76 +61,23 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
-}
 
-// Konfigurasi Chaquopy 16.0.0 untuk Kotlin DSL
-chaquopy {
-    defaultConfig {
-        version = "3.11"
-        val pyLoc = System.getenv("pythonLocation")
-        if (!pyLoc.isNullOrBlank()) {
-            buildPython("$pyLoc/bin/python3")
-        } else {
-            buildPython("python3.11")
-        }
-        pip {
-            install("yt-dlp")
-        }
+    androidResources {
+        noCompress += listOf("zip", "tar.gz")
     }
-}
-
-// Task sinkronisasi otomatis aset & engine sebelum proses build
-val syncContentStudioAssets = tasks.register("syncContentStudioAssets") {
-    doLast {
-        val projectRoot = rootProject.projectDir.parentFile ?: return@doLast
-        val engineDir = File(projectRoot, "engine")
-        val targetPyEngineDir = file("src/main/python/engine")
-
-        if (engineDir.exists()) {
-            targetPyEngineDir.mkdirs()
-            engineDir.listFiles()?.forEach { file ->
-                if (file.isFile && file.extension == "py") {
-                    file.copyTo(File(targetPyEngineDir, file.name), overwrite = true)
-                }
-            }
-        }
-
-        val targetBundleDir = file("src/main/assets/bundle")
-        targetBundleDir.mkdirs()
-
-        val copyDirs = listOf("workspaces", ".agents", "assets")
-        copyDirs.forEach { dirName ->
-            val srcDir = File(projectRoot, dirName)
-            if (srcDir.exists()) {
-                val destDir = File(targetBundleDir, dirName)
-                srcDir.copyRecursively(destDir, overwrite = true)
-            }
-        }
-    }
-}
-
-tasks.named("preBuild").configure {
-    dependsOn(syncContentStudioAssets)
 }
 
 dependencies {
-    // Core Android & Lifecycle
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     implementation("androidx.activity:activity-compose:1.9.1")
 
-    // Jetpack Compose & Material 3
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
 
-    // Navigation Compose
-    implementation("androidx.navigation:navigation-compose:2.7.7")
-
-    // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
