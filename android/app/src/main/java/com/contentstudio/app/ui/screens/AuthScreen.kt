@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -12,7 +13,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -22,17 +25,32 @@ import com.contentstudio.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
+
+private fun extractLastAuthError(health: JSONObject?): String? {
+    if (health == null || health.isNull("last_auth_error")) return null
+    val err = health.optString("last_auth_error", "")
+    return if (err.isNotBlank() && err != "null") err else null
+}
 
 @Composable
 fun AuthScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
 
     var isStartingAuth by remember { mutableStateOf(false) }
     var isChecking by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var lastAuthError by remember { mutableStateOf<String?>(null) }
+    var copiedError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val h = withContext(Dispatchers.IO) { LinuxRuntimeManager.refreshHealth() }
+        lastAuthError = extractLastAuthError(h)
+    }
 
     Column(
         modifier = modifier
@@ -84,10 +102,63 @@ fun AuthScreen(
                 }
             }
 
+            if (lastAuthError != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(BgDark)
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "DETAIL ERROR OAUTH",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextSecondary
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(SurfaceCard)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                .clickable {
+                                    clipboardManager.setText(AnnotatedString(lastAuthError!!))
+                                    copiedError = true
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = if (copiedError) "TERSALIN" else "[SALIN]",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                        }
+                    }
+                    Text(
+                        text = lastAuthError!!,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextPrimary
+                    )
+                }
+            }
+
             Button(
                 onClick = {
                     if (!isStartingAuth) {
                         isStartingAuth = true
+                        lastAuthError = null
+                        copiedError = false
                         statusMessage = "Menyiapkan URL login OAuth Google..."
                         scope.launch(Dispatchers.IO) {
                             val res = LinuxRuntimeManager.startOAuthLogin()
@@ -138,13 +209,20 @@ fun AuthScreen(
                 onClick = {
                     if (!isChecking) {
                         isChecking = true
+                        copiedError = false
                         scope.launch(Dispatchers.IO) {
                             val h = LinuxRuntimeManager.refreshHealth()
                             withContext(Dispatchers.Main) {
                                 isChecking = false
                                 val ok = h?.optBoolean("logged_in", false) ?: false
+                                val err = extractLastAuthError(h)
+                                lastAuthError = err
                                 if (!ok) {
-                                    statusMessage = "Belum terautentikasi. Pastikan proses login di browser sudah selesai."
+                                    statusMessage = if (err != null) {
+                                        "Autentikasi gagal. Periksa detail error di bawah."
+                                    } else {
+                                        "Belum terautentikasi. Pastikan proses login di browser sudah selesai."
+                                    }
                                 }
                             }
                         }

@@ -21,8 +21,20 @@ const OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
-const SIGN_IN_SUCCESS_URL = 'https://developers.google.com/gemini-code-assist/auth_success_gemini';
-const SIGN_IN_FAILURE_URL = 'https://developers.google.com/gemini-code-assist/auth_failure_gemini';
+const CA_CERT_PATH = path.join(PREFIX_DIR, 'etc', 'tls', 'cert.pem');
+let cachedCaCert = undefined;
+
+function getCaCert() {
+  if (cachedCaCert !== undefined) return cachedCaCert;
+  try {
+    if (fs.existsSync(CA_CERT_PATH)) {
+      cachedCaCert = fs.readFileSync(CA_CERT_PATH, 'utf8');
+      return cachedCaCert;
+    }
+  } catch (_) {}
+  cachedCaCert = null;
+  return null;
+}
 
 function resolveOAuthClientConfig() {
   const roots = [
@@ -34,30 +46,41 @@ function resolveOAuthClientConfig() {
     if (fs.existsSync(r)) queue.push(r);
   }
   const visited = new Set();
+  const candidates = [];
+
   while (queue.length > 0) {
     const dir = queue.shift();
-    if (visited.has(dir)) continue;
-    visited.add(dir);
+    let realDir = dir;
+    try { realDir = fs.realpathSync(dir); } catch (_) {}
+    if (visited.has(realDir)) continue;
+    visited.add(realDir);
+
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
     for (const ent of entries) {
       const full = path.join(dir, ent.name);
       if (ent.isDirectory()) {
-        if (ent.name === 'dist' || ent.name === 'bundle' || ent.name === 'src' || ent.name === 'code_assist' || ent.name === 'node_modules' || ent.name === '@google' || ent.name === 'gemini-cli-core') {
-          queue.push(full);
+        if (ent.name === '.git' || ent.name === 'docs' || ent.name === 'test' || ent.name === 'tests') continue;
+        queue.push(full);
+      } else if (ent.isFile() && (ent.name.endsWith('.js') || ent.name.endsWith('.mjs') || ent.name.endsWith('.cjs'))) {
+        if (ent.name === 'oauth2.js' || full.includes(`${path.sep}bundle${path.sep}`)) {
+          candidates.unshift(full);
+        } else {
+          candidates.push(full);
         }
-      } else if (ent.isFile() && (ent.name === 'oauth2.js' || ent.name.endsWith('.js') || ent.name.endsWith('.mjs'))) {
-        if (ent.name !== 'oauth2.js' && !dir.endsWith('bundle') && !dir.endsWith('dist')) continue;
-        try {
-          const txt = fs.readFileSync(full, 'utf8');
-          const idMatch = txt.match(/['"]([0-9]+-[a-zA-Z0-9_]+\.apps\.googleusercontent\.com)['"]/);
-          const secMatch = txt.match(/['"](GOCSPX-[a-zA-Z0-9_-]+)['"]/);
-          if (idMatch && secMatch) {
-            return { clientId: idMatch[1], clientSecret: secMatch[1] };
-          }
-        } catch (_) {}
       }
     }
+  }
+
+  for (const filePath of candidates) {
+    try {
+      const txt = fs.readFileSync(filePath, 'utf8');
+      const idMatch = txt.match(/['"`]([0-9]+-[a-zA-Z0-9_.-]+\.apps\.googleusercontent\.com)['"`]/);
+      const secMatch = txt.match(/['"`](GOCSPX-[a-zA-Z0-9_-]+)['"`]/);
+      if (idMatch && secMatch) {
+        return { clientId: idMatch[1], clientSecret: secMatch[1] };
+      }
+    } catch (_) {}
   }
   return null;
 }
@@ -65,8 +88,12 @@ function resolveOAuthClientConfig() {
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 let activeOAuthServer = null;
+let activeOAuthRedirectUri = '';
+let activeOAuthCfg = null;
+const activeOAuthStates = new Set();
 let activeChatProc = null;
 let oauthSucceeded = false;
+let lastAuthError = null;
 
 function readState() {
   try {
@@ -269,15 +296,20 @@ function readJsonBody(req) {
 function httpsRequest(urlStr, method, headers, bodyStr) {
   return new Promise((resolve, reject) => {
     const u = new URL(urlStr);
+    const ca = getCaCert();
+    const reqOpts = {
+      hostname: u.hostname,
+      port: u.port || 443,
+      path: u.pathname + u.search,
+      method: method || 'GET',
+      headers: headers || {},
+      timeout: 20000,
+    };
+    if (ca) {
+      reqOpts.ca = ca;
+    }
     const req = https.request(
-      {
-        hostname: u.hostname,
-        port: u.port || 443,
-        path: u.pathname + u.search,
-        method: method || 'GET',
-        headers: headers || {},
-        timeout: 20000,
-      },
+      reqOpts,
       (resp) => {
         let data = '';
         resp.on('data', (chunk) => {
@@ -299,7 +331,79 @@ function httpsRequest(urlStr, method, headers, bodyStr) {
   });
 }
 
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeTokenBody(bodyStr) {
+  if (!bodyStr) return '(empty body)';
+  try {
+    const parsed = JSON.parse(bodyStr);
+    if (parsed && typeof parsed === 'object') {
+      const redacted = { ...parsed };
+      for (const secretKey of ['access_token', 'refresh_token', 'id_token', 'client_secret']) {
+        if (secretKey in redacted) {
+          redacted[secretKey] = '[REDACTED]';
+        }
+      }
+      return JSON.stringify(redacted);
+    }
+  } catch (_) {}
+  return String(bodyStr).slice(0, 1200);
+}
+
+function sendCallbackHtml(cbRes, statusCode, title, heading, detail, isSuccess) {
+  const accent = isSuccess ? '#4ade80' : '#f87171';
+  const html = `<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { margin: 0; padding: 24px; background: #0f1115; color: #e5e7eb; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; box-sizing: border-box; }
+    .card { width: 100%; max-width: 520px; background: #171a21; border: 1px solid #2b313c; border-radius: 10px; padding: 20px; box-sizing: border-box; }
+    .badge { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; color: ${accent}; margin-bottom: 10px; }
+    h1 { font-size: 18px; margin: 0 0 12px 0; color: #f9fafb; }
+    pre { margin: 0; padding: 12px; background: #0b0d10; border: 1px solid #262b35; border-radius: 8px; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; color: #d1d5db; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">${isSuccess ? 'OAUTH2 BERHASIL' : 'OAUTH2 GAGAL'}</div>
+    <h1>${escapeHtml(heading)}</h1>
+    <pre>${escapeHtml(detail)}</pre>
+  </div>
+</body>
+</html>`;
+  cbRes.writeHead(statusCode, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  cbRes.end(html);
+}
+
+function buildAuthUrl(redirectUri, clientId, state) {
+  const authParams = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: OAUTH_SCOPES.join(' '),
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${authParams.toString()}`;
+}
+
 function handleAuthStart(res) {
+  lastAuthError = null;
+
   if (isLoggedIn()) {
     ensureGeminiSettings();
     return sendJson(res, 200, { status: 'already_logged_in', logged_in: true, auth_url: '' });
@@ -307,21 +411,54 @@ function handleAuthStart(res) {
 
   const oauthCfg = resolveOAuthClientConfig();
   if (!oauthCfg) {
+    lastAuthError = 'oauth_config_missing: Konfigurasi OAuth tidak ditemukan di paket @google/gemini-cli lokal.';
     return sendJson(res, 500, {
       status: 'error',
-      error: 'Konfigurasi OAuth tidak ditemukan di paket @google/gemini-cli lokal.',
+      error: lastAuthError,
+    });
+  }
+
+  const state = crypto.randomBytes(32).toString('hex');
+
+  // Gunakan ulang server callback yang masih hidup agar sesi login sebelumnya tidak terkena state mismatch
+  if (activeOAuthServer && activeOAuthServer.listening && activeOAuthRedirectUri) {
+    activeOAuthCfg = oauthCfg;
+    activeOAuthStates.add(state);
+    setTimeout(() => {
+      activeOAuthStates.delete(state);
+    }, 5 * 60 * 1000).unref();
+    return sendJson(res, 200, {
+      status: 'ok',
+      auth_url: buildAuthUrl(activeOAuthRedirectUri, oauthCfg.clientId, state),
     });
   }
 
   if (activeOAuthServer) {
     try { activeOAuthServer.close(); } catch (_) {}
     activeOAuthServer = null;
+    activeOAuthRedirectUri = '';
+    activeOAuthStates.clear();
   }
 
-  const state = crypto.randomBytes(32).toString('hex');
-  let redirectUri = '';
+  activeOAuthCfg = oauthCfg;
+  activeOAuthStates.add(state);
 
   const oauthServer = http.createServer(async (req, cbRes) => {
+    const failCallback = (detailMsg) => {
+      lastAuthError = detailMsg;
+      console.error('[studio-bridge] OAuth callback error:', detailMsg);
+      try {
+        sendCallbackHtml(
+          cbRes,
+          200,
+          'Login Gagal - ContentStudio',
+          'Autentikasi Google Gagal',
+          detailMsg,
+          false,
+        );
+      } catch (_) {}
+    };
+
     try {
       const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
       if (reqUrl.pathname !== '/oauth2callback') {
@@ -331,47 +468,96 @@ function handleAuthStart(res) {
       }
 
       const qs = reqUrl.searchParams;
-      if (qs.get('error')) {
-        cbRes.writeHead(301, { Location: SIGN_IN_FAILURE_URL });
-        cbRes.end();
+      const errParam = qs.get('error');
+      if (errParam) {
+        const errDesc = qs.get('error_description') || '';
+        failCallback(`oauth_provider_error | code=${errParam}${errDesc ? ` | description=${errDesc}` : ''}`);
         return;
       }
 
       const code = qs.get('code');
       const retState = qs.get('state');
-      if (!code || retState !== state) {
-        cbRes.writeHead(301, { Location: SIGN_IN_FAILURE_URL });
-        cbRes.end();
+      if (!code || !retState || !activeOAuthStates.has(retState)) {
+        failCallback(
+          `state_mismatch | has_code=${Boolean(code)} | state_valid=${Boolean(retState && activeOAuthStates.has(retState))}`,
+        );
         return;
       }
+      activeOAuthStates.delete(retState);
+
+      const cfg = activeOAuthCfg || oauthCfg;
+      const redirectUri = activeOAuthRedirectUri;
 
       // Tukar authorization code menjadi token OAuth2 resmi Gemini CLI
       const formBody = new URLSearchParams({
-        code,
-        client_id: oauthCfg.clientId,
-        client_secret: oauthCfg.clientSecret,
-        redirect_uri: redirectUri,
         grant_type: 'authorization_code',
+        code,
+        client_id: cfg.clientId,
+        client_secret: cfg.clientSecret,
+        redirect_uri: redirectUri,
       }).toString();
 
-      const tokResp = await httpsRequest(
-        'https://oauth2.googleapis.com/token',
-        'POST',
-        {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': String(Buffer.byteLength(formBody)),
-        },
-        formBody,
-      );
-
-      if (tokResp.statusCode < 200 || tokResp.statusCode >= 300) {
-        console.error('[studio-bridge] Token exchange failed:', tokResp.statusCode, tokResp.body);
-        cbRes.writeHead(301, { Location: SIGN_IN_FAILURE_URL });
-        cbRes.end();
+      let tokResp;
+      try {
+        tokResp = await httpsRequest(
+          'https://oauth2.googleapis.com/token',
+          'POST',
+          {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': String(Buffer.byteLength(formBody)),
+          },
+          formBody,
+        );
+      } catch (tokErr) {
+        failCallback(`token_exchange_network_error | ${tokErr.code || 'ERR'} | ${tokErr.message}`);
         return;
       }
 
-      const tokData = JSON.parse(tokResp.body);
+      if (tokResp.statusCode < 200 || tokResp.statusCode >= 300) {
+        failCallback(`token_exchange_failed | HTTP ${tokResp.statusCode} | ${sanitizeTokenBody(tokResp.body)}`);
+        return;
+      }
+
+      let tokData;
+      try {
+        tokData = JSON.parse(tokResp.body);
+      } catch (parseErr) {
+        failCallback(`token_response_invalid_json | HTTP ${tokResp.statusCode} | ${parseErr.message}`);
+        return;
+      }
+
+      if (!tokData || !tokData.access_token) {
+        failCallback(`token_missing_access_token | HTTP ${tokResp.statusCode} | ${sanitizeTokenBody(tokResp.body)}`);
+        return;
+      }
+
+      // Ambil email user untuk google_accounts.json
+      let uiResp;
+      try {
+        uiResp = await httpsRequest(
+          'https://www.googleapis.com/oauth2/v2/userinfo',
+          'GET',
+          { Authorization: `Bearer ${tokData.access_token}` },
+          null,
+        );
+      } catch (uiErr) {
+        failCallback(`userinfo_network_error | ${uiErr.code || 'ERR'} | ${uiErr.message}`);
+        return;
+      }
+
+      if (uiResp.statusCode < 200 || uiResp.statusCode >= 300) {
+        failCallback(`userinfo_failed | HTTP ${uiResp.statusCode} | ${sanitizeTokenBody(uiResp.body)}`);
+        return;
+      }
+
+      let uiData = null;
+      try {
+        uiData = JSON.parse(uiResp.body);
+      } catch (uiParseErr) {
+        failCallback(`userinfo_invalid_json | HTTP ${uiResp.statusCode} | ${uiParseErr.message}`);
+        return;
+      }
+
       const expiryDate = Date.now() + (Number(tokData.expires_in) || 3600) * 1000;
       const credsToSave = {
         access_token: tokData.access_token,
@@ -387,47 +573,48 @@ function handleAuthStart(res) {
       const credsPath = path.join(geminiDir, 'oauth_creds.json');
       fs.writeFileSync(credsPath, JSON.stringify(credsToSave, null, 2), { mode: 0o600 });
 
-      // Ambil email user untuk google_accounts.json
-      try {
-        const uiResp = await httpsRequest(
-          'https://www.googleapis.com/oauth2/v2/userinfo',
-          'GET',
-          { Authorization: `Bearer ${tokData.access_token}` },
-          null,
+      if (uiData && uiData.email) {
+        const accPath = path.join(geminiDir, 'google_accounts.json');
+        fs.writeFileSync(
+          accPath,
+          JSON.stringify({ active: uiData.email, old: [] }, null, 2),
         );
-        if (uiResp.statusCode >= 200 && uiResp.statusCode < 300) {
-          const uiData = JSON.parse(uiResp.body);
-          if (uiData && uiData.email) {
-            const accPath = path.join(geminiDir, 'google_accounts.json');
-            fs.writeFileSync(
-              accPath,
-              JSON.stringify({ active: uiData.email, old: [] }, null, 2),
-            );
-          }
-        }
-      } catch (_) {}
+      }
 
       ensureGeminiSettings();
       oauthSucceeded = true;
+      lastAuthError = null;
 
-      cbRes.writeHead(301, { Location: SIGN_IN_SUCCESS_URL });
-      cbRes.end();
+      sendCallbackHtml(
+        cbRes,
+        200,
+        'Login Berhasil - ContentStudio',
+        'Login berhasil. Kembali ke aplikasi ContentStudio.',
+        'Autentikasi Google OAuth2 selesai. Silakan kembali ke aplikasi ContentStudio.',
+        true,
+      );
     } catch (e) {
-      console.error('[studio-bridge] OAuth callback error:', e.message);
-      try {
-        cbRes.writeHead(301, { Location: SIGN_IN_FAILURE_URL });
-        cbRes.end();
-      } catch (_) {}
+      failCallback(`oauth_callback_exception | ${e.code || 'ERR'} | ${e.message}`);
     } finally {
-      setTimeout(() => {
-        try { oauthServer.close(); } catch (_) {}
-        if (activeOAuthServer === oauthServer) activeOAuthServer = null;
-      }, 500);
+      if (activeOAuthStates.size === 0) {
+        setTimeout(() => {
+          if (activeOAuthServer === oauthServer && activeOAuthStates.size === 0) {
+            try { oauthServer.close(); } catch (_) {}
+            activeOAuthServer = null;
+            activeOAuthRedirectUri = '';
+          }
+        }, 500);
+      }
     }
   });
 
   oauthServer.on('error', (err) => {
-    if (activeOAuthServer === oauthServer) activeOAuthServer = null;
+    if (activeOAuthServer === oauthServer) {
+      activeOAuthServer = null;
+      activeOAuthRedirectUri = '';
+      activeOAuthStates.clear();
+    }
+    lastAuthError = `oauth_server_error | ${err.code || 'ERR'} | ${err.message}`;
     if (!res.headersSent) {
       sendJson(res, 500, { status: 'error', error: `Gagal membuka server callback OAuth: ${err.message}` });
     }
@@ -437,25 +624,18 @@ function handleAuthStart(res) {
     activeOAuthServer = oauthServer;
     const addr = oauthServer.address();
     const cbPort = addr && typeof addr === 'object' ? addr.port : 0;
-    redirectUri = `http://127.0.0.1:${cbPort}/oauth2callback`;
+    activeOAuthRedirectUri = `http://127.0.0.1:${cbPort}/oauth2callback`;
 
-    const authParams = new URLSearchParams({
-      client_id: oauthCfg.clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: OAUTH_SCOPES.join(' '),
-      access_type: 'offline',
-      prompt: 'consent',
-      state,
-    });
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${authParams.toString()}`;
+    const authUrl = buildAuthUrl(activeOAuthRedirectUri, oauthCfg.clientId, state);
     sendJson(res, 200, { status: 'ok', auth_url: authUrl });
 
     // Timeout 5 menit agar server callback tidak menggantung selamanya jika user batal
     setTimeout(() => {
-      if (activeOAuthServer === oauthServer) {
+      activeOAuthStates.delete(state);
+      if (activeOAuthServer === oauthServer && activeOAuthStates.size === 0) {
         try { oauthServer.close(); } catch (_) {}
         activeOAuthServer = null;
+        activeOAuthRedirectUri = '';
       }
     }, 5 * 60 * 1000).unref();
   });
@@ -597,6 +777,7 @@ const server = http.createServer(async (req, res) => {
       gemini_installed: isGeminiInstalled(),
       logged_in: isLoggedIn(),
       active_session_id: active.id,
+      last_auth_error: lastAuthError,
     });
   }
 
