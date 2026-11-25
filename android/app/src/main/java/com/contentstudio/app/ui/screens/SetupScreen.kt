@@ -6,22 +6,48 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -30,8 +56,23 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.contentstudio.app.runtime.BootstrapInstaller
 import com.contentstudio.app.runtime.LinuxRuntimeManager
-import com.contentstudio.app.ui.theme.*
+import com.contentstudio.app.ui.theme.ActionSolidBg
+import com.contentstudio.app.ui.theme.ActionSolidText
+import com.contentstudio.app.ui.theme.BgDark
+import com.contentstudio.app.ui.theme.BorderSubtle
+import com.contentstudio.app.ui.theme.CardHighlight
+import com.contentstudio.app.ui.theme.ErrorCardBg
+import com.contentstudio.app.ui.theme.ErrorCardBorder
+import com.contentstudio.app.ui.theme.ErrorCardText
+import com.contentstudio.app.ui.theme.ProgressBarError
+import com.contentstudio.app.ui.theme.ProgressBarFill
+import com.contentstudio.app.ui.theme.ProgressBarTrack
+import com.contentstudio.app.ui.theme.SurfaceCard
+import com.contentstudio.app.ui.theme.TextPrimary
+import com.contentstudio.app.ui.theme.TextSecondary
+import java.io.File
 
 @Composable
 fun SetupScreen(
@@ -48,13 +89,45 @@ fun SetupScreen(
     var copiedLog by remember { mutableStateOf(false) }
     val logListState = rememberLazyListState()
 
+    val isAlreadyInstalled = remember {
+        val paths = BootstrapInstaller.getPaths(context)
+        BootstrapInstaller.isBootstrapInstalled(context) &&
+            File(paths.prefixDir, "bin/node").exists()
+    }
+
+    val progressAnim = remember { Animatable(0f) }
     val clampedStage = stage.coerceIn(1, 4)
-    val targetProgress = clampedStage / 4f
-    val progressPct = (clampedStage * 25).coerceIn(0, 100)
-    val animatedProgress by animateFloatAsState(
-        targetValue = targetProgress,
-        animationSpec = tween(durationMillis = 350),
-        label = "setup_progress"
+    val targetProgress = (clampedStage / 4f).coerceIn(0f, 1f)
+
+    LaunchedEffect(targetProgress) {
+        progressAnim.animateTo(
+            targetValue = targetProgress,
+            animationSpec = tween(durationMillis = 700, easing = FastOutSlowInEasing)
+        )
+    }
+
+    val currentProgress = progressAnim.value
+    val displayPct = (currentProgress * 100).toInt().coerceIn(0, 100)
+
+    val infiniteTransition = rememberInfiniteTransition(label = "setup_shimmer")
+    val shimmerAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.65f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(850, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "fill_shimmer"
+    )
+
+    val slidingPillFraction by infiniteTransition.animateFloat(
+        initialValue = -0.35f,
+        targetValue = 1.15f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "sliding_pill"
     )
 
     LaunchedEffect(logs.size) {
@@ -83,9 +156,9 @@ fun SetupScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(6.dp))
                 .background(SurfaceCard)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(8.dp))
+                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -97,63 +170,103 @@ fun SetupScreen(
                 Text(
                     text = "CONTENT STUDIO",
                     fontFamily = FontFamily.Default,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "$progressPct%",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = TextSecondary
-                    )
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(CardHighlight)
-                            .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
+
+                if (!isAlreadyInstalled) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "[$clampedStage/4]",
+                            text = "$displayPct%",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = TextSecondary
                         )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(CardHighlight)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = "[$clampedStage/4]",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                        }
                     }
                 }
             }
 
             Text(
-                text = "Menyiapkan lingkungan Linux lokal, Node.js, Python, dan Gemini CLI (hanya sekali saat pemasangan pertama).",
+                text = if (isAlreadyInstalled) {
+                    "Menyalakan layanan lokal..."
+                } else {
+                    "Menyiapkan lingkungan Linux lokal, Node.js, Python, dan Gemini CLI (hanya sekali saat pemasangan pertama)."
+                },
                 fontFamily = FontFamily.Default,
                 fontSize = 13.sp,
                 color = TextSecondary
             )
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color(0xFF232328))
-            ) {
+            // Progress Bar Track (Flat tipis 4.dp #232328)
+            if (isAlreadyInstalled) {
+                // Mode startup cepat: indeterminate sliding pill halus
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(ProgressBarTrack)
+                ) {
+                    val trackWidth = maxWidth
+                    val pillWidth = trackWidth * 0.35f
+                    val xOffset = trackWidth * slidingPillFraction
+                    Box(
+                        modifier = Modifier
+                            .offset(x = xOffset)
+                            .width(pillWidth)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(
+                                if (setupError != null) ProgressBarError else ProgressBarFill
+                            )
+                    )
+                }
+            } else {
+                // Mode instalasi pertama: meluncur mulus dari 0f via Animatable + shimmer halus
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(animatedProgress.coerceIn(0f, 1f))
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(if (setupError != null) Color(0xFFEF4444) else Color(0xFFE4E4E7))
-                )
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(ProgressBarTrack)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(currentProgress.coerceIn(0f, 1f))
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(
+                                if (setupError != null) {
+                                    ProgressBarError
+                                } else {
+                                    ProgressBarFill.copy(alpha = if (currentProgress < 1f) shimmerAlpha else 1f)
+                                }
+                            )
+                    )
+                }
             }
 
             Text(
-                text = message,
+                text = if (isAlreadyInstalled && setupError == null) "Menyalakan layanan lokal..." else message,
                 fontFamily = FontFamily.Default,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
@@ -161,19 +274,27 @@ fun SetupScreen(
             )
 
             if (setupError != null) {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(BgDark)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(8.dp))
-                        .padding(12.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(ErrorCardBg)
+                        .border(1.dp, ErrorCardBorder, RoundedCornerShape(6.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "Kendala: $setupError",
+                        text = "KENDALA SISTEM",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ErrorCardText
+                    )
+                    Text(
+                        text = setupError!!,
                         fontFamily = FontFamily.Default,
                         fontSize = 12.sp,
-                        color = TextPrimary
+                        color = ErrorCardText
                     )
                 }
             }
@@ -182,11 +303,11 @@ fun SetupScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(6.dp))
                     .background(BgDark)
-                    .border(1.dp, BorderSubtle, RoundedCornerShape(8.dp))
+                    .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
                     .clickable { showLogs = !showLogs }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -224,9 +345,9 @@ fun SetupScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(180.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(6.dp))
                         .background(BgDark)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(8.dp))
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
                         .padding(10.dp)
                 ) {
                     LazyColumn(
@@ -261,7 +382,7 @@ fun SetupScreen(
                             } catch (_: Exception) {}
                         },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(6.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
                         border = ButtonDefaults.outlinedButtonBorder.copy(brush = SolidColor(BorderSubtle))
                     ) {
@@ -278,7 +399,7 @@ fun SetupScreen(
                     Button(
                         onClick = { LinuxRuntimeManager.startSetup(context, forceRetry = true) },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ActionSolidBg,
                             contentColor = ActionSolidText

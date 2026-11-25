@@ -5,10 +5,25 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -21,7 +36,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.contentstudio.app.runtime.LinuxRuntimeManager
-import com.contentstudio.app.ui.theme.*
+import com.contentstudio.app.ui.theme.ActionSolidBg
+import com.contentstudio.app.ui.theme.ActionSolidText
+import com.contentstudio.app.ui.theme.BgDark
+import com.contentstudio.app.ui.theme.BorderSubtle
+import com.contentstudio.app.ui.theme.CardHighlight
+import com.contentstudio.app.ui.theme.ErrorCardBg
+import com.contentstudio.app.ui.theme.ErrorCardBorder
+import com.contentstudio.app.ui.theme.ErrorCardText
+import com.contentstudio.app.ui.theme.SurfaceCard
+import com.contentstudio.app.ui.theme.TextPrimary
+import com.contentstudio.app.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,34 +88,64 @@ fun AuthScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(6.dp))
                 .background(SurfaceCard)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(8.dp))
+                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
                 .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "AUTENTIKASI GEMINI CLI",
-                fontFamily = FontFamily.Default,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "CONTENT STUDIO",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(CardHighlight)
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "[OAUTH2 GOOGLE]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextSecondary
+                    )
+                }
+            }
 
-            Text(
-                text = "Masuk menggunakan akun Google Anda via browser perangkat. Tidak perlu API Key manual.",
-                fontFamily = FontFamily.Default,
-                fontSize = 13.sp,
-                color = TextSecondary
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "AUTENTIKASI GEMINI CLI",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "Masuk menggunakan akun Google Anda via browser perangkat. Token OAuth lokal disimpan aman tanpa API Key manual.",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = TextSecondary
+                )
+            }
 
             if (statusMessage != null) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(6.dp))
                         .background(BgDark)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(8.dp))
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
                         .padding(12.dp)
                 ) {
                     Text(
@@ -106,9 +161,9 @@ fun AuthScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(BgDark)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(ErrorCardBg)
+                        .border(1.dp, ErrorCardBorder, RoundedCornerShape(6.dp))
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -119,28 +174,28 @@ fun AuthScreen(
                     ) {
                         Text(
                             text = "DETAIL ERROR OAUTH",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = TextSecondary
+                            color = ErrorCardText
                         )
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                .background(CardHighlight)
+                                .border(1.dp, ErrorCardBorder, RoundedCornerShape(4.dp))
                                 .clickable {
                                     clipboardManager.setText(AnnotatedString(lastAuthError!!))
                                     copiedError = true
                                 }
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                text = if (copiedError) "TERSALIN" else "[SALIN]",
+                                text = if (copiedError) "[TERSALIN]" else "[SALIN]",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = TextPrimary
+                                color = ErrorCardText
                             )
                         }
                     }
@@ -148,98 +203,103 @@ fun AuthScreen(
                         text = lastAuthError!!,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = TextPrimary
+                        color = ErrorCardText
                     )
                 }
             }
 
-            Button(
-                onClick = {
-                    if (!isStartingAuth) {
-                        isStartingAuth = true
-                        lastAuthError = null
-                        copiedError = false
-                        statusMessage = "Menyiapkan URL login OAuth Google..."
-                        scope.launch(Dispatchers.IO) {
-                            val res = LinuxRuntimeManager.startOAuthLogin()
-                            withContext(Dispatchers.Main) {
-                                isStartingAuth = false
-                                val st = res.optString("status")
-                                val authUrl = res.optString("auth_url")
-                                when {
-                                    st == "already_logged_in" -> {
-                                        LinuxRuntimeManager.refreshHealth()
-                                    }
-                                    st == "ok" && authUrl.isNotBlank() -> {
-                                        statusMessage = "Browser terbuka. Selesaikan login lalu kembali ke aplikasi dan tekan Cek Status Login."
-                                        try {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)).apply {
-                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        if (!isStartingAuth) {
+                            isStartingAuth = true
+                            lastAuthError = null
+                            copiedError = false
+                            statusMessage = "Menyiapkan tautan login OAuth Google..."
+                            scope.launch(Dispatchers.IO) {
+                                val res = LinuxRuntimeManager.startOAuthLogin()
+                                withContext(Dispatchers.Main) {
+                                    isStartingAuth = false
+                                    val st = res.optString("status")
+                                    val authUrl = res.optString("auth_url")
+                                    when {
+                                        st == "already_logged_in" -> {
+                                            LinuxRuntimeManager.refreshHealth()
+                                        }
+                                        st == "ok" && authUrl.isNotBlank() -> {
+                                            statusMessage = "Browser terbuka. Selesaikan login lalu kembali ke aplikasi dan tekan tombol Cek Status Login."
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                statusMessage = "Gagal membuka browser: ${e.message}"
                                             }
-                                            context.startActivity(intent)
-                                        } catch (e: Exception) {
-                                            statusMessage = "Gagal membuka browser: ${e.message}"
+                                        }
+                                        else -> {
+                                            statusMessage = res.optString("error", "Gagal memulai OAuth login.")
                                         }
                                     }
-                                    else -> {
-                                        statusMessage = res.optString("error", "Gagal memulai OAuth login.")
-                                    }
                                 }
                             }
                         }
-                    }
-                },
-                enabled = !isStartingAuth,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = ActionSolidBg,
-                    contentColor = ActionSolidText
-                )
-            ) {
-                Text(
-                    text = if (isStartingAuth) "MENYIAPKAN OAUTH..." else "LOGIN AKUN GOOGLE (OAUTH)",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+                    },
+                    enabled = !isStartingAuth,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ActionSolidBg,
+                        contentColor = ActionSolidText
+                    )
+                ) {
+                    Text(
+                        text = if (isStartingAuth) "MENYIAPKAN OAUTH..." else "LOGIN AKUN GOOGLE (OAUTH)",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
 
-            OutlinedButton(
-                onClick = {
-                    if (!isChecking) {
-                        isChecking = true
-                        copiedError = false
-                        scope.launch(Dispatchers.IO) {
-                            val h = LinuxRuntimeManager.refreshHealth()
-                            withContext(Dispatchers.Main) {
-                                isChecking = false
-                                val ok = h?.optBoolean("logged_in", false) ?: false
-                                val err = extractLastAuthError(h)
-                                lastAuthError = err
-                                if (!ok) {
-                                    statusMessage = if (err != null) {
-                                        "Autentikasi gagal. Periksa detail error di bawah."
-                                    } else {
-                                        "Belum terautentikasi. Pastikan proses login di browser sudah selesai."
+                OutlinedButton(
+                    onClick = {
+                        if (!isChecking) {
+                            isChecking = true
+                            copiedError = false
+                            scope.launch(Dispatchers.IO) {
+                                val h = LinuxRuntimeManager.refreshHealth()
+                                withContext(Dispatchers.Main) {
+                                    isChecking = false
+                                    val ok = h?.optBoolean("logged_in", false) ?: false
+                                    val err = extractLastAuthError(h)
+                                    lastAuthError = err
+                                    if (!ok) {
+                                        statusMessage = if (err != null) {
+                                            "Autentikasi belum berhasil. Periksa detail error di atas."
+                                        } else {
+                                            "Belum terautentikasi. Pastikan proses login di browser sudah selesai."
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                },
-                enabled = !isChecking,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
-                border = ButtonDefaults.outlinedButtonBorder.copy(brush = SolidColor(BorderSubtle))
-            ) {
-                Text(
-                    text = if (isChecking) "MEMERIKSA..." else "CEK STATUS LOGIN",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                    },
+                    enabled = !isChecking,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                    border = ButtonDefaults.outlinedButtonBorder.copy(brush = SolidColor(BorderSubtle))
+                ) {
+                    Text(
+                        text = if (isChecking) "MEMERIKSA..." else "CEK STATUS LOGIN",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         }
     }
