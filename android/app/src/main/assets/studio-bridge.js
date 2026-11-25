@@ -184,12 +184,39 @@ function ensureGeminiSettings() {
       cfg = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) || {};
     }
   } catch (_) {}
-  if (!cfg.security || typeof cfg.security !== 'object') cfg.security = {};
-  if (!cfg.security.auth || typeof cfg.security.auth !== 'object') cfg.security.auth = {};
+  let changed = false;
+  if (!cfg.security || typeof cfg.security !== 'object') {
+    cfg.security = {};
+    changed = true;
+  }
+  if (!cfg.security.auth || typeof cfg.security.auth !== 'object') {
+    cfg.security.auth = {};
+    changed = true;
+  }
   if (cfg.security.auth.selectedType !== 'oauth-personal') {
     cfg.security.auth.selectedType = 'oauth-personal';
+    changed = true;
+  }
+  if (changed) {
     fs.writeFileSync(settingsPath, JSON.stringify(cfg, null, 2));
   }
+
+  // Siapkan $HOME/.gemini/trustedFolders.json untuk memastikan direktori kerja dipercaya
+  try {
+    const trustedPath = path.join(geminiDir, 'trustedFolders.json');
+    let trusted = {};
+    if (fs.existsSync(trustedPath)) {
+      try {
+        trusted = JSON.parse(fs.readFileSync(trustedPath, 'utf8')) || {};
+      } catch (_) {}
+    }
+    const currentCwd = process.cwd();
+    trusted[HOME_DIR] = 'TRUSTED';
+    if (currentCwd) {
+      trusted[currentCwd] = 'TRUSTED';
+    }
+    fs.writeFileSync(trustedPath, JSON.stringify(trusted, null, 2));
+  } catch (_) {}
 }
 
 function isLoggedIn() {
@@ -386,6 +413,60 @@ function httpsRequest(urlStr, method, headers, bodyStr) {
     }
     req.end();
   });
+}
+
+function stripAnsi(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1B[@-Z\\-_]/g, '');
+}
+
+function cleanStderr(rawStderr) {
+  const clean = stripAnsi(rawStderr || '');
+  const lines = clean.split(/\r?\n/);
+  const kept = [];
+  let skippingNoise = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (
+      trimmed.includes('pty.node') ||
+      trimmed.includes('node-pty') ||
+      trimmed.includes('ExperimentalWarning')
+    ) {
+      skippingNoise = true;
+      continue;
+    }
+
+    if (skippingNoise) {
+      if (
+        trimmed.startsWith('at ') ||
+        trimmed.startsWith('Require stack:') ||
+        trimmed.startsWith('- ') ||
+        trimmed.startsWith('^') ||
+        trimmed.startsWith('code:') ||
+        trimmed.startsWith('requireStack:') ||
+        trimmed.startsWith(']') ||
+        trimmed.startsWith('}') ||
+        trimmed.includes('node:internal')
+      ) {
+        continue;
+      }
+      skippingNoise = false;
+    }
+
+    if (trimmed.includes('throw err;') || trimmed === '^' || (trimmed.startsWith('node:') && trimmed.includes('loader'))) {
+      continue;
+    }
+
+    kept.push(trimmed);
+  }
+
+  return kept.join('\n').trim();
 }
 
 function escapeHtml(str) {
@@ -768,7 +849,14 @@ async function handleChat(req, res) {
     if (!res.writableEnded) res.end();
     return;
   }
-  const chatEnv = { ...process.env, TERM: 'dumb', GEMINI_FORCE_ENCRYPTED_FILE: 'false' };
+  const chatEnv = {
+    ...process.env,
+    TERM: 'dumb',
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+    GEMINI_CLI_TRUST_WORKSPACE: 'true',
+    GEMINI_FORCE_ENCRYPTED_FILE: 'false',
+  };
   delete chatEnv.NO_BROWSER;
   const proc = spawn(process.execPath, [geminiEntry, '-p', promptToSend], {
     env: chatEnv,
@@ -780,9 +868,12 @@ async function handleChat(req, res) {
   let errOutput = '';
 
   proc.stdout.on('data', (chunk) => {
-    const text = chunk.toString('utf8');
-    fullOutput += text;
-    emit({ type: 'delta', text });
+    const rawText = chunk.toString('utf8');
+    const cleanText = stripAnsi(rawText);
+    fullOutput += cleanText;
+    if (cleanText) {
+      emit({ type: 'delta', text: cleanText });
+    }
   });
 
   proc.stderr.on('data', (chunk) => {
@@ -799,18 +890,32 @@ async function handleChat(req, res) {
 
   proc.on('exit', (code) => {
     if (activeChatProc === proc) activeChatProc = null;
-    const finalReply = fullOutput.trim() || (code === 0 ? '(Selesai tanpa output teks)' : `[Error kode ${code}] ${errOutput.trim()}`);
-    session.messages.push({
-      role: 'assistant',
-      content: finalReply,
-      timestamp: Date.now(),
-    });
-    session.updated_at = Date.now();
-    saveSession(session);
 
-    if (code === 0 || fullOutput.trim().length > 0) {
+    const cleanStdout = stripAnsi(fullOutput).trim();
+    const cleanErr = cleanStderr(errOutput);
+
+    if (code === 0) {
+      const finalReply = cleanStdout || '(Selesai tanpa output teks)';
+      session.messages.push({
+        role: 'assistant',
+        content: finalReply,
+        timestamp: Date.now(),
+      });
+      session.updated_at = Date.now();
+      saveSession(session);
+
       emit({ type: 'done', text: finalReply, session_id: session.id });
     } else {
+      const errorDetail = cleanErr || cleanStdout || `Gemini CLI keluar dengan kode ${code}`;
+      const finalReply = `[Error kode ${code}] ${errorDetail}`;
+      session.messages.push({
+        role: 'assistant',
+        content: finalReply,
+        timestamp: Date.now(),
+      });
+      session.updated_at = Date.now();
+      saveSession(session);
+
       emit({ type: 'error', text: finalReply, session_id: session.id });
     }
     if (!res.writableEnded) res.end();
@@ -818,7 +923,8 @@ async function handleChat(req, res) {
 
   proc.on('error', (err) => {
     if (activeChatProc === proc) activeChatProc = null;
-    emit({ type: 'error', text: `Gagal menjalankan Gemini CLI: ${err.message}` });
+    const cleanMsg = stripAnsi(err.message);
+    emit({ type: 'error', text: `Gagal menjalankan Gemini CLI: ${cleanMsg}` });
     if (!res.writableEnded) res.end();
   });
 }
@@ -918,4 +1024,6 @@ module.exports = {
   resolveOAuthClientConfig,
   extractOAuthPairFromText,
   extractClosestOAuthPairFromText,
+  stripAnsi,
+  cleanStderr,
 };
