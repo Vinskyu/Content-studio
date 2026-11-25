@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -14,9 +15,56 @@ const PREFIX_DIR = process.env.PREFIX || '/usr';
 const SESSIONS_DIR = path.join(HOME_DIR, '.contentstudio', 'sessions');
 const STATE_FILE = path.join(HOME_DIR, '.contentstudio', 'state.json');
 
+// Konstanta URL & scope resmi google-gemini/gemini-cli; Client ID/Secret dibaca dinamis dari paket lokal
+const OAUTH_SCOPES = [
+  'https://www.googleapis.com/auth/cloud-platform',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+];
+const SIGN_IN_SUCCESS_URL = 'https://developers.google.com/gemini-code-assist/auth_success_gemini';
+const SIGN_IN_FAILURE_URL = 'https://developers.google.com/gemini-code-assist/auth_failure_gemini';
+
+function resolveOAuthClientConfig() {
+  const roots = [
+    path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli', 'node_modules', '@google', 'gemini-cli-core'),
+    path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli'),
+  ];
+  const queue = [];
+  for (const r of roots) {
+    if (fs.existsSync(r)) queue.push(r);
+  }
+  const visited = new Set();
+  while (queue.length > 0) {
+    const dir = queue.shift();
+    if (visited.has(dir)) continue;
+    visited.add(dir);
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
+    for (const ent of entries) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (ent.name === 'dist' || ent.name === 'bundle' || ent.name === 'src' || ent.name === 'code_assist' || ent.name === 'node_modules' || ent.name === '@google' || ent.name === 'gemini-cli-core') {
+          queue.push(full);
+        }
+      } else if (ent.isFile() && (ent.name === 'oauth2.js' || ent.name.endsWith('.js') || ent.name.endsWith('.mjs'))) {
+        if (ent.name !== 'oauth2.js' && !dir.endsWith('bundle') && !dir.endsWith('dist')) continue;
+        try {
+          const txt = fs.readFileSync(full, 'utf8');
+          const idMatch = txt.match(/['"]([0-9]+-[a-zA-Z0-9_]+\.apps\.googleusercontent\.com)['"]/);
+          const secMatch = txt.match(/['"](GOCSPX-[a-zA-Z0-9_-]+)['"]/);
+          if (idMatch && secMatch) {
+            return { clientId: idMatch[1], clientSecret: secMatch[1] };
+          }
+        } catch (_) {}
+      }
+    }
+  }
+  return null;
+}
+
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
-let activeAuthProc = null;
+let activeOAuthServer = null;
 let activeChatProc = null;
 let oauthSucceeded = false;
 
@@ -42,19 +90,34 @@ function isGeminiInstalled() {
   return fs.existsSync(binPath) || fs.existsSync(modPath);
 }
 
+function ensureGeminiSettings() {
+  const geminiDir = path.join(HOME_DIR, '.gemini');
+  const settingsPath = path.join(geminiDir, 'settings.json');
+  fs.mkdirSync(geminiDir, { recursive: true });
+  let cfg = {};
+  try {
+    if (fs.existsSync(settingsPath)) {
+      cfg = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) || {};
+    }
+  } catch (_) {}
+  if (!cfg.security || typeof cfg.security !== 'object') cfg.security = {};
+  if (!cfg.security.auth || typeof cfg.security.auth !== 'object') cfg.security.auth = {};
+  if (cfg.security.auth.selectedType !== 'oauth-personal') {
+    cfg.security.auth.selectedType = 'oauth-personal';
+    fs.writeFileSync(settingsPath, JSON.stringify(cfg, null, 2));
+  }
+}
+
 function isLoggedIn() {
   if (oauthSucceeded) return true;
   const geminiDir = path.join(HOME_DIR, '.gemini');
   const oauthCreds = path.join(geminiDir, 'oauth_creds.json');
-  const googleAccounts = path.join(geminiDir, 'google_accounts.json');
   try {
     if (fs.existsSync(oauthCreds)) {
-      const raw = fs.readFileSync(oauthCreds, 'utf8').trim();
-      if (raw.length > 10 && raw !== '{}') return true;
-    }
-    if (fs.existsSync(googleAccounts)) {
-      const acc = JSON.parse(fs.readFileSync(googleAccounts, 'utf8'));
-      if (acc && acc.active) return true;
+      const creds = JSON.parse(fs.readFileSync(oauthCreds, 'utf8'));
+      if (creds && (creds.refresh_token || creds.access_token)) {
+        return true;
+      }
     }
   } catch (_) {}
   return false;
@@ -203,85 +266,198 @@ function readJsonBody(req) {
   });
 }
 
+function httpsRequest(urlStr, method, headers, bodyStr) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const req = https.request(
+      {
+        hostname: u.hostname,
+        port: u.port || 443,
+        path: u.pathname + u.search,
+        method: method || 'GET',
+        headers: headers || {},
+        timeout: 20000,
+      },
+      (resp) => {
+        let data = '';
+        resp.on('data', (chunk) => {
+          data += chunk.toString('utf8');
+        });
+        resp.on('end', () => {
+          resolve({ statusCode: resp.statusCode || 0, body: data });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy(new Error('HTTPS request timeout'));
+    });
+    if (bodyStr) {
+      req.write(bodyStr);
+    }
+    req.end();
+  });
+}
+
 function handleAuthStart(res) {
   if (isLoggedIn()) {
+    ensureGeminiSettings();
     return sendJson(res, 200, { status: 'already_logged_in', logged_in: true, auth_url: '' });
   }
 
-  if (activeAuthProc) {
-    try { activeAuthProc.kill('SIGTERM'); } catch (_) {}
-    activeAuthProc = null;
+  const oauthCfg = resolveOAuthClientConfig();
+  if (!oauthCfg) {
+    return sendJson(res, 500, {
+      status: 'error',
+      error: 'Konfigurasi OAuth tidak ditemukan di paket @google/gemini-cli lokal.',
+    });
   }
 
-  const geminiEntry = resolveGeminiEntry();
-  if (!geminiEntry) {
-    return sendJson(res, 500, { status: 'error', error: 'Entrypoint @google/gemini-cli tidak ditemukan.' });
-  }
-  const childEnv = {
-    ...process.env,
-    NO_BROWSER: 'true',
-    BROWSER: 'echo',
-    TERM: 'dumb',
-  };
-
-  let responded = false;
-  let outputBuffer = '';
-
-  const proc = spawn(process.execPath, [geminiEntry, '-p', 'hello'], { env: childEnv, cwd: HOME_DIR });
-  activeAuthProc = proc;
-
-  const timer = setTimeout(() => {
-    if (!responded) {
-      responded = true;
-      sendJson(res, 504, {
-        status: 'error',
-        error: 'Timeout menunggu URL OAuth Google dari Gemini CLI.',
-        raw: outputBuffer.slice(-400),
-      });
-    }
-  }, 20000);
-
-  function checkChunk(chunk) {
-    const str = chunk.toString('utf8');
-    outputBuffer += str;
-    const match = outputBuffer.match(/(https:\/\/accounts\.google\.com\/[^\s"'<>]+)/);
-    if (match && !responded) {
-      responded = true;
-      clearTimeout(timer);
-      sendJson(res, 200, { status: 'ok', auth_url: match[1] });
-    }
+  if (activeOAuthServer) {
+    try { activeOAuthServer.close(); } catch (_) {}
+    activeOAuthServer = null;
   }
 
-  proc.stdout.on('data', checkChunk);
-  proc.stderr.on('data', checkChunk);
+  const state = crypto.randomBytes(32).toString('hex');
+  let redirectUri = '';
 
-  proc.on('exit', (code) => {
-    clearTimeout(timer);
-    if (activeAuthProc === proc) activeAuthProc = null;
-    if (code === 0) {
-      oauthSucceeded = true;
-    }
-    if (!responded) {
-      responded = true;
-      if (isLoggedIn()) {
-        sendJson(res, 200, { status: 'already_logged_in', logged_in: true, auth_url: '' });
-      } else {
-        sendJson(res, 500, {
-          status: 'error',
-          error: `Gemini CLI berhenti dengan kode ${code}`,
-          raw: outputBuffer.slice(-400),
-        });
+  const oauthServer = http.createServer(async (req, cbRes) => {
+    try {
+      const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
+      if (reqUrl.pathname !== '/oauth2callback') {
+        cbRes.writeHead(404);
+        cbRes.end('Not found');
+        return;
       }
+
+      const qs = reqUrl.searchParams;
+      if (qs.get('error')) {
+        cbRes.writeHead(301, { Location: SIGN_IN_FAILURE_URL });
+        cbRes.end();
+        return;
+      }
+
+      const code = qs.get('code');
+      const retState = qs.get('state');
+      if (!code || retState !== state) {
+        cbRes.writeHead(301, { Location: SIGN_IN_FAILURE_URL });
+        cbRes.end();
+        return;
+      }
+
+      // Tukar authorization code menjadi token OAuth2 resmi Gemini CLI
+      const formBody = new URLSearchParams({
+        code,
+        client_id: oauthCfg.clientId,
+        client_secret: oauthCfg.clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }).toString();
+
+      const tokResp = await httpsRequest(
+        'https://oauth2.googleapis.com/token',
+        'POST',
+        {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': String(Buffer.byteLength(formBody)),
+        },
+        formBody,
+      );
+
+      if (tokResp.statusCode < 200 || tokResp.statusCode >= 300) {
+        console.error('[studio-bridge] Token exchange failed:', tokResp.statusCode, tokResp.body);
+        cbRes.writeHead(301, { Location: SIGN_IN_FAILURE_URL });
+        cbRes.end();
+        return;
+      }
+
+      const tokData = JSON.parse(tokResp.body);
+      const expiryDate = Date.now() + (Number(tokData.expires_in) || 3600) * 1000;
+      const credsToSave = {
+        access_token: tokData.access_token,
+        refresh_token: tokData.refresh_token,
+        scope: tokData.scope || OAUTH_SCOPES.join(' '),
+        token_type: tokData.token_type || 'Bearer',
+        id_token: tokData.id_token,
+        expiry_date: expiryDate,
+      };
+
+      const geminiDir = path.join(HOME_DIR, '.gemini');
+      fs.mkdirSync(geminiDir, { recursive: true });
+      const credsPath = path.join(geminiDir, 'oauth_creds.json');
+      fs.writeFileSync(credsPath, JSON.stringify(credsToSave, null, 2), { mode: 0o600 });
+
+      // Ambil email user untuk google_accounts.json
+      try {
+        const uiResp = await httpsRequest(
+          'https://www.googleapis.com/oauth2/v2/userinfo',
+          'GET',
+          { Authorization: `Bearer ${tokData.access_token}` },
+          null,
+        );
+        if (uiResp.statusCode >= 200 && uiResp.statusCode < 300) {
+          const uiData = JSON.parse(uiResp.body);
+          if (uiData && uiData.email) {
+            const accPath = path.join(geminiDir, 'google_accounts.json');
+            fs.writeFileSync(
+              accPath,
+              JSON.stringify({ active: uiData.email, old: [] }, null, 2),
+            );
+          }
+        }
+      } catch (_) {}
+
+      ensureGeminiSettings();
+      oauthSucceeded = true;
+
+      cbRes.writeHead(301, { Location: SIGN_IN_SUCCESS_URL });
+      cbRes.end();
+    } catch (e) {
+      console.error('[studio-bridge] OAuth callback error:', e.message);
+      try {
+        cbRes.writeHead(301, { Location: SIGN_IN_FAILURE_URL });
+        cbRes.end();
+      } catch (_) {}
+    } finally {
+      setTimeout(() => {
+        try { oauthServer.close(); } catch (_) {}
+        if (activeOAuthServer === oauthServer) activeOAuthServer = null;
+      }, 500);
     }
   });
 
-  proc.on('error', (err) => {
-    clearTimeout(timer);
-    if (activeAuthProc === proc) activeAuthProc = null;
-    if (!responded) {
-      responded = true;
-      sendJson(res, 500, { status: 'error', error: err.message });
+  oauthServer.on('error', (err) => {
+    if (activeOAuthServer === oauthServer) activeOAuthServer = null;
+    if (!res.headersSent) {
+      sendJson(res, 500, { status: 'error', error: `Gagal membuka server callback OAuth: ${err.message}` });
     }
+  });
+
+  oauthServer.listen(0, '127.0.0.1', () => {
+    activeOAuthServer = oauthServer;
+    const addr = oauthServer.address();
+    const cbPort = addr && typeof addr === 'object' ? addr.port : 0;
+    redirectUri = `http://127.0.0.1:${cbPort}/oauth2callback`;
+
+    const authParams = new URLSearchParams({
+      client_id: oauthCfg.clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: OAUTH_SCOPES.join(' '),
+      access_type: 'offline',
+      prompt: 'consent',
+      state,
+    });
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${authParams.toString()}`;
+    sendJson(res, 200, { status: 'ok', auth_url: authUrl });
+
+    // Timeout 5 menit agar server callback tidak menggantung selamanya jika user batal
+    setTimeout(() => {
+      if (activeOAuthServer === oauthServer) {
+        try { oauthServer.close(); } catch (_) {}
+        activeOAuthServer = null;
+      }
+    }, 5 * 60 * 1000).unref();
   });
 }
 
@@ -346,14 +522,18 @@ async function handleChat(req, res) {
     activeChatProc = null;
   }
 
+  ensureGeminiSettings();
+
   const geminiEntry = resolveGeminiEntry();
   if (!geminiEntry) {
     emit({ type: 'error', text: 'Entrypoint @google/gemini-cli tidak ditemukan.' });
     if (!res.writableEnded) res.end();
     return;
   }
+  const chatEnv = { ...process.env, TERM: 'dumb', GEMINI_FORCE_ENCRYPTED_FILE: 'false' };
+  delete chatEnv.NO_BROWSER;
   const proc = spawn(process.execPath, [geminiEntry, '-p', promptToSend], {
-    env: { ...process.env, NO_BROWSER: 'true', TERM: 'dumb' },
+    env: chatEnv,
     cwd: HOME_DIR,
   });
   activeChatProc = proc;
