@@ -20,7 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -33,12 +35,14 @@ fun SetupScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val stage by LinuxRuntimeManager.setupStage.collectAsState()
     val message by LinuxRuntimeManager.setupMessage.collectAsState()
     val logs by LinuxRuntimeManager.logs.collectAsState()
     val setupError by LinuxRuntimeManager.setupError.collectAsState()
 
     var showLogs by remember { mutableStateOf(false) }
+    var copiedLog by remember { mutableStateOf(false) }
     val logListState = rememberLazyListState()
 
     LaunchedEffect(logs.size) {
@@ -163,12 +167,27 @@ fun SetupScreen(
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
-                Text(
-                    text = if (showLogs) "[TUTUP]" else "[LIHAT]",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = TextPrimary
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (copiedLog) "[TERSALIN]" else "[SALIN]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextPrimary,
+                        modifier = Modifier.clickable {
+                            clipboardManager.setText(AnnotatedString(logs.joinToString("\n")))
+                            copiedLog = true
+                        }
+                    )
+                    Text(
+                        text = if (showLogs) "[TUTUP]" else "[LIHAT]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextPrimary
+                    )
+                }
             }
 
             AnimatedVisibility(visible = showLogs) {

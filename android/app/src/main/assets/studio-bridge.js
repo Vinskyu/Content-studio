@@ -60,22 +60,44 @@ function isLoggedIn() {
   return false;
 }
 
-function getGeminiCommand(args) {
+function resolveGeminiEntry() {
+  const pkgDir = path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli');
+  const pkgJsonPath = path.join(pkgDir, 'package.json');
+  try {
+    if (fs.existsSync(pkgJsonPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      let relBin = null;
+      if (typeof pkg.bin === 'string') {
+        relBin = pkg.bin;
+      } else if (pkg.bin && typeof pkg.bin === 'object') {
+        relBin = pkg.bin.gemini || Object.values(pkg.bin)[0];
+      }
+      if (relBin) {
+        const resolved = path.resolve(pkgDir, relBin);
+        if (fs.existsSync(resolved)) return resolved;
+      }
+    }
+  } catch (_) {}
+
   const binPath = path.join(PREFIX_DIR, 'bin', 'gemini');
-  if (fs.existsSync(binPath)) {
-    return { cmd: binPath, args };
-  }
+  try {
+    if (fs.existsSync(binPath)) {
+      const real = fs.realpathSync(binPath);
+      if (real.endsWith('.js') || real.endsWith('.mjs')) {
+        return real;
+      }
+    }
+  } catch (_) {}
+
   const entryCandidates = [
-    path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli', 'dist', 'index.js'),
-    path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js'),
-    path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli', 'index.js'),
+    path.join(pkgDir, 'dist', 'index.js'),
+    path.join(pkgDir, 'bundle', 'gemini.js'),
+    path.join(pkgDir, 'index.js'),
   ];
   for (const entry of entryCandidates) {
-    if (fs.existsSync(entry)) {
-      return { cmd: path.join(PREFIX_DIR, 'bin', 'node'), args: [entry, ...args] };
-    }
+    if (fs.existsSync(entry)) return entry;
   }
-  return { cmd: 'gemini', args };
+  return null;
 }
 
 function listSessions() {
@@ -191,7 +213,10 @@ function handleAuthStart(res) {
     activeAuthProc = null;
   }
 
-  const { cmd, args } = getGeminiCommand(['-p', 'hello']);
+  const geminiEntry = resolveGeminiEntry();
+  if (!geminiEntry) {
+    return sendJson(res, 500, { status: 'error', error: 'Entrypoint @google/gemini-cli tidak ditemukan.' });
+  }
   const childEnv = {
     ...process.env,
     NO_BROWSER: 'true',
@@ -202,7 +227,7 @@ function handleAuthStart(res) {
   let responded = false;
   let outputBuffer = '';
 
-  const proc = spawn(cmd, args, { env: childEnv, cwd: HOME_DIR });
+  const proc = spawn(process.execPath, [geminiEntry, '-p', 'hello'], { env: childEnv, cwd: HOME_DIR });
   activeAuthProc = proc;
 
   const timer = setTimeout(() => {
@@ -321,8 +346,13 @@ async function handleChat(req, res) {
     activeChatProc = null;
   }
 
-  const { cmd, args } = getGeminiCommand(['-p', promptToSend]);
-  const proc = spawn(cmd, args, {
+  const geminiEntry = resolveGeminiEntry();
+  if (!geminiEntry) {
+    emit({ type: 'error', text: 'Entrypoint @google/gemini-cli tidak ditemukan.' });
+    if (!res.writableEnded) res.end();
+    return;
+  }
+  const proc = spawn(process.execPath, [geminiEntry, '-p', promptToSend], {
     env: { ...process.env, NO_BROWSER: 'true', TERM: 'dumb' },
     cwd: HOME_DIR,
   });

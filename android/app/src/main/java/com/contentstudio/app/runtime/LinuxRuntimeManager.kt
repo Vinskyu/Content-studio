@@ -109,6 +109,7 @@ object LinuxRuntimeManager {
             "GIT_CONFIG_NOSYSTEM" to "1",
             "OPENSSL_CONF" to opensslConf,
             "NODE_OPTIONS" to "${opensslOpt}--unhandled-rejections=warn$bionicOpt".trim(),
+            "npm_config_prefix" to paths.prefixDir,
             "NO_BROWSER" to "true",
             "CONTAINER" to "1",
         )
@@ -139,6 +140,84 @@ object LinuxRuntimeManager {
         return proc.waitFor()
     }
 
+    private fun runBinary(
+        context: Context,
+        executable: String,
+        args: List<String>,
+    ): Int {
+        val paths = BootstrapInstaller.getPaths(context)
+        val env = buildEnvironment(paths)
+        val cmdList = mutableListOf(executable)
+        cmdList.addAll(args)
+        val pb = ProcessBuilder(cmdList)
+        pb.environment().clear()
+        pb.environment().putAll(env)
+        pb.directory(File(paths.homeDir))
+        pb.redirectErrorStream(true)
+
+        val proc = pb.start()
+        val reader = BufferedReader(InputStreamReader(proc.inputStream))
+        var line = reader.readLine()
+        while (line != null) {
+            appendLog(line)
+            line = reader.readLine()
+        }
+        return proc.waitFor()
+    }
+
+    private fun verifyNodeExec(context: Context): Boolean {
+        val paths = BootstrapInstaller.getPaths(context)
+        val nodeFile = File(paths.prefixDir, "bin/node")
+        if (!nodeFile.exists()) return false
+        return try {
+            Os.chmod(nodeFile.absolutePath, 0b111_000_000)
+            runBinary(context, nodeFile.absolutePath, listOf("-v")) == 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun patchShebangs(binDir: File, prefixDir: String) {
+        if (!binDir.isDirectory) return
+        val termuxBin = "/data/data/com.termux/files/usr/bin/"
+        val newBin = "$prefixDir/bin/"
+        binDir.listFiles()?.forEach { file ->
+            if (!file.isFile) return@forEach
+            try {
+                val bytes = file.readBytes()
+                if (bytes.size >= 4 &&
+                    bytes[0] == 0x7f.toByte() &&
+                    bytes[1] == 'E'.code.toByte() &&
+                    bytes[2] == 'L'.code.toByte() &&
+                    bytes[3] == 'F'.code.toByte()
+                ) {
+                    return@forEach
+                }
+                if (bytes.size >= 2 && bytes[0] == '#'.code.toByte() && bytes[1] == '!'.code.toByte()) {
+                    val content = String(bytes, Charsets.UTF_8)
+                    val firstNewline = content.indexOf('\n')
+                    val firstLine = if (firstNewline >= 0) content.substring(0, firstNewline) else content
+                    val rest = if (firstNewline >= 0) content.substring(firstNewline) else ""
+                    var patchedLine = firstLine
+                    if (patchedLine.contains(termuxBin)) {
+                        patchedLine = patchedLine.replace(termuxBin, newBin)
+                    }
+                    if (patchedLine.startsWith("#!/usr/bin/env ")) {
+                        patchedLine = patchedLine.replaceFirst("#!/usr/bin/env ", "#!$prefixDir/bin/env ")
+                    } else if (patchedLine.startsWith("#!/usr/bin/")) {
+                        patchedLine = patchedLine.replaceFirst("#!/usr/bin/", "#!$prefixDir/bin/")
+                    }
+                    if (patchedLine != firstLine) {
+                        file.writeText(patchedLine + rest, Charsets.UTF_8)
+                    }
+                    Os.chmod(file.absolutePath, 0b111_000_000)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Gagal patch shebang ${file.name}: ${e.message}")
+            }
+        }
+    }
+
     fun startSetup(context: Context, forceRetry: Boolean = false) {
         if (setupInProgress) return
         if (_isReady.value && !forceRetry) return
@@ -166,19 +245,24 @@ object LinuxRuntimeManager {
                 copyAssetToHome(context, "proxy.js", "$home/proxy.js")
                 copyAssetToHome(context, "studio-bridge.js", "$home/studio-bridge.js")
 
-                // TAHAP 2: Pasang Node.js + Python + CA-Certificates
+                // TAHAP 2: Pasang & verifikasi Node.js + npm-cli.js + Python + CA-Certificates
                 _setupStage.value = 2
-                val nodeExists = File(prefix, "bin/node").exists()
+                val npmCliFile = File(prefix, "lib/node_modules/npm/bin/npm-cli.js")
+                val npmBinFile = File(prefix, "bin/npm")
                 val pythonExists = File(prefix, "bin/python3").exists() || File(prefix, "bin/python").exists()
-                if (!nodeExists || !pythonExists) {
-                    _setupMessage.value = "Mengunduh & memasang Node.js dan Python..."
-                    appendLog("[2/4] Memasang nodejs-lts, python, dan ca-certificates...")
+                val nodeExecOk = verifyNodeExec(context)
+                val npmReady = npmCliFile.exists() || npmBinFile.exists()
+
+                if (!nodeExecOk || !npmReady || !pythonExists) {
+                    _setupMessage.value = "Mengunduh & memasang Node.js, npm, dan Python..."
+                    appendLog("[2/4] Verifikasi awal: nodeOk=$nodeExecOk, npmReady=$npmReady, python=$pythonExists. Memasang paket...")
                     val termuxPrefix = "/data/data/com.termux/files/usr"
                     val installPkgsCmd = """
                         cd "$prefix/tmp" &&
                         rm -rf _stage *.deb 2>/dev/null || true &&
                         apt-get update --allow-insecure-repositories 2>&1;
                         apt-get download --allow-unauthenticated c-ares libicu libsqlite openssl ca-certificates nodejs-lts python libexpat gdbm libffi zlib readline ncurses bzip2 xz-utils 2>&1 &&
+                        (apt-get download --allow-unauthenticated npm 2>&1 || true) &&
                         mkdir -p _stage &&
                         for deb in *.deb; do
                             [ -f "${'$'}deb" ] && dpkg-deb -x "${'$'}deb" _stage/ 2>&1
@@ -191,22 +275,30 @@ object LinuxRuntimeManager {
                         rm -rf _stage *.deb 2>/dev/null || true
                     """.trimIndent()
                     val code = runInPrefix(context, installPkgsCmd)
-                    if (code != 0 || !File(prefix, "bin/node").exists()) {
-                        throw RuntimeException("Gagal memasang Node.js / Python (exit=$code). Periksa koneksi internet.")
+                    patchShebangs(File(prefix, "bin"), prefix)
+                    if (code != 0 || !verifyNodeExec(context) || !npmCliFile.exists()) {
+                        throw RuntimeException("Gagal verifikasi Node.js / npm-cli.js (exit=$code). Periksa koneksi internet.")
                     }
                 } else {
-                    appendLog("[2/4] Node.js dan Python sudah terpasang.")
+                    appendLog("[2/4] Node.js, npm-cli.js, dan Python terverifikasi.")
                 }
 
                 ensureNodeAndNpmWrappers(paths)
+                patchShebangs(File(prefix, "bin"), prefix)
 
-                // TAHAP 3: Pasang @google/gemini-cli secara global via npm
+                // TAHAP 3: Pasang @google/gemini-cli secara global langsung lewat binary node + npm-cli.js
                 _setupStage.value = 3
                 val geminiModDir = File(prefix, "lib/node_modules/@google/gemini-cli")
                 if (!geminiModDir.exists()) {
                     _setupMessage.value = "Memasang @google/gemini-cli..."
-                    appendLog("[3/4] Menjalankan npm install -g @google/gemini-cli...")
-                    val npmCode = runInPrefix(context, "npm install -g @google/gemini-cli --no-audit --no-fund 2>&1")
+                    val nodeBinPath = "$prefix/bin/node"
+                    val npmCliPath = "$prefix/lib/node_modules/npm/bin/npm-cli.js"
+                    appendLog("[3/4] Menjalankan $nodeBinPath $npmCliPath install -g @google/gemini-cli --prefix $prefix")
+                    val npmCode = runBinary(
+                        context,
+                        nodeBinPath,
+                        listOf(npmCliPath, "install", "-g", "@google/gemini-cli", "--prefix", prefix, "--no-audit", "--no-fund")
+                    )
                     if (npmCode != 0 && !geminiModDir.exists()) {
                         throw RuntimeException("Gagal memasang @google/gemini-cli (exit=$npmCode)")
                     }
@@ -214,6 +306,8 @@ object LinuxRuntimeManager {
                     appendLog("[3/4] @google/gemini-cli sudah terpasang.")
                 }
                 ensureGeminiWrapper(paths)
+                patchShebangs(File(prefix, "bin"), prefix)
+                appendLog("[3/4] Entrypoint gemini: ${File(prefix, "bin/gemini").absolutePath}")
 
                 // TAHAP 4: Jalankan proxy.js & studio-bridge.js di 127.0.0.1:18950
                 _setupStage.value = 4
