@@ -57,10 +57,10 @@ data class AssetItem(
 )
 
 data class SkillItem(
+    val slug: String,
     val name: String,
-    val version: String,
     val description: String,
-    val isCustom: Boolean
+    val isDefault: Boolean
 )
 
 data class McpServerItem(
@@ -85,6 +85,7 @@ fun ProjectsScreen(
 
     val activeWorkspace by AgentService.currentWorkspace.collectAsState()
 
+    var workspaceError by remember { mutableStateOf<String?>(null) }
     var showCreateAccountDialog by remember { mutableStateOf(false) }
     var dnaEditorWs by remember { mutableStateOf<String?>(null) }
     var deleteWorkspaceTarget by remember { mutableStateOf<String?>(null) }
@@ -105,7 +106,20 @@ fun ProjectsScreen(
         scope.launch(Dispatchers.IO) {
             try {
                 val res = PythonHost.listWorkspaces(context)
-                val wsArray = res.optJSONArray("workspaces") ?: return@launch
+                if (res.optString("status") == "error") {
+                    val err = res.optString("message", "Gagal membaca daftar akun.")
+                    withContext(Dispatchers.Main) {
+                        workspaceError = err
+                    }
+                    return@launch
+                }
+                val wsArray = res.optJSONArray("workspaces")
+                if (wsArray == null) {
+                    withContext(Dispatchers.Main) {
+                        workspaceError = "Format JSON workspaces tidak valid."
+                    }
+                    return@launch
+                }
                 val list = mutableListOf<WorkspaceItem>()
                 for (i in 0 until wsArray.length()) {
                     val obj = wsArray.getJSONObject(i)
@@ -119,10 +133,14 @@ fun ProjectsScreen(
                     )
                 }
                 withContext(Dispatchers.Main) {
+                    workspaceError = null
                     workspaces.clear()
                     workspaces.addAll(list)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    workspaceError = "Gagal memuat akun: ${e.message ?: "Error tidak diketahui"}"
+                }
             }
         }
     }
@@ -167,10 +185,10 @@ fun ProjectsScreen(
                     val obj = arr.getJSONObject(i)
                     list.add(
                         SkillItem(
+                            slug = obj.optString("slug", obj.optString("name")),
                             name = obj.optString("name"),
-                            version = obj.optString("version", "1.0.0"),
                             description = obj.optString("description", "-"),
-                            isCustom = obj.optBoolean("is_custom", false)
+                            isDefault = obj.optBoolean("is_default", false)
                         )
                     )
                 }
@@ -329,6 +347,24 @@ fun ProjectsScreen(
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    if (workspaceError != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(CardHighlight)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = "[ERR] $workspaceError",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = TextPrimary
                             )
                         }
                     }
@@ -541,7 +577,7 @@ fun ProjectsScreen(
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                             ) {
                                 Text(
-                                    text = "INSTAL",
+                                    text = "INSTAL SKILL",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
@@ -563,7 +599,7 @@ fun ProjectsScreen(
                                 skill = sk,
                                 onDelete = {
                                     scope.launch(Dispatchers.IO) {
-                                        PythonHost.deleteSkill(context, sk.name)
+                                        PythonHost.deleteSkill(context, sk.slug)
                                         refreshSkills()
                                     }
                                 }
@@ -603,7 +639,7 @@ fun ProjectsScreen(
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Text(
-                                    text = if (showAddMcpForm) "[TUTUP]" else "[+ TAMBAH]",
+                                    text = if (showAddMcpForm) "[TUTUP]" else "[+ SERVER MCP]",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     color = TextPrimary
@@ -1151,7 +1187,7 @@ fun SkillCard(
                     color = TextPrimary
                 )
                 Text(
-                    text = "v${skill.version}",
+                    text = if (skill.isDefault) "[DEFAULT]" else "[${skill.slug}]",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
                     color = TextSecondary
@@ -1165,7 +1201,7 @@ fun SkillCard(
             )
         }
 
-        if (skill.isCustom) {
+        if (!skill.isDefault) {
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(4.dp))

@@ -1,8 +1,12 @@
 package com.contentstudio.app.ui.screens
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -27,6 +31,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.contentstudio.app.service.ActionCardItem
 import com.contentstudio.app.service.AgentService
@@ -35,6 +40,7 @@ import com.contentstudio.app.service.MessageBubble
 import com.contentstudio.app.ui.theme.*
 import com.contentstudio.app.data.PythonHost
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -54,6 +60,106 @@ fun AgentScreen(
 
     var inputText by remember { mutableStateOf("") }
     val attachedFiles = remember { mutableStateListOf<String>() }
+
+    // VO Recorder state
+    var isRecording by remember { mutableStateOf(false) }
+    var recordSeconds by remember { mutableStateOf(0) }
+    var activeVoPath by remember { mutableStateOf<String?>(null) }
+    var mediaRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
+    var voError by remember { mutableStateOf<String?>(null) }
+
+    fun startVoRecording() {
+        try {
+            voError = null
+            val sdVoDir = File("/sdcard/ContentStudio/vo")
+            val voDir = if (sdVoDir.parentFile?.canWrite() == true) {
+                sdVoDir
+            } else {
+                File(context.filesDir, "ContentStudio/.cache/vo")
+            }
+            if (!voDir.exists()) voDir.mkdirs()
+
+            val outFile = File(voDir, "vo_${System.currentTimeMillis()}.m4a")
+            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(context)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+            recorder.apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioEncodingBitRate(128000)
+                setAudioSamplingRate(44100)
+                setOutputFile(outFile.absolutePath)
+                prepare()
+                start()
+            }
+            mediaRecorder = recorder
+            activeVoPath = outFile.absolutePath
+            recordSeconds = 0
+            isRecording = true
+        } catch (e: Exception) {
+            voError = "Gagal rekam VO: ${e.message ?: "Error mikrofon"}"
+            isRecording = false
+            try {
+                mediaRecorder?.release()
+            } catch (_: Exception) {}
+            mediaRecorder = null
+        }
+    }
+
+    fun stopVoRecording() {
+        try {
+            mediaRecorder?.stop()
+        } catch (_: Exception) {
+        } finally {
+            try {
+                mediaRecorder?.release()
+            } catch (_: Exception) {}
+            mediaRecorder = null
+            isRecording = false
+            val savedPath = activeVoPath
+            activeVoPath = null
+            if (savedPath != null && File(savedPath).exists() && File(savedPath).length() > 0L) {
+                if (!attachedFiles.contains(savedPath)) {
+                    attachedFiles.add(savedPath)
+                }
+            }
+        }
+    }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted: Boolean ->
+        if (granted) {
+            startVoRecording()
+        } else {
+            voError = "Izin mikrofon (RECORD_AUDIO) ditolak."
+        }
+    }
+
+    LaunchedEffect(isRecording) {
+        while (isRecording) {
+            delay(1000L)
+            recordSeconds += 1
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (isRecording) {
+                try {
+                    mediaRecorder?.stop()
+                } catch (_: Exception) {}
+            }
+            try {
+                mediaRecorder?.release()
+            } catch (_: Exception) {}
+            mediaRecorder = null
+        }
+    }
 
     // File picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -159,7 +265,7 @@ fun AgentScreen(
             }
         }
 
-        // COMPOSER INPUT
+        // COMPOSER INPUT + VO RECORDER
         AgentComposer(
             text = inputText,
             onTextChange = { inputText = it },
@@ -167,6 +273,24 @@ fun AgentScreen(
             onRemoveFile = { attachedFiles.remove(it) },
             onAddFileClick = {
                 filePickerLauncher.launch(arrayOf("video/*", "audio/*", "image/*"))
+            },
+            isRecording = isRecording,
+            recordSeconds = recordSeconds,
+            voError = voError,
+            onVoToggleClick = {
+                if (isRecording) {
+                    stopVoRecording()
+                } else {
+                    val hasPerm = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (hasPerm) {
+                        startVoRecording()
+                    } else {
+                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
             },
             isBusy = isBusy,
             onSend = {
@@ -621,6 +745,10 @@ fun AgentComposer(
     attachedFiles: List<String>,
     onRemoveFile: (String) -> Unit,
     onAddFileClick: () -> Unit,
+    isRecording: Boolean,
+    recordSeconds: Int,
+    voError: String?,
+    onVoToggleClick: () -> Unit,
     isBusy: Boolean,
     onSend: () -> Unit
 ) {
@@ -632,6 +760,43 @@ fun AgentComposer(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        if (isRecording) {
+            val mins = recordSeconds / 60
+            val secs = recordSeconds % 60
+            val timerStr = String.format("%02d:%02d", mins, secs)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(CardHighlight)
+                    .border(1.dp, TextSecondary, RoundedCornerShape(4.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "REC $timerStr (Merekam VO...)",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "Tekan [STOP VO] untuk simpan",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = TextSecondary
+                )
+            }
+        } else if (voError != null) {
+            Text(
+                text = "[!] $voError",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = TextPrimary
+            )
+        }
+
         if (attachedFiles.isNotEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -668,7 +833,7 @@ fun AgentComposer(
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Button(
@@ -679,12 +844,30 @@ fun AgentComposer(
                     contentColor = TextPrimary
                 ),
                 border = ButtonDefaults.outlinedButtonBorder.copy(brush = SolidColor(BorderSubtle)),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = "[+FILE]",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Button(
+                onClick = onVoToggleClick,
+                shape = RoundedCornerShape(6.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isRecording) ActionSolidBg else CardHighlight,
+                    contentColor = if (isRecording) ActionSolidText else TextPrimary
+                ),
+                border = ButtonDefaults.outlinedButtonBorder.copy(brush = SolidColor(BorderSubtle)),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = if (isRecording) "[STOP VO]" else "[VO]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -695,13 +878,13 @@ fun AgentComposer(
                     .clip(RoundedCornerShape(6.dp))
                     .background(BgDark)
                     .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .padding(horizontal = 10.dp, vertical = 10.dp)
             ) {
                 if (text.isEmpty()) {
                     Text(
                         text = "Instruksi agen atau /help...",
                         fontFamily = FontFamily.SansSerif,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         color = TextSecondary
                     )
                 }
@@ -720,7 +903,7 @@ fun AgentComposer(
 
             Button(
                 onClick = onSend,
-                enabled = !isBusy && (text.isNotBlank() || attachedFiles.isNotEmpty()),
+                enabled = !isBusy && !isRecording && (text.isNotBlank() || attachedFiles.isNotEmpty()),
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = ActionSolidBg,
@@ -728,7 +911,7 @@ fun AgentComposer(
                     disabledContainerColor = CardHighlight,
                     disabledContentColor = TextSecondary
                 ),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = "KIRIM",
