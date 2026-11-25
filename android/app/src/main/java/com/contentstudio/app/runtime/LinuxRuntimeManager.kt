@@ -2,6 +2,7 @@ package com.contentstudio.app.runtime
 
 import android.content.Context
 import android.system.Os
+import android.system.OsConstants
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -185,13 +186,37 @@ object LinuxRuntimeManager {
         }
     }
 
+    private fun isValidJsScript(file: File): Boolean {
+        if (!file.exists() || !file.isFile) return false
+        return try {
+            val head = file.bufferedReader().use { reader ->
+                buildString {
+                    for (i in 0 until 3) {
+                        val line = reader.readLine() ?: break
+                        appendLine(line)
+                    }
+                }
+            }
+            // Tolak jika file JS pernah tertimpa wrapper shell sh/exec
+            !head.contains("/bin/sh") && !head.contains("exec \"")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun patchShebangs(binDir: File, prefixDir: String) {
         if (!binDir.isDirectory) return
         val termuxBin = "/data/data/com.termux/files/usr/bin/"
         val newBin = "$prefixDir/bin/"
         binDir.listFiles()?.forEach { file ->
-            if (!file.isFile) return@forEach
             try {
+                // Jangan pernah memodifikasi target file lewat symlink di bin/
+                val st = Os.lstat(file.absolutePath)
+                if (OsConstants.S_ISLNK(st.st_mode)) {
+                    return@forEach
+                }
+                if (!file.isFile) return@forEach
+
                 val bytes = file.readBytes()
                 if (bytes.size >= 4 &&
                     bytes[0] == 0x7f.toByte() &&
@@ -256,22 +281,21 @@ object LinuxRuntimeManager {
                 // TAHAP 2: Pasang & verifikasi libc++ terbaru + Node.js + npm-cli.js + Python + CA-Certificates
                 _setupStage.value = 2
                 val npmCliFile = File(prefix, "lib/node_modules/npm/bin/npm-cli.js")
-                val npmBinFile = File(prefix, "bin/npm")
                 val pythonExists = File(prefix, "bin/python3").exists() || File(prefix, "bin/python").exists()
                 val nodeExecOk = verifyNodeExec(context)
-                val npmReady = npmCliFile.exists() || npmBinFile.exists()
+                val npmValid = isValidJsScript(npmCliFile)
 
-                if (!nodeExecOk || !npmReady || !pythonExists) {
+                if (!nodeExecOk || !npmValid || !pythonExists) {
                     _setupMessage.value = "Mengunduh & memperbarui libc++, Node.js, dan Python..."
-                    appendLog("[2/4] Verifikasi awal: nodeOk=$nodeExecOk, npmReady=$npmReady, python=$pythonExists. Memasang paket (termasuk --reinstall libc++)...")
+                    appendLog("[2/4] Verifikasi awal: nodeOk=$nodeExecOk, npmValid=$npmValid, python=$pythonExists. Memasang paket...")
                     val termuxPrefix = "/data/data/com.termux/files/usr"
                     val installPkgsCmd = """
                         cd "$prefix/tmp" &&
                         rm -rf _stage *.deb "$prefix/var/cache/apt/archives/"*.deb 2>/dev/null || true &&
+                        rm -f "$prefix/bin/npm" "$prefix/bin/npx" 2>/dev/null || true &&
                         apt-get update --allow-insecure-repositories 2>&1;
-                        apt-get install -y --download-only --reinstall --allow-unauthenticated libc++ nodejs-lts npm python ca-certificates 2>&1 || true;
-                        apt-get download --allow-unauthenticated libc++ c-ares libicu libsqlite openssl ca-certificates nodejs-lts python libexpat gdbm libffi zlib readline ncurses bzip2 xz-utils 2>&1 || true;
-                        (apt-get download --allow-unauthenticated npm 2>&1 || true);
+                        apt-get install -y --no-install-recommends --download-only --reinstall --allow-unauthenticated libc++ nodejs-lts npm python ca-certificates 2>&1 || true;
+                        apt-get download --allow-unauthenticated libc++ c-ares libicu libsqlite openssl ca-certificates nodejs-lts npm python libexpat gdbm libffi zlib readline ncurses bzip2 xz-utils 2>&1 || true;
                         mkdir -p _stage &&
                         for deb in "$prefix/var/cache/apt/archives/"*.deb "$prefix/tmp/"*.deb; do
                             [ -f "${'$'}deb" ] && echo "Mengekstrak ${'$'}(basename "${'$'}deb")..." && dpkg-deb -x "${'$'}deb" _stage/ 2>&1
@@ -280,11 +304,13 @@ object LinuxRuntimeManager {
                             if [ -f "_stage$termuxPrefix/lib/libc++_shared.so" ]; then
                                 rm -f "$prefix/lib/libc++_shared.so" 2>/dev/null || true
                             fi &&
+                            rm -f "$prefix/bin/npm" "$prefix/bin/npx" 2>/dev/null || true &&
                             cp -af _stage$termuxPrefix/* "$prefix/" 2>&1
                         elif [ -d "_stage/usr" ]; then
                             if [ -f "_stage/usr/lib/libc++_shared.so" ]; then
                                 rm -f "$prefix/lib/libc++_shared.so" 2>/dev/null || true
                             fi &&
+                            rm -f "$prefix/bin/npm" "$prefix/bin/npx" 2>/dev/null || true &&
                             cp -af _stage/usr/* "$prefix/" 2>&1
                         fi &&
                         chmod 755 "$prefix/lib/libc++_shared.so" 2>/dev/null || true;
@@ -298,8 +324,8 @@ object LinuxRuntimeManager {
                     if (!verifyNodeExec(context)) {
                         throw RuntimeException("Gagal menjalankan binary node (cek detail log di bawah)")
                     }
-                    if (!npmCliFile.exists()) {
-                        throw RuntimeException("File npm-cli.js tidak ditemukan setelah ekstraksi paket (cek detail log di bawah)")
+                    if (!isValidJsScript(npmCliFile)) {
+                        throw RuntimeException("File npm-cli.js tidak valid atau hilang setelah ekstraksi (cek detail log di bawah)")
                     }
                 } else {
                     appendLog("[2/4] Node.js, npm-cli.js, dan Python terverifikasi.")
@@ -311,8 +337,10 @@ object LinuxRuntimeManager {
                 // TAHAP 3: Pasang @google/gemini-cli secara global langsung lewat binary node + npm-cli.js
                 _setupStage.value = 3
                 val geminiModDir = File(prefix, "lib/node_modules/@google/gemini-cli")
-                if (!geminiModDir.exists()) {
+                val existingGeminiEntry = resolveGeminiEntry(prefix)
+                if (!geminiModDir.exists() || existingGeminiEntry == null || !isValidJsScript(existingGeminiEntry)) {
                     _setupMessage.value = "Memasang @google/gemini-cli..."
+                    File(prefix, "bin/gemini").delete()
                     val nodeBinPath = "$prefix/bin/node"
                     val npmCliPath = "$prefix/lib/node_modules/npm/bin/npm-cli.js"
                     appendLog("[3/4] Menjalankan $nodeBinPath $npmCliPath install -g @google/gemini-cli --prefix $prefix")
@@ -329,7 +357,8 @@ object LinuxRuntimeManager {
                 }
                 ensureGeminiWrapper(paths)
                 patchShebangs(File(prefix, "bin"), prefix)
-                appendLog("[3/4] Entrypoint gemini: ${File(prefix, "bin/gemini").absolutePath}")
+                val resolvedEntry = resolveGeminiEntry(prefix)
+                appendLog("[3/4] Entrypoint gemini: ${resolvedEntry?.absolutePath ?: File(prefix, "bin/gemini").absolutePath}")
 
                 // TAHAP 4: Jalankan proxy.js & studio-bridge.js di 127.0.0.1:18950
                 _setupStage.value = 4
@@ -381,8 +410,10 @@ object LinuxRuntimeManager {
             try { Os.chmod(nodeBin.absolutePath, 0b111_000_000) } catch (_: Exception) {}
         }
         val npmCli = File(prefix, "lib/node_modules/npm/bin/npm-cli.js")
-        if (npmCli.exists()) {
+        if (isValidJsScript(npmCli)) {
             val npmWrapper = File(prefix, "bin/npm")
+            // Wajib unlink/delete symlink terlebih dahulu agar writeText tidak menimpa npm-cli.js!
+            try { npmWrapper.delete() } catch (_: Exception) {}
             npmWrapper.writeText(
                 """
                 #!$prefix/bin/sh
@@ -390,6 +421,18 @@ object LinuxRuntimeManager {
                 """.trimIndent() + "\n"
             )
             try { Os.chmod(npmWrapper.absolutePath, 0b111_000_000) } catch (_: Exception) {}
+        }
+        val npxCli = File(prefix, "lib/node_modules/npm/bin/npx-cli.js")
+        if (isValidJsScript(npxCli)) {
+            val npxWrapper = File(prefix, "bin/npx")
+            try { npxWrapper.delete() } catch (_: Exception) {}
+            npxWrapper.writeText(
+                """
+                #!$prefix/bin/sh
+                exec "$prefix/bin/node" "${npxCli.absolutePath}" "${'$'}@"
+                """.trimIndent() + "\n"
+            )
+            try { Os.chmod(npxWrapper.absolutePath, 0b111_000_000) } catch (_: Exception) {}
         }
         listOf("python3", "python").forEach { pyName ->
             val pyFile = File(prefix, "bin/$pyName")
@@ -399,15 +442,42 @@ object LinuxRuntimeManager {
         }
     }
 
+    private fun resolveGeminiEntry(prefix: String): File? {
+        val pkgDir = File(prefix, "lib/node_modules/@google/gemini-cli")
+        val pkgJson = File(pkgDir, "package.json")
+        if (pkgJson.exists()) {
+            try {
+                val obj = JSONObject(pkgJson.readText())
+                val binVal = obj.opt("bin")
+                val relPath = when (binVal) {
+                    is String -> binVal
+                    is JSONObject -> binVal.optString("gemini", "").ifBlank {
+                        val keys = binVal.keys()
+                        if (keys.hasNext()) binVal.optString(keys.next(), "") else ""
+                    }
+                    else -> ""
+                }
+                if (relPath.isNotBlank()) {
+                    val resolved = File(pkgDir, relPath).canonicalFile
+                    if (resolved.exists()) return resolved
+                }
+            } catch (_: Exception) {}
+        }
+        val candidates = listOf(
+            File(pkgDir, "dist/index.js"),
+            File(pkgDir, "bundle/gemini.js"),
+            File(pkgDir, "index.js"),
+        )
+        return candidates.firstOrNull { it.exists() }
+    }
+
     private fun ensureGeminiWrapper(paths: BootstrapInstaller.Paths) {
         val prefix = paths.prefixDir
-        val candidates = listOf(
-            File(prefix, "lib/node_modules/@google/gemini-cli/dist/index.js"),
-            File(prefix, "lib/node_modules/@google/gemini-cli/bundle/gemini.js"),
-            File(prefix, "lib/node_modules/@google/gemini-cli/index.js"),
-        )
-        val entry = candidates.firstOrNull { it.exists() } ?: return
+        val entry = resolveGeminiEntry(prefix) ?: return
+        if (!isValidJsScript(entry)) return
         val geminiBin = File(prefix, "bin/gemini")
+        // Wajib unlink/delete symlink terlebih dahulu agar writeText tidak menimpa file JS gemini!
+        try { geminiBin.delete() } catch (_: Exception) {}
         geminiBin.writeText(
             """
             #!$prefix/bin/sh
