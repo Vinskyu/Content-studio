@@ -36,11 +36,65 @@ function getCaCert() {
   return null;
 }
 
-function resolveOAuthClientConfig() {
-  const roots = [
-    path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli', 'node_modules', '@google', 'gemini-cli-core'),
-    path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli'),
-  ];
+function extractOAuthPairFromText(txt, filePath) {
+  if (!txt) return null;
+
+  // Prioritas 1: File mengandung OAUTH_CLIENT_ID dan OAUTH_CLIENT_SECRET eksplisit
+  if (txt.includes('OAUTH_CLIENT_ID') && txt.includes('OAUTH_CLIENT_SECRET')) {
+    const idMatch = txt.match(/OAUTH_CLIENT_ID\s*[:=]\s*['"]([^'"]+\.apps\.googleusercontent\.com)['"]/);
+    const secMatch = txt.match(/OAUTH_CLIENT_SECRET\s*[:=]\s*['"](GOCSPX-[^'"]+)['"]/);
+    if (idMatch && secMatch) {
+      const clientId = idMatch[1].trim();
+      const clientSecret = secMatch[1].trim();
+      if (clientId && clientSecret) {
+        return { clientId, clientSecret, sourceFile: filePath, priority: 1 };
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractClosestOAuthPairFromText(txt, filePath) {
+  if (!txt) return null;
+
+  // Prioritas 2: Fallback jika nama variabel di-minify, cari pasangan terdekat (< 2000 karakter) dalam file yang sama
+  const ids = [];
+  for (const m of txt.matchAll(/['"]([0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com)['"]/g)) {
+    ids.push({ val: m[1].trim(), idx: m.index });
+  }
+  const secs = [];
+  for (const m of txt.matchAll(/['"](GOCSPX-[A-Za-z0-9_-]+)['"]/g)) {
+    secs.push({ val: m[1].trim(), idx: m.index });
+  }
+  if (ids.length === 0 || secs.length === 0) return null;
+
+  let best = null;
+  let bestDist = 2000;
+  for (const idItem of ids) {
+    for (const secItem of secs) {
+      const dist = Math.abs(idItem.idx - secItem.idx);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = {
+          clientId: idItem.val,
+          clientSecret: secItem.val,
+          sourceFile: filePath,
+          priority: 2,
+        };
+      }
+    }
+  }
+  return best;
+}
+
+function resolveOAuthClientConfig(customRoots) {
+  const roots = Array.isArray(customRoots) && customRoots.length > 0
+    ? customRoots
+    : [
+        path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli', 'node_modules', '@google', 'gemini-cli-core'),
+        path.join(PREFIX_DIR, 'lib', 'node_modules', '@google', 'gemini-cli'),
+      ];
   const queue = [];
   for (const r of roots) {
     if (fs.existsSync(r)) queue.push(r);
@@ -60,9 +114,11 @@ function resolveOAuthClientConfig() {
     for (const ent of entries) {
       const full = path.join(dir, ent.name);
       if (ent.isDirectory()) {
-        if (ent.name === '.git' || ent.name === 'docs' || ent.name === 'test' || ent.name === 'tests') continue;
+        if (ent.name === '.git' || ent.name === 'docs' || ent.name === 'test' || ent.name === 'tests' || ent.name === '__tests__') continue;
         queue.push(full);
-      } else if (ent.isFile() && (ent.name.endsWith('.js') || ent.name.endsWith('.mjs') || ent.name.endsWith('.cjs'))) {
+      } else if (ent.isFile()) {
+        if (ent.name.endsWith('.map') || ent.name.endsWith('.d.ts') || ent.name.endsWith('.md')) continue;
+        if (!ent.name.endsWith('.js') && !ent.name.endsWith('.mjs') && !ent.name.endsWith('.cjs')) continue;
         if (ent.name === 'oauth2.js' || full.includes(`${path.sep}bundle${path.sep}`)) {
           candidates.unshift(full);
         } else {
@@ -72,17 +128,18 @@ function resolveOAuthClientConfig() {
     }
   }
 
+  let fallbackMatch = null;
   for (const filePath of candidates) {
     try {
       const txt = fs.readFileSync(filePath, 'utf8');
-      const idMatch = txt.match(/['"`]([0-9]+-[a-zA-Z0-9_.-]+\.apps\.googleusercontent\.com)['"`]/);
-      const secMatch = txt.match(/['"`](GOCSPX-[a-zA-Z0-9_-]+)['"`]/);
-      if (idMatch && secMatch) {
-        return { clientId: idMatch[1], clientSecret: secMatch[1] };
+      const p1 = extractOAuthPairFromText(txt, filePath);
+      if (p1) return p1;
+      if (!fallbackMatch) {
+        fallbackMatch = extractClosestOAuthPairFromText(txt, filePath);
       }
     } catch (_) {}
   }
-  return null;
+  return fallbackMatch;
 }
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -487,6 +544,7 @@ function handleAuthStart(res) {
 
       const cfg = activeOAuthCfg || oauthCfg;
       const redirectUri = activeOAuthRedirectUri;
+      const diagInfo = `src=${cfg.sourceFile ? path.basename(cfg.sourceFile) : 'unknown'}, secretLen=${cfg.clientSecret ? cfg.clientSecret.length : 0}, idPrefix=${cfg.clientId ? cfg.clientId.slice(0, 6) : ''}`;
 
       // Tukar authorization code menjadi token OAuth2 resmi Gemini CLI
       const formBody = new URLSearchParams({
@@ -509,12 +567,12 @@ function handleAuthStart(res) {
           formBody,
         );
       } catch (tokErr) {
-        failCallback(`token_exchange_network_error | ${tokErr.code || 'ERR'} | ${tokErr.message}`);
+        failCallback(`token_exchange_network_error | ${tokErr.code || 'ERR'} | ${diagInfo} | ${tokErr.message}`);
         return;
       }
 
       if (tokResp.statusCode < 200 || tokResp.statusCode >= 300) {
-        failCallback(`token_exchange_failed | HTTP ${tokResp.statusCode} | ${sanitizeTokenBody(tokResp.body)}`);
+        failCallback(`token_exchange_failed | HTTP ${tokResp.statusCode} | ${diagInfo} | ${sanitizeTokenBody(tokResp.body)}`);
         return;
       }
 
@@ -522,12 +580,12 @@ function handleAuthStart(res) {
       try {
         tokData = JSON.parse(tokResp.body);
       } catch (parseErr) {
-        failCallback(`token_response_invalid_json | HTTP ${tokResp.statusCode} | ${parseErr.message}`);
+        failCallback(`token_response_invalid_json | HTTP ${tokResp.statusCode} | ${diagInfo} | ${parseErr.message}`);
         return;
       }
 
       if (!tokData || !tokData.access_token) {
-        failCallback(`token_missing_access_token | HTTP ${tokResp.statusCode} | ${sanitizeTokenBody(tokResp.body)}`);
+        failCallback(`token_missing_access_token | HTTP ${tokResp.statusCode} | ${diagInfo} | ${sanitizeTokenBody(tokResp.body)}`);
         return;
       }
 
@@ -850,6 +908,14 @@ const server = http.createServer(async (req, res) => {
   return sendJson(res, 404, { status: 'error', error: 'Endpoint tidak ditemukan' });
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`[studio-bridge] listening on http://${HOST}:${PORT}`);
-});
+if (require.main === module) {
+  server.listen(PORT, HOST, () => {
+    console.log(`[studio-bridge] listening on http://${HOST}:${PORT}`);
+  });
+}
+
+module.exports = {
+  resolveOAuthClientConfig,
+  extractOAuthPairFromText,
+  extractClosestOAuthPairFromText,
+};
