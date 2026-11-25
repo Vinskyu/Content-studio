@@ -719,20 +719,24 @@ def hunt_media(
             continue
         d = float(ent.get("duration") or 0.0)
         if media_type == "clip":
-            if 15.0 <= d <= 1800.0:
+            if 15.0 <= d <= 1200.0:
                 target_entry = ent
                 break
         elif media_type == "meme":
-            if 0.5 <= d <= 35.0:
+            if 0.5 <= d <= 15.0:
                 target_entry = ent
                 break
         elif media_type == "sfx":
-            if 0.5 <= d <= 20.0:
+            if 0.5 <= d <= 6.0:
                 target_entry = ent
                 break
 
     if not target_entry:
-        target_entry = entries[0]
+        non_live = [e for e in entries if e and not e.get("is_live") and float(e.get("duration") or 0.0) > 0.0]
+        if non_live:
+            target_entry = min(non_live, key=lambda e: float(e.get("duration") or 999999.0))
+        else:
+            return {"status": "error", "message": f"Tidak ada video non-live yang sesuai untuk '{query}'."}
 
     video_url = target_entry.get("webpage_url") or target_entry.get("url") or f"https://www.youtube.com/watch?v={target_entry.get('id')}"
     title = target_entry.get("title") or query

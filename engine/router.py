@@ -425,85 +425,108 @@ def to_gemini_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
 
 def call_groq_tools(key: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
                     system_prompt: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
-    """Panggilan native tool-calling Groq OpenAI-compatible via urllib."""
+    """Panggilan native tool-calling Groq OpenAI-compatible via urllib dengan pengaman tool_use_failed."""
     url = "https://api.groq.com/openai/v1/chat/completions"
-    models_to_try = [model] if model else ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.1-8b-instant"]
+    models_to_try = [model] if model else [
+        "llama-3.3-70b-versatile",
+        "qwen/qwen3-32b",
+        "openai/gpt-oss-120b",
+        "llama-3.1-8b-instant"
+    ]
 
-    full_msgs = []
-    if system_prompt:
-        full_msgs.append({"role": "system", "content": system_prompt})
-    for m in messages:
-        full_msgs.append(dict(m))
+    def _build_msgs(extra_strict: bool = False) -> List[Dict[str, Any]]:
+        msgs = []
+        sys_txt = system_prompt or ""
+        if extra_strict:
+            strict_note = (
+                "\n\n[PERINGATAN KETAT TOOL-CALLING]: Gunakan HANYA tool yang tersedia dengan "
+                "argumen JSON valid bertipe datar (string/integer/boolean/number). "
+                "Dilarang keras memakai format XML atau nested object."
+            )
+            sys_txt = (sys_txt + strict_note).strip()
+        if sys_txt:
+            msgs.append({"role": "system", "content": sys_txt})
+        for m in messages:
+            msgs.append(dict(m))
+        return msgs
 
     last_err = None
     for m_name in models_to_try:
-        payload: Dict[str, Any] = {
-            "model": m_name,
-            "messages": full_msgs,
-            "temperature": 0.2
-        }
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
+        for attempt in range(2):
+            extra_strict = (attempt == 1)
+            payload: Dict[str, Any] = {
+                "model": m_name,
+                "messages": _build_msgs(extra_strict=extra_strict),
+                "temperature": 0.2 if not extra_strict else 0.0
+            }
+            if tools:
+                payload["tools"] = tools
+                payload["tool_choice"] = "auto"
 
-        body_bytes = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=body_bytes,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-                "User-Agent": "ContentStudio-Router/1.0"
-            },
-            method="POST"
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                resp_data = json.loads(resp.read().decode("utf-8"))
-                choice = resp_data.get("choices", [{}])[0]
-                msg = choice.get("message", {})
-                content = msg.get("content") or ""
-                tool_calls = []
-                for tc in msg.get("tool_calls") or []:
-                    fn = tc.get("function", {})
-                    args_str = fn.get("arguments", "{}")
-                    try:
-                        args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
-                    except Exception:
-                        args_dict = {}
-                    tool_calls.append({
-                        "id": tc.get("id") or f"call_{len(tool_calls)+1}",
-                        "name": fn.get("name", ""),
-                        "arguments": args_dict
-                    })
-
-                raw_msg: Dict[str, Any] = {
-                    "role": "assistant",
-                    "content": content or None
-                }
-                if tool_calls:
-                    raw_msg["tool_calls"] = msg.get("tool_calls")
-
-                return {
-                    "provider": "groq",
-                    "model": m_name,
-                    "content": content,
-                    "tool_calls": tool_calls,
-                    "raw_assistant_msg": raw_msg
-                }
-        except urllib.error.HTTPError as he:
-            err_b = ""
+            body_bytes = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body_bytes,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "ContentStudio-Router/1.0"
+                },
+                method="POST"
+            )
             try:
-                err_b = he.read().decode("utf-8")
-            except Exception:
-                pass
-            if he.code == 404:
-                last_err = f"Model {m_name} 404: {err_b[:80]}"
-                continue
-            raise RuntimeError(f"Groq tool-calling HTTP {he.code}: {err_b[:120]}")
-        except Exception as e:
-            last_err = str(e)
-            continue
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    choice = resp_data.get("choices", [{}])[0]
+                    msg = choice.get("message", {})
+                    content = msg.get("content") or ""
+                    tool_calls = []
+                    for tc in msg.get("tool_calls") or []:
+                        fn = tc.get("function", {})
+                        args_str = fn.get("arguments", "{}")
+                        try:
+                            args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
+                        except Exception:
+                            args_dict = {}
+                        tool_calls.append({
+                            "id": tc.get("id") or f"call_{len(tool_calls)+1}",
+                            "name": fn.get("name", ""),
+                            "arguments": args_dict
+                        })
+
+                    raw_msg: Dict[str, Any] = {
+                        "role": "assistant",
+                        "content": content or None
+                    }
+                    if tool_calls:
+                        raw_msg["tool_calls"] = msg.get("tool_calls")
+
+                    return {
+                        "provider": "groq",
+                        "model": m_name,
+                        "content": content,
+                        "tool_calls": tool_calls,
+                        "raw_assistant_msg": raw_msg
+                    }
+            except urllib.error.HTTPError as he:
+                err_b = ""
+                try:
+                    err_b = he.read().decode("utf-8")
+                except Exception:
+                    pass
+                last_err = f"Model {m_name} HTTP {he.code}: {err_b[:120]}"
+                if he.code == 400 or "tool_use_failed" in err_b.lower():
+                    if attempt == 0:
+                        continue  # Retry 1x dengan instruksi ketat
+                    break  # Pindah ke model cadangan berikutnya
+                if he.code == 404:
+                    break  # Pindah ke model cadangan berikutnya
+                if he.code in (401, 403, 429):
+                    raise RuntimeError(f"Groq tool-calling HTTP {he.code}: {err_b[:120]}")
+                break
+            except Exception as e:
+                last_err = str(e)
+                break
 
     raise RuntimeError(f"Groq tools failed with all models: {last_err}")
 
@@ -703,7 +726,7 @@ def chat_with_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
                     model: Optional[str] = None, cache_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     Eksekusi native tool-calling multi-provider (Groq, Gemini, OpenRouter)
-    dengan failover otomatis jika provider pertama gagal.
+    dengan failover otomatis serta mode darurat JSON terstruktur jika semua native tool-calling gagal.
     """
     env = load_env()
     if provider:
@@ -712,10 +735,12 @@ def chat_with_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
         chain = ["groq", "gemini", "openrouter"]
 
     last_error = None
+    has_any_key = False
     for prov in chain:
         keys = parse_keys_for_provider(prov, env)
         if not keys:
             continue
+        has_any_key = True
 
         for idx, key in enumerate(keys):
             try:
@@ -730,6 +755,54 @@ def chat_with_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
                 last_error = e
                 mark_key_cooldown(prov, key, idx, str(e)[:100], 30, cache_dir)
                 continue
+
+    # Mode darurat JSON terstruktur jika native tool_use_failed / HTTP 400 di semua provider
+    if has_any_key and last_error:
+        err_str = str(last_error).lower()
+        if "400" in err_str or "tool_use_failed" in err_str or "failed with all models" in err_str:
+            try:
+                tool_names = [t.get("function", {}).get("name", "") for t in (tools or [])]
+                conv_lines = []
+                if system_prompt:
+                    conv_lines.append(f"SYSTEM: {system_prompt}")
+                for m in messages[-8:]:
+                    r = m.get("role", "user").upper()
+                    c = m.get("content") or ""
+                    conv_lines.append(f"{r}: {c}")
+                fallback_prompt = (
+                    "\n".join(conv_lines)
+                    + "\n\n[MODE DARURAT JSON]: Jawab dalam satu objek JSON valid saja dengan skema: "
+                    '{"content": "pesan teks untuk pengguna", "tool_calls": [{"name": "nama_tool", "arguments": {...}}]}. '
+                    f"Tool tersedia: {tool_names}. Jika tidak perlu memanggil tool, isi tool_calls dengan []."
+                )
+                raw_json = route_call("json", fallback_prompt, pace=1.0, cache_dir=cache_dir, raise_on_error=True)
+                parsed = json.loads(raw_json)
+                content = str(parsed.get("content") or "")
+                tcs = []
+                for idx_tc, tc in enumerate(parsed.get("tool_calls") or []):
+                    tcs.append({
+                        "id": f"call_json_{idx_tc+1}",
+                        "name": str(tc.get("name", "")),
+                        "arguments": tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {}
+                    })
+                raw_msg: Dict[str, Any] = {"role": "assistant", "content": content or None}
+                if tcs:
+                    raw_msg["tool_calls"] = [
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])}
+                        } for tc in tcs
+                    ]
+                return {
+                    "provider": "json_fallback",
+                    "model": "structured_json",
+                    "content": content,
+                    "tool_calls": tcs,
+                    "raw_assistant_msg": raw_msg
+                }
+            except Exception:
+                pass
 
     if last_error:
         raise RuntimeError(f"Semua provider tool-calling gagal: {last_error}")

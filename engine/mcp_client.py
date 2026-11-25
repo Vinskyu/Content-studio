@@ -229,11 +229,10 @@ def parse_mcp_tool_name(scoped_name: str) -> Tuple[str, str]:
         return parts[1], parts[2]
     return "", scoped_name
 
-def call_mcp_tool(scoped_name: str, arguments: Dict[str, Any]) -> str:
-    """Mengeksekusi tool MCP jarak jauh (tools/call)."""
-    server_name, actual_tool_name = parse_mcp_tool_name(scoped_name)
-    if not server_name:
-        return f"[ERR] Format nama tool MCP tidak valid: {scoped_name}"
+def call_tool(server_name: str, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> str:
+    """Mengeksekusi tool MCP jarak jauh berdasarkan nama server dan nama tool (tools/call)."""
+    if not server_name or not tool_name:
+        return f"[ERR] Nama server/tool MCP tidak valid: server={server_name}, tool={tool_name}"
 
     cfg = load_mcp_config()
     server_info = cfg.get("servers", {}).get(server_name)
@@ -249,7 +248,7 @@ def call_mcp_tool(scoped_name: str, arguments: Dict[str, Any]) -> str:
             headers=headers,
             method="tools/call",
             params={
-                "name": actual_tool_name,
+                "name": tool_name,
                 "arguments": arguments or {}
             },
             req_id=3
@@ -278,7 +277,14 @@ def call_mcp_tool(scoped_name: str, arguments: Dict[str, Any]) -> str:
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         return f"[ERR MCP] Server '{server_name}' offline atau timeout (batas 8 detik): {e}"
     except Exception as e:
-        return f"[ERR MCP] Gagal mengeksekusi tool '{actual_tool_name}': {e}"
+        return f"[ERR MCP] Gagal mengeksekusi tool '{tool_name}': {e}"
+
+def call_mcp_tool(scoped_name: str, arguments: Dict[str, Any]) -> str:
+    """Mengeksekusi tool MCP jarak jauh (tools/call) dari nama ber-prefix mcp__<server>__<tool>."""
+    server_name, actual_tool_name = parse_mcp_tool_name(scoped_name)
+    if not server_name:
+        return f"[ERR] Format nama tool MCP tidak valid: {scoped_name}"
+    return call_tool(server_name, actual_tool_name, arguments)
 
 if __name__ == "__main__":
     print("Remote MCP Client Status:")

@@ -290,7 +290,7 @@ def validate_plan(plan: Dict[str, Any], plan_file: str) -> bool:
         print(f"[!] ERROR PREFLIGHT: 'segments' kosong atau bukan list di {plan_file}.", file=sys.stderr)
         return False
 
-    valid_framings = {"crop", "fit_blur", "fit_black", "split", "blur_fill"}
+    valid_framings = {"crop", "fit_blur", "fit_black", "split", "blur_fill", "blur_bg"}
     valid_transitions = {"none", "fade", "fadeblack", "slideleft", "slideright", "wipeleft"}
 
     # Validasi overlays opsional
@@ -387,7 +387,7 @@ def validate_plan(plan: Dict[str, Any], plan_file: str) -> bool:
                 return False
 
     # E. Periksa texts
-    valid_animations = {"cinematic_fade", "slide_up", "karaoke_word", "pop_punch", "clean_minimal", "header_hook", "chapter_card"}
+    valid_animations = {"cinematic_fade", "slide_up", "karaoke_word", "pop_punch", "clean_minimal", "header_hook", "chapter_card", "word_highlight", "bold_pop", "clean_box"}
     texts = plan.get("texts", [])
     for idx, txt in enumerate(texts, start=1):
         x = float(txt.get("x", 0.5))
@@ -529,7 +529,15 @@ def build_segment_filter(
     is_image: bool = False
 ) -> str:
     """Membangun string filter FFmpeg untuk 4 mode framing, Ken Burns motion, serta visual polish."""
-    framing = seg.get("framing", "crop")
+    fit_mode = str(seg.get("fit_mode", "")).lower()
+    framing = seg.get("framing")
+    if not framing:
+        if fit_mode == "blur_bg" and sw > sh:
+            framing = "blur_fill"
+        elif fit_mode in ("blur_bg", "blur_fill", "fit_blur", "fit_black", "split", "crop"):
+            framing = fit_mode
+        else:
+            framing = "crop"
     speed = float(seg.get("speed", 1.0))
     lut = seg.get("lut")
 
@@ -570,7 +578,7 @@ def build_segment_filter(
             x_expr = "(iw-iw/zoom)/2"
             y_expr = "(ih-ih/zoom)/2"
 
-        if framing in ("blur_fill", "fit_blur"):
+        if framing in ("blur_fill", "fit_blur", "blur_bg"):
             bw = max(2, (tw // 4) // 2 * 2)
             bh = max(2, (th // 4) // 2 * 2)
             bg_dim = float(seg.get("bg_dim", 0.15))
@@ -626,7 +634,7 @@ def build_segment_filter(
         y = max(0, min(y, sh - ch))
         vf_main = f"crop={cw}:{ch}:{x}:{y},scale={tw}:{th}"
 
-    elif framing in ("blur_fill", "fit_blur"):
+    elif framing in ("blur_fill", "fit_blur", "blur_bg"):
         # Anti-OOM layout hemat RAM (downscale-blur-upscale)
         bw = max(2, (tw // 4) // 2 * 2)
         bh = max(2, (th // 4) // 2 * 2)
@@ -903,8 +911,8 @@ def apply_multiline_styling(text_str: str, line_colors: Optional[List[str]] = No
             styled_lines.append(l)
     return r"\N".join(styled_lines)
 
-def generate_ass(texts: List[Dict[str, Any]], tw: int, th: int, out_file: str):
-    """Buat file .ass proporsional dengan font eksplisit dan preset animasi pro."""
+def generate_ass(texts: List[Dict[str, Any]], tw: int, th: int, out_file: str, watermark: Optional[Any] = None):
+    """Buat file .ass proporsional dengan font eksplisit, preset Shorts, dan watermark opsional."""
     is_vertical = tw < th
     default_max_chars = 24 if is_vertical else 40
     margin_lr = max(20, int(round(tw * 0.08)))
@@ -920,6 +928,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{DEFAULT_FONT_NAME},{base_fontsize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,{margin_lr},{margin_lr},20,1
 Style: KaraokeStyle,Poppins ExtraBold,{base_fontsize},&H0000E5FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,{margin_lr},{margin_lr},20,1
+Style: CleanBox,{DEFAULT_FONT_NAME},{base_fontsize},&H00FFFFFF,&H000000FF,&HAA000000,&HAA000000,-1,0,0,0,100,100,0,0,3,8,0,2,{margin_lr},{margin_lr},20,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -933,7 +942,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         max_chars = int(txt.get("max_chars") or default_max_chars)
         wrapped_text = auto_wrap_text(raw_text, max_chars)
 
-        anim = str(txt.get("animation", "")).lower()
+        anim = str(txt.get("animation") or txt.get("preset") or "").lower()
         font_name = resolve_font_name(txt.get("font"), anim)
 
         align_spec = str(txt.get("alignment") or txt.get("align") or "").lower()
@@ -1007,7 +1016,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
             content += f"Dialogue: 0,{s_time},{e_time},Default,,0,0,0,,{{{tags}}}{styled_text}\n"
 
-        elif anim == "karaoke_word":
+        elif anim in ("karaoke_word", "word_highlight"):
             dur_cs = max(10, int(round((e_time_sec - s_time_sec) * 100)))
             highlight_c = hex_to_ass_color(txt.get("highlight_color", "#FFFF00"))
             base_c = hex_to_ass_color(txt.get("color", "#FFFFFF"))
@@ -1042,14 +1051,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
             content += f"Dialogue: 0,{s_time},{e_time},KaraokeStyle,,0,0,0,,{{{tags}}}{karaoke_body}\n"
 
-        elif anim == "pop_punch":
-            bord = float(txt.get("outline_width", 2.5))
+        elif anim in ("pop_punch", "bold_pop"):
+            bord = float(txt.get("outline_width", 2.8))
             shad = float(txt.get("shadow", 1.5))
             tags = (
-                f"{an_tag}\\pos({x_px},{y_px})\\fn{font_name}\\fs{fs}\\1c{c_ass}\\3c{out_ass}"
+                f"{an_tag}\\pos({x_px},{y_px})\\fn{font_name}\\fs{fs}\\b1\\1c{c_ass}\\3c{out_ass}"
                 f"\\bord{bord}\\shad{shad}\\fscx85\\fscy85\\t(0,110,\\fscx106\\fscy106)\\t(110,200,\\fscx100\\fscy100)"
             )
             content += f"Dialogue: 0,{s_time},{e_time},Default,,0,0,0,,{{{tags}}}{styled_text}\n"
+
+        elif anim == "clean_box":
+            box_c = hex_to_ass_color(txt.get("box_color", "#000000"))
+            bord = float(txt.get("outline_width", 8.0))
+            tags = (
+                f"{an_tag}\\pos({x_px},{y_px})\\fn{font_name}\\fs{fs}\\b1\\1c{c_ass}"
+                f"\\3c&HAA{box_c[4:]}&\\4c&HAA{box_c[4:]}&\\bord{bord}\\shad0\\fad(100,100)"
+            )
+            content += f"Dialogue: 0,{s_time},{e_time},CleanBox,,0,0,0,,{{{tags}}}{styled_text}\n"
 
         elif anim == "clean_minimal":
             bord = float(txt.get("outline_width", 1.0))
@@ -1064,6 +1082,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             bord = int(txt.get("outline_width", 3))
             tags = f"{an_tag}\\pos({x_px},{y_px})\\fn{font_name}\\fs{fs}\\1c{c_ass}\\3c{out_ass}\\bord{bord}"
             content += f"Dialogue: 0,{s_time},{e_time},Default,,0,0,0,,{{{tags}}}{styled_text}\n"
+
+    # Watermark teks opsional
+    if watermark:
+        wm_cfg = {"text": str(watermark)} if isinstance(watermark, str) else watermark
+        if isinstance(wm_cfg, dict) and wm_cfg.get("text"):
+            wm_text = str(wm_cfg["text"]).replace("\n", " ")
+            wm_x = int(round(float(wm_cfg.get("x", 0.5)) * tw))
+            wm_y = int(round(float(wm_cfg.get("y", 0.08)) * th))
+            wm_fs = max(10, int(round(float(wm_cfg.get("size", 0.024)) * th)))
+            wm_alpha = max(0, min(255, int(round((1.0 - float(wm_cfg.get("opacity", 0.55))) * 255))))
+            wm_alpha_hex = f"&H{wm_alpha:02X}"
+            wm_tags = f"\\an5\\pos({wm_x},{wm_y})\\fn{DEFAULT_FONT_NAME}\\fs{wm_fs}\\1c&HFFFFFF&\\1a{wm_alpha_hex}\\3a{wm_alpha_hex}\\bord1.5\\shad0"
+            content += f"Dialogue: 1,0:00:00.00,99:00:00.00,Default,,0,0,0,,{{{wm_tags}}}{wm_text}\n"
 
     with open(out_file, "w", encoding="utf-8") as f:
         f.write(content)
@@ -1663,7 +1694,12 @@ def render_pipeline(
         _notify("mixing_audio", 85, "Mengompilasi subtitle ASS dan mixing audio...")
         print("[4/5] Mengompilasi subtitle ASS dan stems...")
         ass_file = os.path.join(tmp_dir, "subtitles.ass")
-        generate_ass(plan.get("texts", []), tw, th, ass_file)
+        generate_ass(
+            plan.get("texts", []),
+            tw, th,
+            ass_file,
+            watermark=plan.get("watermark") or plan.get("output", {}).get("watermark")
+        )
 
         # 5. Finalisasi Visual + Audio Mixing + Delivery Lock
         print("[5/5] Finalisasi delivery lock & mixing audio...")
