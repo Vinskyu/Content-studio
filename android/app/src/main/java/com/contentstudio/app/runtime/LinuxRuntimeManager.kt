@@ -168,11 +168,19 @@ object LinuxRuntimeManager {
     private fun verifyNodeExec(context: Context): Boolean {
         val paths = BootstrapInstaller.getPaths(context)
         val nodeFile = File(paths.prefixDir, "bin/node")
-        if (!nodeFile.exists()) return false
+        if (!nodeFile.exists()) {
+            appendLog("[2/4] Binary node belum ditemukan di ${nodeFile.absolutePath}")
+            return false
+        }
         return try {
             Os.chmod(nodeFile.absolutePath, 0b111_000_000)
-            runBinary(context, nodeFile.absolutePath, listOf("-v")) == 0
-        } catch (_: Exception) {
+            val exitCode = runBinary(context, nodeFile.absolutePath, listOf("-v"))
+            if (exitCode != 0) {
+                appendLog("[2/4] Eksekusi node -v gagal dengan exit code $exitCode")
+            }
+            exitCode == 0
+        } catch (e: Exception) {
+            appendLog("[2/4] Gagal menjalankan node -v: ${e.message}")
             false
         }
     }
@@ -245,7 +253,7 @@ object LinuxRuntimeManager {
                 copyAssetToHome(context, "proxy.js", "$home/proxy.js")
                 copyAssetToHome(context, "studio-bridge.js", "$home/studio-bridge.js")
 
-                // TAHAP 2: Pasang & verifikasi Node.js + npm-cli.js + Python + CA-Certificates
+                // TAHAP 2: Pasang & verifikasi libc++ terbaru + Node.js + npm-cli.js + Python + CA-Certificates
                 _setupStage.value = 2
                 val npmCliFile = File(prefix, "lib/node_modules/npm/bin/npm-cli.js")
                 val npmBinFile = File(prefix, "bin/npm")
@@ -254,30 +262,44 @@ object LinuxRuntimeManager {
                 val npmReady = npmCliFile.exists() || npmBinFile.exists()
 
                 if (!nodeExecOk || !npmReady || !pythonExists) {
-                    _setupMessage.value = "Mengunduh & memasang Node.js, npm, dan Python..."
-                    appendLog("[2/4] Verifikasi awal: nodeOk=$nodeExecOk, npmReady=$npmReady, python=$pythonExists. Memasang paket...")
+                    _setupMessage.value = "Mengunduh & memperbarui libc++, Node.js, dan Python..."
+                    appendLog("[2/4] Verifikasi awal: nodeOk=$nodeExecOk, npmReady=$npmReady, python=$pythonExists. Memasang paket (termasuk --reinstall libc++)...")
                     val termuxPrefix = "/data/data/com.termux/files/usr"
                     val installPkgsCmd = """
                         cd "$prefix/tmp" &&
-                        rm -rf _stage *.deb 2>/dev/null || true &&
+                        rm -rf _stage *.deb "$prefix/var/cache/apt/archives/"*.deb 2>/dev/null || true &&
                         apt-get update --allow-insecure-repositories 2>&1;
-                        apt-get download --allow-unauthenticated c-ares libicu libsqlite openssl ca-certificates nodejs-lts python libexpat gdbm libffi zlib readline ncurses bzip2 xz-utils 2>&1 &&
-                        (apt-get download --allow-unauthenticated npm 2>&1 || true) &&
+                        apt-get install -y --download-only --reinstall --allow-unauthenticated libc++ nodejs-lts npm python ca-certificates 2>&1 || true;
+                        apt-get download --allow-unauthenticated libc++ c-ares libicu libsqlite openssl ca-certificates nodejs-lts python libexpat gdbm libffi zlib readline ncurses bzip2 xz-utils 2>&1 || true;
+                        (apt-get download --allow-unauthenticated npm 2>&1 || true);
                         mkdir -p _stage &&
-                        for deb in *.deb; do
-                            [ -f "${'$'}deb" ] && dpkg-deb -x "${'$'}deb" _stage/ 2>&1
+                        for deb in "$prefix/var/cache/apt/archives/"*.deb "$prefix/tmp/"*.deb; do
+                            [ -f "${'$'}deb" ] && echo "Mengekstrak ${'$'}(basename "${'$'}deb")..." && dpkg-deb -x "${'$'}deb" _stage/ 2>&1
                         done &&
                         if [ -d "_stage$termuxPrefix" ]; then
-                            cp -a _stage$termuxPrefix/* "$prefix/" 2>&1
+                            if [ -f "_stage$termuxPrefix/lib/libc++_shared.so" ]; then
+                                rm -f "$prefix/lib/libc++_shared.so" 2>/dev/null || true
+                            fi &&
+                            cp -af _stage$termuxPrefix/* "$prefix/" 2>&1
                         elif [ -d "_stage/usr" ]; then
-                            cp -a _stage/usr/* "$prefix/" 2>&1
+                            if [ -f "_stage/usr/lib/libc++_shared.so" ]; then
+                                rm -f "$prefix/lib/libc++_shared.so" 2>/dev/null || true
+                            fi &&
+                            cp -af _stage/usr/* "$prefix/" 2>&1
                         fi &&
-                        rm -rf _stage *.deb 2>/dev/null || true
+                        chmod 755 "$prefix/lib/libc++_shared.so" 2>/dev/null || true;
+                        rm -rf _stage *.deb "$prefix/var/cache/apt/archives/"*.deb 2>/dev/null || true
                     """.trimIndent()
                     val code = runInPrefix(context, installPkgsCmd)
                     patchShebangs(File(prefix, "bin"), prefix)
-                    if (code != 0 || !verifyNodeExec(context) || !npmCliFile.exists()) {
-                        throw RuntimeException("Gagal verifikasi Node.js / npm-cli.js (exit=$code). Periksa koneksi internet.")
+                    if (code != 0) {
+                        appendLog("[2/4] Perintah apt/extract selesai dengan exit=$code")
+                    }
+                    if (!verifyNodeExec(context)) {
+                        throw RuntimeException("Gagal menjalankan binary node (cek detail log di bawah)")
+                    }
+                    if (!npmCliFile.exists()) {
+                        throw RuntimeException("File npm-cli.js tidak ditemukan setelah ekstraksi paket (cek detail log di bawah)")
                     }
                 } else {
                     appendLog("[2/4] Node.js, npm-cli.js, dan Python terverifikasi.")

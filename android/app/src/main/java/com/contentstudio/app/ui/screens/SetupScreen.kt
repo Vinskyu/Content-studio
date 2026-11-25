@@ -6,6 +6,8 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +47,15 @@ fun SetupScreen(
     var showLogs by remember { mutableStateOf(false) }
     var copiedLog by remember { mutableStateOf(false) }
     val logListState = rememberLazyListState()
+
+    val clampedStage = stage.coerceIn(1, 4)
+    val targetProgress = clampedStage / 4f
+    val progressPct = (clampedStage * 25).coerceIn(0, 100)
+    val animatedProgress by animateFloatAsState(
+        targetValue = targetProgress,
+        animationSpec = tween(durationMillis = 350),
+        label = "setup_progress"
+    )
 
     LaunchedEffect(logs.size) {
         if (showLogs && logs.isNotEmpty()) {
@@ -89,20 +101,31 @@ fun SetupScreen(
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(CardHighlight)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "[$stage/4]",
+                        text = "$progressPct%",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        color = TextSecondary
                     )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(CardHighlight)
+                            .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "[$clampedStage/4]",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                    }
                 }
             }
 
@@ -113,15 +136,21 @@ fun SetupScreen(
                 color = TextSecondary
             )
 
-            LinearProgressIndicator(
-                progress = { (stage.coerceIn(1, 4)) / 4f },
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-                color = ActionSolidBg,
-                trackColor = BorderSubtle
-            )
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color(0xFF232328))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(animatedProgress.coerceIn(0f, 1f))
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(if (setupError != null) Color(0xFFEF4444) else Color(0xFFE4E4E7))
+                )
+            }
 
             Text(
                 text = message,
