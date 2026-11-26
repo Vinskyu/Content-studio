@@ -464,6 +464,24 @@ function applyPatternToWorkspace(wsName, body) {
 
 // ── Channel Hub & DNA Evolution ─────────────────────────────────────────────
 
+const DEFAULT_VOICE_PROFILE = {
+  voice: 'en-US-BrianMultilingualNeural',
+  rate: '+0%',
+  pitch: '+0Hz',
+  master_preset: 'natural',
+};
+
+function normalizeVoiceProfile(vp, fallback) {
+  const base = fallback || DEFAULT_VOICE_PROFILE;
+  const src = (vp && typeof vp === 'object') ? vp : {};
+  return {
+    voice: String(src.voice || base.voice || DEFAULT_VOICE_PROFILE.voice).trim(),
+    rate: String(src.rate || base.rate || DEFAULT_VOICE_PROFILE.rate).trim(),
+    pitch: String(src.pitch || base.pitch || DEFAULT_VOICE_PROFILE.pitch).trim(),
+    master_preset: String(src.master_preset || base.master_preset || DEFAULT_VOICE_PROFILE.master_preset).trim(),
+  };
+}
+
 function readChannels() {
   try {
     if (fs.existsSync(CHANNELS_FILE)) {
@@ -476,12 +494,14 @@ function readChannels() {
               reference_notes: c.style_notes || '',
               avg_scene_duration: 3.5,
               style_summary: c.tone || '',
+              voice_profile: { ...DEFAULT_VOICE_PROFILE },
             };
           } else {
             if (!Array.isArray(c.dna.learned_traits)) c.dna.learned_traits = [];
             if (typeof c.dna.reference_notes !== 'string') c.dna.reference_notes = '';
             if (typeof c.dna.avg_scene_duration !== 'number') c.dna.avg_scene_duration = 3.5;
             if (typeof c.dna.style_summary !== 'string') c.dna.style_summary = '';
+            c.dna.voice_profile = normalizeVoiceProfile(c.dna.voice_profile);
           }
           return c;
         });
@@ -520,6 +540,7 @@ function createChannel(data) {
       reference_notes: String((data.dna && data.dna.reference_notes) || data.reference_notes || data.style_notes || '').trim(),
       avg_scene_duration: typeof (data.dna && data.dna.avg_scene_duration) === 'number' ? data.dna.avg_scene_duration : 3.5,
       style_summary: String((data.dna && data.dna.style_summary) || data.tone || '').trim(),
+      voice_profile: normalizeVoiceProfile(data.dna && data.dna.voice_profile),
     },
     created_at: Date.now(),
   };
@@ -550,6 +571,7 @@ function updateChannel(id, data) {
       reference_notes: String((data.dna && data.dna.reference_notes) || (existing.dna && existing.dna.reference_notes) || '').trim(),
       avg_scene_duration: typeof (data.dna && data.dna.avg_scene_duration) === 'number' ? data.dna.avg_scene_duration : (existing.dna && typeof existing.dna.avg_scene_duration === 'number' ? existing.dna.avg_scene_duration : 3.5),
       style_summary: String((data.dna && data.dna.style_summary) || (existing.dna && existing.dna.style_summary) || '').trim(),
+      voice_profile: normalizeVoiceProfile(data.dna && data.dna.voice_profile, existing.dna && existing.dna.voice_profile),
     },
     updated_at: Date.now(),
   };
@@ -828,6 +850,133 @@ async function syncVoDuration(wsName) {
 
   writeWorkspaceProject(cleanWs, proj);
   return { status: 'ok', total_duration: totalVoSec, audio_duration: totalVoSec, scenes: proj.scenes };
+}
+
+function buildLocalPublishKitFallback(cleanWs, proj, scriptContent, chan) {
+  const scenes = Array.isArray(proj.scenes) ? proj.scenes : [];
+  const firstNarration = scenes.map((s) => String(s.narration || s.text || '').trim()).find(Boolean) || '';
+  const baseTitle = (proj.title || proj.name || cleanWs || 'Video Project').trim();
+  let title = baseTitle;
+  if (firstNarration) {
+    const firstSentence = firstNarration.split(/[.!?]/)[0].trim();
+    if (firstSentence.length >= 12 && firstSentence.length <= 75) {
+      title = firstSentence;
+    } else if (firstSentence.length > 75) {
+      title = firstSentence.slice(0, 72) + '...';
+    }
+  }
+  const allNarration = scenes.map((s) => String(s.narration || s.text || '').trim()).filter(Boolean).join(' ');
+  const bodyText = (scriptContent || allNarration || baseTitle).trim();
+  const description = bodyText.length > 350 ? bodyText.slice(0, 347) + '...' : bodyText;
+
+  const stopWords = new Set(['yang', 'dan', 'di', 'ke', 'dari', 'ini', 'itu', 'untuk', 'dengan', 'pada', 'adalah', 'atau', 'juga', 'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'your']);
+  const words = (title + ' ' + bodyText + ' ' + ((chan && chan.name) || ''))
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !stopWords.has(w));
+  const uniqueTags = [];
+  for (const w of words) {
+    const tag = '#' + w;
+    if (!uniqueTags.includes(tag)) {
+      uniqueTags.push(tag);
+      if (uniqueTags.length >= 8) break;
+    }
+  }
+  if (uniqueTags.length === 0) {
+    uniqueTags.push('#shorts', '#reels', '#contentstudio');
+  }
+  return {
+    title,
+    description: description || `${title}`,
+    tags: uniqueTags.join(' '),
+  };
+}
+
+async function generatePublishKit(wsName) {
+  const cleanWs = path.basename(wsName);
+  const wsPath = path.join(WORKSPACES_DIR, cleanWs);
+  const proj = readWorkspaceProject(cleanWs);
+  if (!proj) throw new Error(`Workspace "${cleanWs}" tidak ditemukan`);
+
+  const scriptPath = path.join(wsPath, 'scripts', 'main.txt');
+  let scriptContent = '';
+  if (fs.existsSync(scriptPath)) {
+    try { scriptContent = fs.readFileSync(scriptPath, 'utf8').trim(); } catch (_) {}
+  }
+
+  const scenes = Array.isArray(proj.scenes) ? proj.scenes : [];
+  const scenesNarration = scenes.map((s, idx) => `Scene ${idx + 1}: ${(s.narration || s.text || '').trim()}`).filter((l) => !l.endsWith(':')).join('\n');
+  const combinedText = (scriptContent || scenesNarration || proj.title || cleanWs).slice(0, 2500);
+
+  const channels = readChannels();
+  const chan = proj.channel_id ? channels.find((c) => c.id === proj.channel_id) : null;
+  const dnaSummary = chan && chan.dna ? (chan.dna.style_summary || '') : '';
+
+  let kit = null;
+  if (fs.existsSync(ANTIGRAVITY_BIN) && combinedText.trim()) {
+    try {
+      const prompt = `Buatkan metadata publikasi sosial media (Title yang menarik, Description singkat padat, dan Tags/Hashtags relevan) berdasarkan naskah proyek ini.
+${dnaSummary ? 'Gaya Channel: ' + dnaSummary : ''}
+Naskah/Proyek:
+${combinedText}
+
+Kembalikan HANYA JSON murni tanpa markdown:
+{
+  "title": "Judul video maksimal 70 karakter",
+  "description": "Deskripsi 2-3 kalimat yang kuat",
+  "tags": "#tag1 #tag2 #tag3 #tag4 #tag5"
+}`;
+      const { stdout } = await new Promise((resolve, reject) => {
+        let p = null;
+        const timer = setTimeout(() => {
+          if (p) try { p.kill('SIGTERM'); } catch (_) {}
+          reject(new Error('Timeout'));
+        }, 25000);
+        try {
+          p = spawn(ANTIGRAVITY_BIN, ['--dangerously-skip-permissions', '-p', prompt], {
+            env: getAntigravityEnv(false),
+            cwd: HOME_DIR,
+          });
+          let out = '';
+          p.stdout.on('data', (d) => { out += d.toString('utf8'); });
+          p.on('close', (code) => {
+            clearTimeout(timer);
+            if (code === 0) resolve({ stdout: out });
+            else reject(new Error(`Exit ${code}`));
+          });
+          p.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          reject(e);
+        }
+      });
+      const cleanJson = stripAnsi(stdout).replace(/```json/g, '').replace(/```/g, '').trim();
+      const match = cleanJson.match(/\{[\s\S]*\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (parsed && (parsed.title || parsed.description)) {
+          kit = {
+            title: String(parsed.title || proj.title || cleanWs).trim(),
+            description: String(parsed.description || '').trim(),
+            tags: Array.isArray(parsed.tags) ? parsed.tags.join(' ') : String(parsed.tags || '').trim(),
+          };
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (!kit) {
+    kit = buildLocalPublishKitFallback(cleanWs, proj, scriptContent, chan);
+  }
+
+  kit.updated_at = Date.now();
+  proj.publish_kit = kit;
+  writeWorkspaceProject(cleanWs, proj);
+  return kit;
 }
 
 // ── Workspace & Project Management ──────────────────────────────────────────
@@ -1555,7 +1704,13 @@ async function handleAudioMaster(req, res) {
   const ffmpegBin = path.join(PREFIX_DIR, 'bin', 'ffmpeg');
   const targetFfmpeg = fs.existsSync(ffmpegBin) ? ffmpegBin : 'ffmpeg';
 
-  const filterChain = 'highpass=f=80,afftdn=nf=-25,equalizer=f=120:t=q:w=1:g=2.5,acompressor=threshold=-18dB:ratio=3:attack=5:release=50,loudnorm=I=-14:TP=-1.5:LRA=11';
+  const preset = String(body.preset || 'natural').trim().toLowerCase();
+  let filterChain = 'highpass=f=80,afftdn=nf=-25,acompressor=threshold=-18dB:ratio=2.5:attack=5:release=50,loudnorm=I=-14:TP=-1.5:LRA=11';
+  if (preset === 'deep_doc') {
+    filterChain = 'highpass=f=70,afftdn=nf=-25,equalizer=f=120:t=q:w=1:g=3,equalizer=f=3000:t=q:w=1:g=1.5,acompressor=threshold=-16dB:ratio=4:attack=5:release=60,loudnorm=I=-14:TP=-1.5:LRA=11';
+  } else if (preset === 'crisp_reels') {
+    filterChain = 'highpass=f=100,afftdn=nf=-25,equalizer=f=4000:t=q:w=1:g=3,acompressor=threshold=-16dB:ratio=3.5:attack=2:release=40,loudnorm=I=-13:TP=-1.0:LRA=9';
+  }
 
   const args = [
     '-y',
@@ -1810,7 +1965,15 @@ async function executeRenderPipeline(cleanWs, proj, options, job) {
       job.progress = 80;
       const subbedVideoPath = path.join(tmpDir, 'subbed.mp4');
       const escapedSrt = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      const subVf = `subtitles='${escapedSrt}':force_style='FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=45'`;
+      const defaultSubPreset = is169 ? 'bottom_169' : 'safe_916';
+      const subPreset = String((options && options.subtitle_preset) || defaultSubPreset).trim().toLowerCase();
+      let subStyle = 'FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=45';
+      if (subPreset === 'safe_916') {
+        subStyle = 'FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=180';
+      } else if (subPreset === 'center_bold') {
+        subStyle = 'FontSize=21,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=5,MarginV=0';
+      }
+      const subVf = `subtitles='${escapedSrt}':force_style='${subStyle}'`;
       try {
         await execFileAsync(ffmpegBin, [
           '-y',
@@ -2483,6 +2646,17 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  const wsPubKitMatch = pathname.match(/^\/workspaces\/([^\/]+)\/publish-kit$/);
+  if (req.method === 'POST' && wsPubKitMatch) {
+    const wsName = decodeURIComponent(wsPubKitMatch[1]);
+    try {
+      const kit = await generatePublishKit(wsName);
+      return sendJson(res, 200, { status: 'ok', publish_kit: kit });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal membuat Publish Kit' });
+    }
+  }
+
   // ── Living Patterns Endpoints ─────────────────────────────────────────────
   if (req.method === 'GET' && pathname === '/patterns') {
     const patterns = readPatterns();
@@ -2666,4 +2840,5 @@ module.exports = {
   extractChannelDna,
   promoteWorkspaceDna,
   syncVoDuration,
+  generatePublishKit,
 };

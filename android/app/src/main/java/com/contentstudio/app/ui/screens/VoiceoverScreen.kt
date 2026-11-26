@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.contentstudio.app.runtime.LinuxRuntimeManager
+import com.contentstudio.app.runtime.VoiceProfile
+import com.contentstudio.app.ui.theme.StudioSegmentedControl
 import com.contentstudio.app.ui.theme.StudioTopBar
 import com.contentstudio.app.ui.theme.StudioSmallButton
 import com.contentstudio.app.ui.theme.ActionSolidBg
@@ -162,6 +164,12 @@ fun VoiceoverScreen(
     var playingFile by remember { mutableStateOf<File?>(null) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var isMastering by remember { mutableStateOf(false) }
+
+    val masterPresetLabels = remember { listOf("Natural", "Deep Doc", "Crisp Reels") }
+    val masterPresetKeys = remember { listOf("natural", "deep_doc", "crisp_reels") }
+    var masterPresetIndex by remember { mutableIntStateOf(0) }
+    var activeChannelId by remember { mutableStateOf<String?>(null) }
+    var activeChannelName by remember { mutableStateOf<String?>(null) }
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -422,6 +430,59 @@ fun VoiceoverScreen(
 
     LaunchedEffect(activeWorkspace) {
         refreshRecordings()
+        if (activeWorkspace.isBlank()) {
+            activeChannelId = null
+            activeChannelName = null
+        } else {
+            withContext(Dispatchers.IO) {
+                val projRes = LinuxRuntimeManager.getWorkspaceProject(activeWorkspace)
+                val projObj = projRes.getOrNull()
+                val chanId = projObj?.optString("channel_id", "")?.takeIf { it.isNotBlank() }
+                if (chanId != null) {
+                    val chRes = LinuxRuntimeManager.listChannels()
+                    val arr = chRes.optJSONArray("channels")
+                    var foundVp: org.json.JSONObject? = null
+                    var foundName: String? = null
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            if (obj.optString("id") == chanId) {
+                                foundName = obj.optString("name", "")
+                                foundVp = obj.optJSONObject("dna")?.optJSONObject("voice_profile")
+                                break
+                            }
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        activeChannelId = chanId
+                        activeChannelName = foundName
+                        if (foundVp != null) {
+                            val vpVoice = foundVp.optString("voice", "")
+                            val vpRate = foundVp.optString("rate", "")
+                            val vpPitch = foundVp.optString("pitch", "")
+                            val vpPreset = foundVp.optString("master_preset", "")
+
+                            val vIdx = ttsVoices.indexOfFirst { it.id.equals(vpVoice, ignoreCase = true) }
+                            if (vIdx >= 0) selectedVoiceIndex = vIdx
+
+                            val rIdx = rates.indexOfFirst { it == vpRate }
+                            if (rIdx >= 0) selectedRateIndex = rIdx
+
+                            val pIdx = pitches.indexOfFirst { it == vpPitch }
+                            if (pIdx >= 0) selectedPitchIndex = pIdx
+
+                            val mIdx = masterPresetKeys.indexOfFirst { it == vpPreset }
+                            if (mIdx >= 0) masterPresetIndex = mIdx
+                        }
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        activeChannelId = null
+                        activeChannelName = null
+                    }
+                }
+            }
+        }
     }
 
     // Wajib release player & recorder saat berpindah tab
@@ -710,6 +771,43 @@ fun VoiceoverScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        if (activeChannelId != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Channel: ${activeChannelName ?: activeChannelId}",
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                                StudioSmallButton(
+                                    text = "Save as Channel Voice",
+                                    onClick = {
+                                        val chanId = activeChannelId ?: return@StudioSmallButton
+                                        val profile = VoiceProfile(
+                                            voice = ttsVoices[selectedVoiceIndex].id,
+                                            rate = rates[selectedRateIndex],
+                                            pitch = pitches[selectedPitchIndex],
+                                            masterPreset = masterPresetKeys[masterPresetIndex]
+                                        )
+                                        scope.launch(Dispatchers.IO) {
+                                            val res = LinuxRuntimeManager.saveChannelVoiceProfile(chanId, profile)
+                                            withContext(Dispatchers.Main) {
+                                                if (res.optString("status") == "ok") {
+                                                    statusMessage = "Voice profile disimpan ke channel"
+                                                } else {
+                                                    errorMessage = res.optString("error", "Gagal menyimpan voice channel")
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
                             }
                         }
 
@@ -1157,14 +1255,21 @@ fun VoiceoverScreen(
 
             // DAFTAR AUDIO (TTS & REKAMAN)
             item {
-                Text(
-                    text = "Audio Files (${recordings.size})",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextMuted,
-                    letterSpacing = 1.sp
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Audio Files (${recordings.size})",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextMuted,
+                        letterSpacing = 1.sp
+                    )
+                    StudioSegmentedControl(
+                        options = masterPresetLabels,
+                        selectedIndex = masterPresetIndex,
+                        onSelect = { masterPresetIndex = it }
+                    )
+                }
             }
 
             if (recordings.isEmpty()) {
@@ -1272,9 +1377,10 @@ fun VoiceoverScreen(
                                     .clickable {
                                         if (!isMastering) {
                                             isMastering = true
-                                            statusMessage = "Mastering audio with FFmpeg..."
+                                            val chosenPreset = masterPresetKeys[masterPresetIndex]
+                                            statusMessage = "Mastering audio (${masterPresetLabels[masterPresetIndex]})..."
                                             scope.launch(Dispatchers.IO) {
-                                                val res = LinuxRuntimeManager.masterAudio(activeWorkspace, item.name)
+                                                val res = LinuxRuntimeManager.masterAudio(activeWorkspace, item.name, chosenPreset)
                                                 withContext(Dispatchers.Main) {
                                                     isMastering = false
                                                     if (res.optString("status") == "ok") {
@@ -1448,9 +1554,7 @@ fun VoiceoverScreen(
                                         scope.launch(Dispatchers.IO) {
                                             LinuxRuntimeManager.setActiveWorkspace(projName)
                                             withContext(Dispatchers.Main) {
-                                                activeWorkspace = projName
                                                 showProjectPicker = false
-                                                refreshScripts()
                                                 refreshRecordings()
                                             }
                                         }

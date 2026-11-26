@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -127,6 +128,8 @@ fun ProjectBoardScreen(
 
     // Render state
     var burnSubtitles by remember { mutableStateOf(true) }
+    var subtitlePresetIndex by remember { mutableIntStateOf(0) } // 0: safe_916, 1: center_bold, 2: bottom_169
+    val subtitlePresetOptions = listOf("Safe 9:16", "Center Bold", "Bottom 16:9")
     var gentleMotion by remember { mutableStateOf(true) }
     var resolutionIndex by remember { mutableIntStateOf(0) } // 0: 720p, 1: 1080p
     val resolutionOptions = listOf("720p Fast", "1080p HD")
@@ -137,6 +140,12 @@ fun ProjectBoardScreen(
     var outputFile by remember { mutableStateOf<String?>(null) }
     var outputFileSize by remember { mutableStateOf(0L) }
     var renderError by remember { mutableStateOf<String?>(null) }
+
+    // Publish Kit state
+    var publishTitle by remember { mutableStateOf("") }
+    var publishDescription by remember { mutableStateOf("") }
+    var publishTags by remember { mutableStateOf("") }
+    var isGeneratingPublishKit by remember { mutableStateOf(false) }
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -162,7 +171,7 @@ fun ProjectBoardScreen(
         try {
             mediaPlayer?.stop()
             mediaPlayer?.release()
-        } catch (_) {}
+        } catch (_: Exception) {}
         mediaPlayer = null
         playingAudioPath = null
     }
@@ -182,7 +191,7 @@ fun ProjectBoardScreen(
             mp.setOnCompletionListener { stopAudio() }
             mediaPlayer = mp
             playingAudioPath = file.absolutePath
-        } catch (_) {
+        } catch (_: Exception) {
             stopAudio()
         }
     }
@@ -242,6 +251,17 @@ fun ProjectBoardScreen(
                         if (outFile.exists()) {
                             outputFileSize = outFile.length()
                         }
+                    }
+
+                    // Publish Kit
+                    val pkObj = proj.optJSONObject("publish_kit")
+                    if (pkObj != null) {
+                        publishTitle = pkObj.optString("title", "")
+                        publishDescription = pkObj.optString("description", "")
+                        publishTags = pkObj.optString("tags", "")
+                    }
+                    if (aspectRatio == "16:9" && subtitlePresetIndex == 0) {
+                        subtitlePresetIndex = 2
                     }
                 }
             }
@@ -392,6 +412,40 @@ fun ProjectBoardScreen(
         }
     }
 
+    val batchVisualImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty() && scenesList.isNotEmpty()) {
+            scope.launch(Dispatchers.IO) {
+                val importedPaths = mutableListOf<String>()
+                for (uri in uris) {
+                    val res = LinuxRuntimeManager.importFileToWorkspaceAssets(context, workspaceName, uri)
+                    res.onSuccess { relPath -> importedPaths.add(relPath) }
+                }
+                withContext(Dispatchers.Main) {
+                    if (importedPaths.isNotEmpty()) {
+                        val firstEmptyIdx = scenesList.indexOfFirst { it.visual.isBlank() }
+                        var targetIdx = if (firstEmptyIdx >= 0) firstEmptyIdx else 0
+                        var assignedCount = 0
+                        for (relPath in importedPaths) {
+                            if (targetIdx in scenesList.indices) {
+                                scenesList[targetIdx] = scenesList[targetIdx].copy(visual = relPath)
+                                targetIdx++
+                                assignedCount++
+                            }
+                        }
+                        saveProjectData()
+                        statusMessage = "$assignedCount visual diimpor & dipasangkan"
+                    } else {
+                        errorMessage = "Gagal mengimpor file visual"
+                    }
+                }
+            }
+        } else if (uris.isNotEmpty()) {
+            errorMessage = "Buat adegan terlebih dahulu sebelum Batch Import"
+        }
+    }
+
     // Polling render status
     LaunchedEffect(isRendering) {
         while (isRendering) {
@@ -453,9 +507,9 @@ fun ProjectBoardScreen(
                                         WorkspaceFileItem(
                                             name = obj.optString("name", ""),
                                             relPath = obj.optString("rel_path", ""),
-                                            size = obj.optLong("size", 0),
-                                            updatedAt = obj.optString("updated_at", ""),
-                                            isDirectory = obj.optBoolean("is_directory", false)
+                                            size = obj.optLong("size", 0L),
+                                            category = obj.optString("category", "other"),
+                                            updatedAt = obj.optLong("updated_at", 0L)
                                         )
                                     )
                                 }
@@ -682,6 +736,36 @@ fun ProjectBoardScreen(
                                     ChatController.setDraftPrompt("Bantu susun ulang adegan dan beat_role untuk project '$workspaceName': ")
                                     onNavigateToAgent?.invoke()
                                 }
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            StudioSmallButton(
+                                text = "Copy All Prompts",
+                                enabled = scenesList.isNotEmpty(),
+                                onClick = {
+                                    val compiled = scenesList.mapIndexed { idx, sc ->
+                                        val num = String.format(Locale.US, "%02d", idx + 1)
+                                        "Scene $num: ${sc.prompt.ifBlank { sc.narration }}"
+                                    }.joinToString("\n\n")
+                                    clipboardManager.setText(AnnotatedString(compiled))
+                                    statusMessage = "Semua prompt disalin ke clipboard"
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                            StudioSmallButton(
+                                text = "Batch Import",
+                                isPrimary = true,
+                                enabled = scenesList.isNotEmpty(),
+                                onClick = {
+                                    batchVisualImportLauncher.launch("*/*")
+                                },
+                                modifier = Modifier.weight(1f)
                             )
                         }
 
@@ -1329,6 +1413,22 @@ fun ProjectBoardScreen(
                                 )
                             }
 
+                            if (burnSubtitles) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "POSISI SUBTITLE SAFE-ZONE",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextMuted
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                StudioSegmentedControl(
+                                    options = subtitlePresetOptions,
+                                    selectedIndex = subtitlePresetIndex,
+                                    onSelect = { subtitlePresetIndex = it }
+                                )
+                            }
+
                             Spacer(modifier = Modifier.height(10.dp))
 
                             // Gentle Motion
@@ -1444,12 +1544,18 @@ fun ProjectBoardScreen(
                                     renderStep = "Mengirim tugas render ke FFmpeg..."
                                     renderError = null
                                     val resStr = if (resolutionIndex == 1) "1080p" else "720p"
+                                    val subPresetKey = when (subtitlePresetIndex) {
+                                        1 -> "center_bold"
+                                        2 -> "bottom_169"
+                                        else -> "safe_916"
+                                    }
                                     scope.launch(Dispatchers.IO) {
                                         val res = LinuxRuntimeManager.startRender(
                                             workspace = workspaceName,
                                             burnSubtitles = burnSubtitles,
                                             motion = gentleMotion,
-                                            resolution = resStr
+                                            resolution = resStr,
+                                            subtitlePreset = subPresetKey
                                         )
                                         withContext(Dispatchers.Main) {
                                             res.onFailure { err ->
@@ -1524,6 +1630,111 @@ fun ProjectBoardScreen(
                                     }
                                 }
                             }
+                        }
+
+                        // PUBLISH KIT
+                        StudioCard {
+                            StudioSectionHeader(
+                                title = "Publish Kit",
+                                action = {
+                                    StudioSmallButton(
+                                        text = if (isGeneratingPublishKit) "Generating..." else "Generate Metadata",
+                                        isPrimary = true,
+                                        enabled = !isGeneratingPublishKit,
+                                        onClick = {
+                                            isGeneratingPublishKit = true
+                                            scope.launch(Dispatchers.IO) {
+                                                val res = LinuxRuntimeManager.generatePublishKit(workspaceName)
+                                                withContext(Dispatchers.Main) {
+                                                    isGeneratingPublishKit = false
+                                                    res.onSuccess { kit ->
+                                                        publishTitle = kit.optString("title", "")
+                                                        publishDescription = kit.optString("description", "")
+                                                        publishTags = kit.optString("tags", "")
+                                                        statusMessage = "Publish Kit siap disalin"
+                                                    }.onFailure { err ->
+                                                        errorMessage = err.message ?: "Gagal membuat Publish Kit"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(text = "Title", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = TextSecondary)
+                                StudioSmallButton(
+                                    text = "Copy",
+                                    enabled = publishTitle.isNotBlank(),
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(publishTitle))
+                                        statusMessage = "Title disalin"
+                                    }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            StudioTextField(
+                                value = publishTitle,
+                                onValueChange = { publishTitle = it },
+                                placeholder = "Judul video..."
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(text = "Description", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = TextSecondary)
+                                StudioSmallButton(
+                                    text = "Copy",
+                                    enabled = publishDescription.isNotBlank(),
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(publishDescription))
+                                        statusMessage = "Description disalin"
+                                    }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            StudioTextField(
+                                value = publishDescription,
+                                onValueChange = { publishDescription = it },
+                                placeholder = "Deskripsi video...",
+                                singleLine = false,
+                                minLines = 2,
+                                maxLines = 4
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(text = "Tags", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = TextSecondary)
+                                StudioSmallButton(
+                                    text = "Copy",
+                                    enabled = publishTags.isNotBlank(),
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(publishTags))
+                                        statusMessage = "Tags disalin"
+                                    }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            StudioTextField(
+                                value = publishTags,
+                                onValueChange = { publishTags = it },
+                                placeholder = "#tag1 #tag2 #tag3"
+                            )
                         }
                     }
                 }

@@ -35,11 +35,19 @@ data class ChatSessionSummary(
     val messageCount: Int,
 )
 
+data class VoiceProfile(
+    val voice: String = "en-US-BrianMultilingualNeural",
+    val rate: String = "+0%",
+    val pitch: String = "+0Hz",
+    val masterPreset: String = "natural",
+)
+
 data class ChannelDna(
     val learnedTraits: List<String> = emptyList(),
     val referenceNotes: String = "",
     val avgSceneDuration: Float = 3.5f,
     val styleSummary: String = "",
+    val voiceProfile: VoiceProfile = VoiceProfile(),
 )
 
 data class ChannelProfile(
@@ -990,6 +998,28 @@ object LinuxRuntimeManager {
         }
     }
 
+    fun saveChannelVoiceProfile(channelId: String, profile: VoiceProfile): JSONObject {
+        return try {
+            val vpJson = JSONObject().apply {
+                put("voice", profile.voice)
+                put("rate", profile.rate)
+                put("pitch", profile.pitch)
+                put("master_preset", profile.masterPreset)
+            }
+            val body = JSONObject().apply {
+                put("dna", JSONObject().apply {
+                    put("voice_profile", vpJson)
+                })
+            }.toString()
+            httpRequest("PUT", "/channels/$channelId", body)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal menyimpan voice profile channel")
+            }
+        }
+    }
+
     fun extractChannelDna(channelId: String, referenceText: String): JSONObject {
         return try {
             val body = JSONObject().apply {
@@ -1150,19 +1180,35 @@ object LinuxRuntimeManager {
         workspace: String,
         burnSubtitles: Boolean,
         motion: Boolean,
-        resolution: String
+        resolution: String,
+        subtitlePreset: String = "safe_916"
     ): Result<JSONObject> {
         return try {
             val body = JSONObject().apply {
                 put("burn_subtitles", burnSubtitles)
                 put("motion", motion)
                 put("resolution", resolution)
+                put("subtitle_preset", subtitlePreset)
             }.toString()
             val res = httpRequest("POST", "/workspaces/$workspace/render", body)
             if (res.optString("status") == "ok") {
                 Result.success(res)
             } else {
                 Result.failure(Exception(res.optString("error", "Render request failed")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun generatePublishKit(workspace: String): Result<JSONObject> {
+        return try {
+            val res = httpRequest("POST", "/workspaces/$workspace/publish-kit", "{}", timeoutMs = 45_000)
+            if (res.optString("status") == "ok") {
+                val kit = res.optJSONObject("publish_kit") ?: JSONObject()
+                Result.success(kit)
+            } else {
+                Result.failure(Exception(res.optString("error", "Gagal membuat Publish Kit")))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -1341,11 +1387,12 @@ object LinuxRuntimeManager {
         }
     }
 
-    fun masterAudio(workspace: String, fileNameOrRelPath: String): JSONObject {
+    fun masterAudio(workspace: String, fileNameOrRelPath: String, preset: String = "natural"): JSONObject {
         return try {
             val body = JSONObject().apply {
                 put("workspace", workspace)
                 put("file", fileNameOrRelPath)
+                put("preset", preset)
             }.toString()
             httpRequest("POST", "/audio/master", body, timeoutMs = 120_000)
         } catch (e: Exception) {
