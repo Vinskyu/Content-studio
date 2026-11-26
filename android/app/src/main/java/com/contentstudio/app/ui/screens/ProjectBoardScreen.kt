@@ -443,7 +443,7 @@ fun ProjectBoardScreen(
                     text = "Files",
                     onClick = {
                         scope.launch(Dispatchers.IO) {
-                            val res = LinuxRuntimeManager.listWorkspaceFiles(workspaceName)
+                            val res = LinuxRuntimeManager.getWorkspaceFiles(workspaceName)
                             val arr = res.optJSONArray("files")
                             val list = mutableListOf<WorkspaceFileItem>()
                             if (arr != null) {

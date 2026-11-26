@@ -1367,6 +1367,8 @@ object LinuxRuntimeManager {
         }
     }
 
+    fun listWorkspaceFiles(workspace: String): JSONObject = getWorkspaceFiles(workspace)
+
     fun getWorkspaceDir(workspaceName: String): File {
         val homeDir = appContext?.let { BootstrapInstaller.getPaths(it).homeDir }
             ?: (System.getenv("HOME") ?: "/data/user/0/com.agy/files")
