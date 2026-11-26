@@ -194,7 +194,7 @@ fun SetupScreen(
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                text = "[$clampedStage/4]",
+                                text = "$clampedStage/4",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
@@ -322,7 +322,7 @@ fun SetupScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (copiedLog) "[TERSALIN]" else "[SALIN]",
+                        text = if (copiedLog) "Copied" else "Copy",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         color = TextPrimary,
@@ -332,7 +332,7 @@ fun SetupScreen(
                         }
                     )
                     Text(
-                        text = if (showLogs) "[TUTUP]" else "[LIHAT]",
+                        text = if (showLogs) "Close" else "View",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         color = TextPrimary

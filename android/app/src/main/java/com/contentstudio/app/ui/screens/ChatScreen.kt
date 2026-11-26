@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -28,16 +27,17 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,15 +55,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.contentstudio.app.runtime.ChatMessageItem
-import com.contentstudio.app.runtime.ChatSessionSummary
-import com.contentstudio.app.runtime.WorkspaceSummary
+import com.contentstudio.app.runtime.ChatController
 import com.contentstudio.app.runtime.LinuxRuntimeManager
+import com.contentstudio.app.runtime.WorkspaceSummary
 import com.contentstudio.app.ui.theme.ActionSolidBg
 import com.contentstudio.app.ui.theme.ActionSolidText
 import com.contentstudio.app.ui.theme.BadgeGreenBg
@@ -88,6 +91,205 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+@Composable
+fun MarkdownFormattedLine(line: String, modifier: Modifier = Modifier) {
+    val annotated = remember(line) {
+        buildAnnotatedString {
+            var i = 0
+            while (i < line.length) {
+                if (line.startsWith("**", i)) {
+                    val next = line.indexOf("**", i + 2)
+                    if (next != -1) {
+                        pushStyle(SpanStyle(fontWeight = FontWeight.Bold, color = TextPrimary))
+                        append(line.substring(i + 2, next))
+                        pop()
+                        i = next + 2
+                        continue
+                    }
+                } else if (line.startsWith("`", i)) {
+                    val next = line.indexOf("`", i + 1)
+                    if (next != -1) {
+                        pushStyle(
+                            SpanStyle(
+                                fontFamily = FontFamily.Monospace,
+                                background = CardHighlight,
+                                color = TextPrimary
+                            )
+                        )
+                        append(" ${line.substring(i + 1, next)} ")
+                        pop()
+                        i = next + 1
+                        continue
+                    }
+                }
+                append(line[i])
+                i++
+            }
+        }
+    }
+
+    Text(
+        text = annotated,
+        fontFamily = FontFamily.Default,
+        fontSize = 14.sp,
+        lineHeight = 22.sp,
+        color = TextPrimary,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun MarkdownContent(
+    content: String,
+    onCopyCode: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val lines = remember(content) { content.split("\n") }
+
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        var inCodeBlock = false
+        val codeBuffer = StringBuilder()
+        var codeLang = ""
+
+        for (rawLine in lines) {
+            val line = rawLine.trimEnd()
+            if (line.startsWith("```")) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true
+                    codeLang = line.removePrefix("```").trim()
+                    codeBuffer.clear()
+                } else {
+                    inCodeBlock = false
+                    val codeContent = codeBuffer.toString().trimEnd()
+                    val langLabel = codeLang.ifBlank { "code" }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(BgDark)
+                            .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(CardHighlight)
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = langLabel.uppercase(),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextSecondary
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(SurfaceCard)
+                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                    .clickable { onCopyCode(codeContent) }
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = "Copy",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+                        Text(
+                            text = codeContent,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                            color = TextPrimary,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                    codeBuffer.clear()
+                    codeLang = ""
+                }
+                continue
+            }
+
+            if (inCodeBlock) {
+                codeBuffer.append(rawLine).append("\n")
+                continue
+            }
+
+            if (line.startsWith("### ")) {
+                Text(
+                    text = line.removePrefix("### ").trim(),
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+                )
+            } else if (line.startsWith("## ")) {
+                Text(
+                    text = line.removePrefix("## ").trim(),
+                    fontFamily = FontFamily.Default,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                )
+            } else if (line.startsWith("# ")) {
+                Text(
+                    text = line.removePrefix("# ").trim(),
+                    fontFamily = FontFamily.Default,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+                )
+            } else if (line.startsWith("- ") || line.startsWith("* ")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(text = "•", color = TextSecondary, fontSize = 14.sp)
+                    MarkdownFormattedLine(line.substring(2).trim(), modifier = Modifier.weight(1f))
+                }
+            } else if (line.matches(Regex("^\\d+\\.\\s.*"))) {
+                val prefix = line.substringBefore(".") + "."
+                val rest = line.substringAfter(".").trim()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(text = prefix, color = TextSecondary, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                    MarkdownFormattedLine(rest, modifier = Modifier.weight(1f))
+                }
+            } else if (line.isBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+            } else {
+                MarkdownFormattedLine(line)
+            }
+        }
+
+        if (inCodeBlock && codeBuffer.isNotEmpty()) {
+            val unclosed = codeBuffer.toString().trimEnd()
+            Text(
+                text = unclosed,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = TextPrimary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(BgDark)
+                    .padding(8.dp)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -97,18 +299,21 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    val activeSessionId by LinuxRuntimeManager.activeSessionId.collectAsState()
+    val messages by ChatController.messages.collectAsState()
+    val isStreaming by ChatController.isStreaming.collectAsState()
+    val activeSessionId by ChatController.activeSessionId.collectAsState()
+    val sessions by ChatController.sessions.collectAsState()
+    val liveStatus by ChatController.liveStatus.collectAsState()
+    val errorMessage by ChatController.errorMessage.collectAsState()
+
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
-    val messages = remember { mutableStateListOf<ChatMessageItem>() }
-    val sessions = remember { mutableStateListOf<ChatSessionSummary>() }
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
 
     var inputText by remember { mutableStateOf("") }
-    var isStreaming by remember { mutableStateOf(false) }
-    var liveStatus by remember { mutableStateOf("") }
     var showHistorySheet by remember { mutableStateOf(false) }
     var showWorkspaceSheet by remember { mutableStateOf(false) }
     var copiedMsgId by remember { mutableStateOf<String?>(null) }
+    var selectModalText by remember { mutableStateOf<String?>(null) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "loading_line")
     val loadingPillFraction by infiniteTransition.animateFloat(
@@ -120,54 +325,6 @@ fun ChatScreen(
         ),
         label = "loading_pill"
     )
-
-    fun loadSessionMessages(sessionId: String) {
-        if (sessionId.isBlank()) return
-        scope.launch(Dispatchers.IO) {
-            val res = LinuxRuntimeManager.getSession(sessionId)
-            val sesObj = res.optJSONObject("session") ?: return@launch
-            val arr = sesObj.optJSONArray("messages")
-            val loaded = mutableListOf<ChatMessageItem>()
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    val m = arr.getJSONObject(i)
-                    loaded.add(
-                        ChatMessageItem(
-                            isUser = m.optString("role") == "user",
-                            text = m.optString("content", "")
-                        )
-                    )
-                }
-            }
-            withContext(Dispatchers.Main) {
-                messages.clear()
-                messages.addAll(loaded)
-            }
-        }
-    }
-
-    fun refreshSessionsList() {
-        scope.launch(Dispatchers.IO) {
-            val res = LinuxRuntimeManager.listSessions()
-            val arr = res.optJSONArray("sessions") ?: return@launch
-            val list = mutableListOf<ChatSessionSummary>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                list.add(
-                    ChatSessionSummary(
-                        id = obj.optString("id"),
-                        title = obj.optString("title", "Sesi Baru"),
-                        updatedAt = obj.optLong("updated_at", 0L),
-                        messageCount = obj.optInt("message_count", 0)
-                    )
-                )
-            }
-            withContext(Dispatchers.Main) {
-                sessions.clear()
-                sessions.addAll(list)
-            }
-        }
-    }
 
     fun refreshWorkspacesList() {
         scope.launch(Dispatchers.IO) {
@@ -192,90 +349,8 @@ fun ChatScreen(
         }
     }
 
-    fun startNewSession() {
-        if (isStreaming) return
-        scope.launch(Dispatchers.IO) {
-            val res = LinuxRuntimeManager.createSession()
-            val newId = res.optJSONObject("session")?.optString("id", "") ?: ""
-            withContext(Dispatchers.Main) {
-                if (newId.isNotBlank()) {
-                    messages.clear()
-                }
-            }
-            refreshSessionsList()
-        }
-    }
-
-    fun sendMessage(prompt: String) {
-        val cleanPrompt = prompt.trim()
-        if (cleanPrompt.isEmpty() || isStreaming) return
-
-        inputText = ""
-        isStreaming = true
-        liveStatus = "Mengirim ke Antigravity..."
-
-        messages.add(ChatMessageItem(isUser = true, text = cleanPrompt))
-        val agentId = java.util.UUID.randomUUID().toString()
-        messages.add(ChatMessageItem(id = agentId, isUser = false, text = "", isStreaming = true))
-
-        scope.launch(Dispatchers.IO) {
-            var sid = activeSessionId
-            if (sid.isBlank()) {
-                val created = LinuxRuntimeManager.createSession()
-                sid = created.optJSONObject("session")?.optString("id", "") ?: ""
-            }
-
-            val acc = StringBuilder()
-            LinuxRuntimeManager.sendChatStream(
-                sessionId = sid,
-                message = cleanPrompt,
-                workspace = activeWorkspace.ifBlank { null },
-                onStatus = { st ->
-                    scope.launch(Dispatchers.Main) { liveStatus = st }
-                },
-                onDelta = { delta ->
-                    acc.append(delta)
-                    val currentTxt = acc.toString()
-                    scope.launch(Dispatchers.Main) {
-                        val idx = messages.indexOfFirst { it.id == agentId }
-                        if (idx >= 0) {
-                            messages[idx] = messages[idx].copy(text = currentTxt)
-                        }
-                    }
-                },
-                onDone = { finalTxt ->
-                    scope.launch(Dispatchers.Main) {
-                        val idx = messages.indexOfFirst { it.id == agentId }
-                        if (idx >= 0) {
-                            val resolved = if (finalTxt.isNotBlank()) finalTxt else acc.toString()
-                            messages[idx] = messages[idx].copy(text = resolved, isStreaming = false)
-                        }
-                        isStreaming = false
-                        liveStatus = ""
-                    }
-                    refreshSessionsList()
-                },
-                onError = { errTxt ->
-                    scope.launch(Dispatchers.Main) {
-                        val idx = messages.indexOfFirst { it.id == agentId }
-                        if (idx >= 0) {
-                            val existing = acc.toString()
-                            val combined = if (existing.isNotBlank()) "$existing\n\n[Error] $errTxt" else "[Error] $errTxt"
-                            messages[idx] = messages[idx].copy(text = combined, isStreaming = false)
-                        }
-                        isStreaming = false
-                        liveStatus = ""
-                    }
-                }
-            )
-        }
-    }
-
-    LaunchedEffect(activeSessionId) {
-        if (activeSessionId.isNotBlank()) {
-            loadSessionMessages(activeSessionId)
-        }
-        refreshSessionsList()
+    LaunchedEffect(Unit) {
+        ChatController.refreshSessions()
         refreshWorkspacesList()
     }
 
@@ -290,13 +365,13 @@ fun ChatScreen(
             .fillMaxSize()
             .background(BgDark)
     ) {
-        // TOP BAR (Flat dengan hairline bawah 1.dp #26262B)
+        // TOP BAR
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(SurfaceCard)
                 .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 11.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -305,9 +380,9 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "CONTENT STUDIO",
+                    text = "Content Studio",
                     fontFamily = FontFamily.Default,
-                    fontSize = 14.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
@@ -316,10 +391,10 @@ fun ChatScreen(
                         .clip(RoundedCornerShape(4.dp))
                         .background(BadgeGreenBg)
                         .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = "[ANTIGRAVITY]",
+                        text = "Antigravity",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -337,11 +412,11 @@ fun ChatScreen(
                         .clip(RoundedCornerShape(4.dp))
                         .background(CardHighlight)
                         .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .clickable { startNewSession() }
-                        .padding(horizontal = 9.dp, vertical = 5.dp)
+                        .clickable { ChatController.startNewSession(activeWorkspace) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Text(
-                        text = "[BARU]",
+                        text = "New",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -357,13 +432,13 @@ fun ChatScreen(
                         .background(CardHighlight)
                         .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
                         .clickable {
-                            refreshSessionsList()
+                            ChatController.refreshSessions()
                             showHistorySheet = true
                         }
-                        .padding(horizontal = 9.dp, vertical = 5.dp)
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Text(
-                        text = "[RIWAYAT]",
+                        text = "History",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -375,7 +450,7 @@ fun ChatScreen(
             }
         }
 
-        // SUB-BAR WORKSPACE (Pill tipis di bawah top bar, anti-pecah di layar HP)
+        // SUB-BAR: PROJECT SELECTOR
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -385,38 +460,51 @@ fun ChatScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (activeWorkspace.isNotBlank()) CardHighlight else SurfaceCard)
-                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                    .clickable {
-                        refreshWorkspacesList()
-                        showWorkspaceSheet = true
-                    }
-                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (activeWorkspace.isNotBlank()) "[PROYEK: $activeWorkspace]" else "[PILIH PROYEK]",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
+                    text = if (activeWorkspace.isNotBlank()) "Project: $activeWorkspace" else "No active project",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
                     color = if (activeWorkspace.isNotBlank()) TextPrimary else TextSecondary,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(CardHighlight)
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                        .clickable {
+                            refreshWorkspacesList()
+                            showWorkspaceSheet = true
+                        }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "Switch",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+            }
+
+            if (isStreaming && liveStatus.isNotBlank()) {
+                Text(
+                    text = liveStatus,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = BadgeGreenText,
+                    maxLines = 1,
                     softWrap = false
                 )
             }
-
-            Text(
-                text = if (activeSessionId.isNotBlank()) activeSessionId.takeLast(8) else "sesi baru",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                color = TextMuted,
-                maxLines = 1,
-                softWrap = false
-            )
         }
 
         // CHAT THREAD
@@ -434,15 +522,15 @@ fun ChatScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "Content Studio",
+                        text = "Content Studio Agent",
                         fontFamily = FontFamily.Default,
-                        fontSize = 15.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Tulis instruksi atau brief produksi konten di bawah.",
+                        text = "Enter production instructions or script briefs below.",
                         fontFamily = FontFamily.Default,
                         fontSize = 13.sp,
                         color = TextSecondary
@@ -454,11 +542,11 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     items(messages, key = { it.id }) { msg ->
                         if (msg.isUser) {
-                            // User Message Bubble (rata kanan, surface #1F1F24, border #2E2E35, radius 6.dp)
+                            // USER MESSAGE BUBBLE
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.End
@@ -471,24 +559,20 @@ fun ChatScreen(
                                         .border(1.dp, UserBubbleBorder, RoundedCornerShape(6.dp))
                                         .padding(horizontal = 13.dp, vertical = 10.dp)
                                 ) {
-                                    SelectionContainer {
-                                        Text(
-                                            text = msg.text,
-                                            fontFamily = FontFamily.Default,
-                                            fontSize = 14.sp,
-                                            lineHeight = 20.sp,
-                                            color = TextPrimary
-                                        )
-                                    }
+                                    Text(
+                                        text = msg.text,
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp,
+                                        color = TextPrimary
+                                    )
                                 }
                             }
                         } else {
-                            // AI Message: Flat editorial block rata kiri (penuh, nyaman dibaca, line-height 22.sp)
-                            val hasError = msg.text.contains("[Error]")
-                            val isPureError = msg.text.trim().startsWith("[Error]")
+                            // ASSISTANT MESSAGE CARD
+                            val isPureError = msg.text.trim().startsWith("Error:") || msg.text.trim().startsWith("[Error]")
 
                             if (isPureError) {
-                                // Blok pesan error: card matte dark-red (#221212 bg, #522323 border, #FCA5A5 teks) + [SALIN]
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -504,17 +588,16 @@ fun ChatScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "ERROR SISTEM",
+                                            text = "System Error",
                                             fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
+                                            fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = ErrorCardText
                                         )
                                         Box(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(4.dp))
-                                                .background(CardHighlight)
-                                                .border(1.dp, ErrorCardBorder, RoundedCornerShape(4.dp))
+                                                .background(SurfaceCard)
                                                 .clickable {
                                                     clipboardManager.setText(AnnotatedString(msg.text))
                                                     copiedMsgId = msg.id
@@ -522,23 +605,20 @@ fun ChatScreen(
                                                 .padding(horizontal = 7.dp, vertical = 3.dp)
                                         ) {
                                             Text(
-                                                text = if (copiedMsgId == msg.id) "[TERSALIN]" else "[SALIN]",
+                                                text = if (copiedMsgId == msg.id) "Copied" else "Copy",
                                                 fontFamily = FontFamily.Monospace,
                                                 fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = ErrorCardText
+                                                color = TextPrimary
                                             )
                                         }
                                     }
-                                    SelectionContainer {
-                                        Text(
-                                            text = msg.text,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 12.sp,
-                                            lineHeight = 18.sp,
-                                            color = ErrorCardText
-                                        )
-                                    }
+                                    Text(
+                                        text = msg.text,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 12.sp,
+                                        lineHeight = 18.sp,
+                                        color = ErrorCardText
+                                    )
                                 }
                             } else {
                                 Column(
@@ -547,431 +627,478 @@ fun ChatScreen(
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(SurfaceCard)
                                         .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                        .padding(14.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                        .padding(13.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "[ANTIGRAVITY]",
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = TextSecondary
-                                        )
-
-                                        if (msg.text.isNotBlank()) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .background(CardHighlight)
-                                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                                    .clickable {
-                                                        clipboardManager.setText(AnnotatedString(msg.text))
-                                                        copiedMsgId = msg.id
-                                                    }
-                                                    .padding(horizontal = 7.dp, vertical = 3.dp)
-                                            ) {
-                                                Text(
-                                                    text = if (copiedMsgId == msg.id) "[TERSALIN]" else "[SALIN]",
-                                                    fontFamily = FontFamily.Monospace,
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = TextPrimary
-                                                )
-                                            }
+                                    // Markdown parsed message
+                                    MarkdownContent(
+                                        content = msg.text.ifBlank { "..." },
+                                        onCopyCode = { code ->
+                                            clipboardManager.setText(AnnotatedString(code))
                                         }
-                                    }
+                                    )
 
-                                    SelectionContainer {
-                                        Text(
-                                            text = if (msg.text.isBlank() && msg.isStreaming) "Memproses..." else msg.text,
-                                            fontFamily = FontFamily.Default,
-                                            fontSize = 14.sp,
-                                            lineHeight = 22.sp,
-                                            color = TextPrimary
-                                        )
-                                    }
-
-                                    if (hasError && !isPureError) {
-                                        val errorPart = msg.text.substringAfter("[Error]").trim()
-                                        Column(
+                                    if (msg.isStreaming) {
+                                        BoxWithConstraints(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(ErrorCardBg)
-                                                .border(1.dp, ErrorCardBorder, RoundedCornerShape(4.dp))
-                                                .padding(10.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                                .height(2.dp)
+                                                .background(ProgressBarTrack)
                                         ) {
-                                            Text(
-                                                text = "ERROR TAMBAHAN",
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = ErrorCardText
-                                            )
-                                            Text(
-                                                text = errorPart,
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 11.sp,
-                                                color = ErrorCardText
+                                            val w = maxWidth
+                                            val pillWidth = w * 0.35f
+                                            val pillOffset = (w * loadingPillFraction).coerceIn(0.dp, w - pillWidth)
+                                            Box(
+                                                modifier = Modifier
+                                                    .offset(x = pillOffset)
+                                                    .width(pillWidth)
+                                                    .fillMaxHeight()
+                                                    .background(ProgressBarFill)
                                             )
                                         }
                                     }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
-        // INDIKATOR LOADING HALUS (Saat streaming)
-        if (isStreaming) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SurfaceCard)
-                    .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                    .padding(horizontal = 16.dp, vertical = 7.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (liveStatus.isNotBlank()) liveStatus else "Memproses...",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 12.sp,
-                        color = TextSecondary
-                    )
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(CardHighlight)
-                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                            .clickable {
-                                LinuxRuntimeManager.stopChat()
-                                isStreaming = false
-                                liveStatus = ""
-                            }
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = "[BERHENTI]",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                    }
-                }
+                                    // Action buttons row: Copy and Select
+                                    if (!msg.isStreaming && msg.text.isNotBlank()) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.End,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(4.dp))
+                                                        .background(CardHighlight)
+                                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                                        .clickable {
+                                                            clipboardManager.setText(AnnotatedString(msg.text))
+                                                            copiedMsgId = msg.id
+                                                        }
+                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = if (copiedMsgId == msg.id) "Copied" else "Copy",
+                                                        fontFamily = FontFamily.Monospace,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = TextPrimary
+                                                    )
+                                                }
 
-                // Garis tipis animasi (2.dp)
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(ProgressBarTrack)
-                ) {
-                    val trackWidth = maxWidth
-                    val pillWidth = trackWidth * 0.35f
-                    val offset = trackWidth * loadingPillFraction
-                    Box(
-                        modifier = Modifier
-                            .offset(x = offset)
-                            .width(pillWidth)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(ProgressBarFill)
-                    )
-                }
-            }
-        }
-
-        // INPUT BAR BAWAH (Container matte #161619, border #2A2A30, radius 6.dp, multiline hingga 4 baris)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(BgDark)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(InputContainerBg)
-                    .border(1.dp, InputContainerBorder, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 5.dp)
-                ) {
-                    if (inputText.isEmpty()) {
-                        Text(
-                            text = "Tulis instruksi untuk Antigravity...",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 13.sp,
-                            color = TextMuted
-                        )
-                    }
-                    BasicTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        textStyle = TextStyle(
-                            fontFamily = FontFamily.Default,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
-                            color = TextPrimary
-                        ),
-                        cursorBrush = SolidColor(TextPrimary),
-                        maxLines = 4,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = {
-                            if (!isStreaming && inputText.isNotBlank()) {
-                                sendMessage(inputText)
-                            }
-                        }),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                val hasInput = inputText.isNotBlank() && !isStreaming
-                Button(
-                    onClick = { sendMessage(inputText) },
-                    enabled = hasInput,
-                    shape = RoundedCornerShape(4.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (hasInput) ActionSolidBg else CardHighlight,
-                        contentColor = if (hasInput) ActionSolidText else TextMuted,
-                        disabledContainerColor = CardHighlight,
-                        disabledContentColor = TextMuted
-                    ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "KIRIM",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-    }
-
-    // BOTTOM SHEET RIWAYAT SESI
-    if (showHistorySheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showHistorySheet = false },
-            containerColor = SurfaceCard,
-            contentColor = TextPrimary,
-            shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "RIWAYAT PERCAKAPAN",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Button(
-                        onClick = {
-                            startNewSession()
-                            showHistorySheet = false
-                        },
-                        shape = RoundedCornerShape(4.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = ActionSolidBg,
-                            contentColor = ActionSolidText
-                        ),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp)
-                    ) {
-                        Text(
-                            text = "[+ BARU]",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(sessions, key = { it.id }) { ses ->
-                        val isActive = ses.id == activeSessionId
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isActive) CardHighlight else BgDark)
-                                .border(1.dp, if (isActive) TextSecondary else BorderSubtle, RoundedCornerShape(6.dp))
-                                .clickable {
-                                    loadSessionMessages(ses.id)
-                                    showHistorySheet = false
-                                }
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = ses.title,
-                                    fontFamily = FontFamily.Default,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
-                                )
-                                Text(
-                                    text = "${ses.messageCount} pesan",
-                                    fontFamily = FontFamily.Default,
-                                    fontSize = 11.sp,
-                                    color = TextSecondary
-                                )
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(SurfaceCard)
-                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .clickable {
-                                        scope.launch(Dispatchers.IO) {
-                                            LinuxRuntimeManager.deleteSession(ses.id)
-                                            refreshSessionsList()
-                                            if (ses.id == activeSessionId) {
-                                                val created = LinuxRuntimeManager.createSession()
-                                                withContext(Dispatchers.Main) {
-                                                    if (created.optString("status") == "ok") {
-                                                        messages.clear()
-                                                    }
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(4.dp))
+                                                        .background(CardHighlight)
+                                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                                        .clickable { selectModalText = msg.text }
+                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "Select",
+                                                        fontFamily = FontFamily.Monospace,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = TextPrimary
+                                                    )
                                                 }
                                             }
                                         }
                                     }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                Text(
-                                    text = "HAPUS",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    color = TextPrimary
-                                )
-                            }
-                        }
-                    }
-                }
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-            }
-        }
-
-        if (showWorkspaceSheet) {
-            ModalBottomSheet(
-                onDismissRequest = { showWorkspaceSheet = false },
-                containerColor = SurfaceCard,
-                tonalElevation = 0.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = "PILIH WORKSPACE AKTIF",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    if (workspaces.isEmpty()) {
-                        Text(
-                            text = "Belum ada workspace. Buat workspace baru di tab PROYEK.",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 12.sp,
-                            color = TextSecondary,
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-                    } else {
-                        LazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.heightIn(max = 350.dp)
-                        ) {
-                            items(workspaces) { ws ->
-                                val isSelected = ws.name == activeWorkspace
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(if (isSelected) CardHighlight else SurfaceCard)
-                                        .border(1.dp, if (isSelected) TextPrimary else BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable {
-                                            LinuxRuntimeManager.setActiveWorkspace(ws.name)
-                                            showWorkspaceSheet = false
-                                        }
-                                        .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = ws.name,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = TextPrimary
-                                        )
-                                        Text(
-                                            text = "${ws.filesCount} file",
-                                            fontFamily = FontFamily.Default,
-                                            fontSize = 11.sp,
-                                            color = TextSecondary
-                                        )
-                                    }
-                                    if (isSelected) {
-                                        Text(
-                                            text = "[AKTIF]",
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = BadgeGreenText
-                                        )
-                                    }
                                 }
                             }
                         }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+        }
+
+        // ERROR BANNER
+        if (!errorMessage.isNullOrBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ErrorCardBg)
+                    .border(1.dp, ErrorCardBorder, RoundedCornerShape(0.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = errorMessage ?: "",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        color = ErrorCardText,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clickable { ChatController.clearError() }
+                            .padding(4.dp)
+                    ) {
+                        Text(text = "Dismiss", color = ErrorCardText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // INPUT BAR
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SurfaceCard)
+                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(InputContainerBg)
+                    .border(1.dp, InputContainerBorder, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                if (inputText.isEmpty()) {
+                    Text(
+                        text = "Type message or instruction...",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 13.sp,
+                        color = TextMuted
+                    )
+                }
+                BasicTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    textStyle = TextStyle(
+                        fontFamily = FontFamily.Default,
+                        fontSize = 13.sp,
+                        color = TextPrimary
+                    ),
+                    cursorBrush = SolidColor(TextPrimary),
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (!isStreaming && inputText.isNotBlank()) {
+                                val toSend = inputText
+                                inputText = ""
+                                ChatController.sendMessage(toSend, activeWorkspace)
+                            }
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            if (isStreaming) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(CardHighlight)
+                        .border(1.dp, ErrorCardBorder, RoundedCornerShape(6.dp))
+                        .clickable { ChatController.stopStreaming() }
+                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                ) {
+                    Text(
+                        text = "Stop",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ErrorCardText
+                    )
+                }
+            } else {
+                val canSend = inputText.isNotBlank()
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (canSend) ActionSolidBg else CardHighlight)
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                        .clickable(enabled = canSend) {
+                            val toSend = inputText
+                            inputText = ""
+                            ChatController.sendMessage(toSend, activeWorkspace)
+                        }
+                        .padding(horizontal = 14.dp, vertical = 9.dp)
+                ) {
+                    Text(
+                        text = "Send",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (canSend) ActionSolidText else TextMuted
+                    )
                 }
             }
         }
     }
 
+    // MODAL DIALOG: SELECT AND HIGHLIGHT EXACT TEXT
+    if (selectModalText != null) {
+        val modalContent = selectModalText!!
+        var modalCopied by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { selectModalText = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "Select Text",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 380.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(InputContainerBg)
+                        .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                        .padding(12.dp)
+                ) {
+                    val scroll = rememberScrollState()
+                    SelectionContainer {
+                        Text(
+                            text = modalContent,
+                            fontFamily = FontFamily.Default,
+                            fontSize = 13.sp,
+                            lineHeight = 20.sp,
+                            color = TextPrimary,
+                            modifier = Modifier.verticalScroll(scroll)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(modalContent))
+                        modalCopied = true
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ActionSolidBg,
+                        contentColor = ActionSolidText
+                    )
+                ) {
+                    Text(text = if (modalCopied) "Copied" else "Copy All", color = ActionSolidText)
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { selectModalText = null },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    )
+                ) {
+                    Text(text = "Close", color = TextPrimary)
+                }
+            }
+        )
+    }
+
+    // BOTTOM SHEET: SESSIONS HISTORY
+    if (showHistorySheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showHistorySheet = false },
+            containerColor = SurfaceCard,
+            dragHandle = null
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 18.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Session History",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ActionSolidBg)
+                            .clickable {
+                                showHistorySheet = false
+                                ChatController.startNewSession(activeWorkspace)
+                            }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text(
+                            text = "+ New Session",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ActionSolidText
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                if (sessions.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(text = "No history found.", color = TextSecondary, fontSize = 13.sp)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(sessions) { ses ->
+                            val isCurrent = ses.id == activeSessionId
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isCurrent) CardHighlight else BgDark)
+                                    .border(1.dp, if (isCurrent) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        showHistorySheet = false
+                                        ChatController.loadSession(ses.id)
+                                    }
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = ses.title,
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "${ses.messageCount} messages",
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable { ChatController.deleteSession(ses.id) }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "Delete",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = ErrorCardText
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // BOTTOM SHEET: SWITCH WORKSPACE
+    if (showWorkspaceSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showWorkspaceSheet = false },
+            containerColor = SurfaceCard,
+            dragHandle = null
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 18.dp)
+            ) {
+                Text(
+                    text = "Select Project",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+
+                if (workspaces.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(text = "No projects found.", color = TextSecondary, fontSize = 13.sp)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 350.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(workspaces) { ws ->
+                            val isSel = ws.name == activeWorkspace
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isSel) CardHighlight else BgDark)
+                                    .border(1.dp, if (isSel) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                        showWorkspaceSheet = false
+                                    }
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = ws.name,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary
+                                )
+                                if (isSel) {
+                                    Text(
+                                        text = "Active",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = BadgeGreenText,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -7,13 +7,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -25,17 +30,18 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.contentstudio.app.runtime.ChatController
+import com.contentstudio.app.ui.theme.BadgeGreenText
 import com.contentstudio.app.ui.theme.BgDark
 import com.contentstudio.app.ui.theme.BorderSubtle
-import com.contentstudio.app.ui.theme.CardHighlight
-import com.contentstudio.app.ui.theme.SurfaceCard
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
 
 enum class StudioTab(val label: String) {
-    AGEN("AGEN"),
-    PROYEK("PROYEK"),
-    VO("VO")
+    STUDIO("Studio"),
+    LIBRARY("Library"),
+    VOICE("Voice"),
+    AGENT("Agent")
 }
 
 @Composable
@@ -43,6 +49,7 @@ fun MainStudioScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    val isStreaming by ChatController.isStreaming.collectAsState()
 
     Column(
         modifier = modifier
@@ -56,9 +63,10 @@ fun MainStudioScreen(
                 .fillMaxWidth()
         ) {
             when (selectedTab) {
-                0 -> ChatScreen()
-                1 -> WorkspaceScreen()
+                0 -> WorkspaceScreen()
+                1 -> LibraryScreen()
                 2 -> VoiceoverScreen()
+                3 -> ChatScreen()
             }
         }
 
@@ -67,31 +75,57 @@ fun MainStudioScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
-                .background(SurfaceCard)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .background(BgDark)
+                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp)),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
             StudioTab.values().forEachIndexed { index, tab ->
                 val isSelected = selectedTab == index
-                Box(
+                val isAgentTab = index == 3
+                val showStreamDot = isAgentTab && isStreaming && !isSelected
+
+                Column(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (isSelected) CardHighlight else SurfaceCard)
-                        .border(1.dp, if (isSelected) TextPrimary else BorderSubtle, RoundedCornerShape(4.dp))
-                        .clickable { selectedTab = index }
-                        .padding(horizontal = 20.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center
+                        .weight(1f)
+                        .height(56.dp)
+                        .clickable { selectedTab = index },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "[${tab.label}]",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (isSelected) TextPrimary else TextSecondary,
-                        letterSpacing = 1.sp
+                    // Top indicator line 2.dp
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
+                            .background(if (isSelected) TextPrimary else BgDark)
                     )
+
+                    // Tab Label + Streaming Dot
+                    Row(
+                        modifier = Modifier.padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = tab.label,
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) TextPrimary else TextSecondary,
+                            letterSpacing = 0.5.sp
+                        )
+
+                        if (showStreamDot) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(BadgeGreenText)
+                            )
+                        }
+                    }
                 }
             }
         }

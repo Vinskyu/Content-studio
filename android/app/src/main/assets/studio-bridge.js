@@ -16,6 +16,9 @@ const CONTENT_STUDIO_DIR = path.join(HOME_DIR, 'ContentStudio');
 const WORKSPACES_DIR = path.join(CONTENT_STUDIO_DIR, 'workspaces');
 const SESSIONS_DIR = path.join(HOME_DIR, '.contentstudio', 'sessions');
 const STATE_FILE = path.join(HOME_DIR, '.contentstudio', 'state.json');
+const CHANNELS_FILE = path.join(CONTENT_STUDIO_DIR, 'channels.json');
+const LIBRARY_DIR = path.join(CONTENT_STUDIO_DIR, 'library');
+const LIBRARY_CATEGORIES = ['video', 'audio', 'image', 'other'];
 
 const ANTIGRAVITY_BIN = path.join(PREFIX_DIR, 'bin', 'antigravity');
 const AUTH_MARKER_FILE = path.join(HOME_DIR, '.antigravity_auth_ok');
@@ -24,6 +27,9 @@ const PTY_BRIDGE_FALLBACK = path.join(__dirname, 'pty-bridge.py');
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 fs.mkdirSync(WORKSPACES_DIR, { recursive: true });
+for (const cat of LIBRARY_CATEGORIES) {
+  fs.mkdirSync(path.join(LIBRARY_DIR, cat), { recursive: true });
+}
 
 let activeChatProc = null;
 let activeAuthProc = null;
@@ -126,13 +132,15 @@ function listSessions() {
   for (const f of files) {
     try {
       const data = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
+      const count = Array.isArray(data.messages) ? data.messages.length : 0;
+      if (count === 0) continue;
       sessions.push({
         id: data.id,
         title: data.title || 'Sesi Baru',
         workspace: data.workspace || '',
         created_at: data.created_at || 0,
         updated_at: data.updated_at || 0,
-        message_count: Array.isArray(data.messages) ? data.messages.length : 0,
+        message_count: count,
       });
     } catch (_) {}
   }
@@ -261,6 +269,207 @@ function countFilesRecursive(dir) {
   return { count, latestMtime };
 }
 
+// ── Channel Hub ─────────────────────────────────────────────────────────────
+
+function readChannels() {
+  try {
+    if (fs.existsSync(CHANNELS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CHANNELS_FILE, 'utf8'));
+      if (Array.isArray(data)) return data;
+    }
+  } catch (_) {}
+  return [];
+}
+
+function writeChannels(list) {
+  try {
+    fs.mkdirSync(path.dirname(CHANNELS_FILE), { recursive: true });
+    fs.writeFileSync(CHANNELS_FILE, JSON.stringify(list, null, 2));
+  } catch (_) {}
+}
+
+function createChannel(data) {
+  const name = String(data.name || '').trim();
+  if (!name) {
+    throw new Error('Nama channel tidak boleh kosong');
+  }
+  const channels = readChannels();
+  const id = `chan_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
+  const newChan = {
+    id,
+    name,
+    niche: String(data.niche || '').trim(),
+    target_audience: String(data.target_audience || '').trim(),
+    aspect_ratio: data.aspect_ratio === '16:9' ? '16:9' : '9:16',
+    tone: String(data.tone || '').trim(),
+    style_notes: String(data.style_notes || '').trim(),
+    created_at: Date.now(),
+  };
+  channels.push(newChan);
+  writeChannels(channels);
+  return newChan;
+}
+
+function updateChannel(id, data) {
+  const channels = readChannels();
+  const idx = channels.findIndex((c) => c.id === id);
+  if (idx === -1) {
+    throw new Error(`Channel "${id}" tidak ditemukan`);
+  }
+  const existing = channels[idx];
+  const updated = {
+    ...existing,
+    name: data.name !== undefined ? String(data.name).trim() : existing.name,
+    niche: data.niche !== undefined ? String(data.niche).trim() : existing.niche,
+    target_audience: data.target_audience !== undefined ? String(data.target_audience).trim() : existing.target_audience,
+    aspect_ratio: data.aspect_ratio === '16:9' ? '16:9' : (data.aspect_ratio === '9:16' ? '9:16' : existing.aspect_ratio),
+    tone: data.tone !== undefined ? String(data.tone).trim() : existing.tone,
+    style_notes: data.style_notes !== undefined ? String(data.style_notes).trim() : existing.style_notes,
+    updated_at: Date.now(),
+  };
+  channels[idx] = updated;
+  writeChannels(channels);
+  return updated;
+}
+
+function deleteChannel(id) {
+  const channels = readChannels();
+  const filtered = channels.filter((c) => c.id !== id);
+  if (filtered.length === channels.length) {
+    throw new Error(`Channel "${id}" tidak ditemukan`);
+  }
+  writeChannels(filtered);
+  return { deleted: id };
+}
+
+// ── Workspace & Project Management ──────────────────────────────────────────
+
+function readWorkspaceProject(wsName) {
+  const cleanName = path.basename(String(wsName || ''));
+  const wsPath = path.join(WORKSPACES_DIR, cleanName);
+  if (!cleanName || !fs.existsSync(wsPath)) {
+    throw new Error(`Workspace "${wsName}" tidak ditemukan`);
+  }
+  const projPath = path.join(wsPath, 'project.json');
+  if (fs.existsSync(projPath)) {
+    try {
+      return JSON.parse(fs.readFileSync(projPath, 'utf8'));
+    } catch (_) {}
+  }
+  const defProj = {
+    title: cleanName,
+    channel_id: '',
+    aspect_ratio: '9:16',
+    fps: 30,
+    stage: 'script',
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    scenes: [],
+  };
+  try {
+    fs.writeFileSync(projPath, JSON.stringify(defProj, null, 2));
+  } catch (_) {}
+  return defProj;
+}
+
+function writeWorkspaceProject(wsName, projectData) {
+  const cleanName = path.basename(String(wsName || ''));
+  const wsPath = path.join(WORKSPACES_DIR, cleanName);
+  if (!cleanName || !fs.existsSync(wsPath)) {
+    throw new Error(`Workspace "${wsName}" tidak ditemukan`);
+  }
+  const projPath = path.join(wsPath, 'project.json');
+  const now = Date.now();
+  let current = {};
+  if (fs.existsSync(projPath)) {
+    try { current = JSON.parse(fs.readFileSync(projPath, 'utf8')); } catch (_) {}
+  }
+
+  const merged = {
+    ...current,
+    ...projectData,
+    updated_at: now,
+  };
+  if (!merged.created_at) merged.created_at = now;
+  fs.writeFileSync(projPath, JSON.stringify(merged, null, 2));
+  return merged;
+}
+
+// ── Asset Library ───────────────────────────────────────────────────────────
+
+function listLibraryAssets(filterCategory = null) {
+  const result = [];
+  const categories = filterCategory && LIBRARY_CATEGORIES.includes(filterCategory)
+    ? [filterCategory]
+    : LIBRARY_CATEGORIES;
+
+  for (const cat of categories) {
+    const dir = path.join(LIBRARY_DIR, cat);
+    if (!fs.existsSync(dir)) continue;
+    try {
+      const files = fs.readdirSync(dir, { withFileTypes: true });
+      for (const f of files) {
+        if (!f.isFile()) continue;
+        const full = path.join(dir, f.name);
+        try {
+          const st = fs.statSync(full);
+          result.push({
+            name: f.name,
+            category: cat,
+            size: st.size,
+            mtime: st.mtimeMs,
+            path: full,
+            rel_path: `library/${cat}/${f.name}`,
+          });
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  result.sort((a, b) => b.mtime - a.mtime);
+  return result;
+}
+
+function deleteLibraryAsset(category, fileName) {
+  const safeCat = path.basename(String(category || ''));
+  const safeName = path.basename(String(fileName || ''));
+  if (!safeCat || !safeName || !LIBRARY_CATEGORIES.includes(safeCat)) {
+    throw new Error('Kategori atau nama file library tidak valid');
+  }
+  const target = path.join(LIBRARY_DIR, safeCat, safeName);
+  if (!fs.existsSync(target)) {
+    throw new Error(`File "${safeName}" tidak ditemukan di library/${safeCat}`);
+  }
+  fs.unlinkSync(target);
+  return { deleted: safeName, category: safeCat };
+}
+
+function copyLibraryAssetToWorkspace(category, fileName, wsName, targetDir = null) {
+  const safeCat = path.basename(String(category || ''));
+  const safeName = path.basename(String(fileName || ''));
+  const cleanWs = path.basename(String(wsName || ''));
+
+  if (!cleanWs) throw new Error('Workspace belum ditentukan');
+  const wsPath = path.join(WORKSPACES_DIR, cleanWs);
+  if (!fs.existsSync(wsPath)) throw new Error(`Workspace "${cleanWs}" tidak ditemukan`);
+
+  const srcFile = path.join(LIBRARY_DIR, safeCat, safeName);
+  if (!fs.existsSync(srcFile)) throw new Error(`File library "${safeName}" tidak ditemukan`);
+
+  const sub = targetDir || (safeCat === 'audio' ? 'audio' : 'assets');
+  const destDir = path.join(wsPath, sub);
+  fs.mkdirSync(destDir, { recursive: true });
+  const destFile = path.join(destDir, safeName);
+
+  fs.copyFileSync(srcFile, destFile);
+  return {
+    copied: safeName,
+    source: srcFile,
+    target: destFile,
+    workspace: cleanWs,
+    rel_path: `${sub}/${safeName}`,
+  };
+}
+
 function listWorkspaces() {
   fs.mkdirSync(WORKSPACES_DIR, { recursive: true });
   const entries = fs.readdirSync(WORKSPACES_DIR, { withFileTypes: true });
@@ -277,11 +486,27 @@ function listWorkspaces() {
       dirMtime = fs.statSync(wsPath).mtimeMs;
     } catch (_) {}
 
+    let project = null;
+    try {
+      const projPath = path.join(wsPath, 'project.json');
+      if (fs.existsSync(projPath)) {
+        project = JSON.parse(fs.readFileSync(projPath, 'utf8'));
+      }
+    } catch (_) {}
+
     list.push({
       name: wsName,
       path: wsPath,
       files_count: count,
       updated_at: Math.max(dirMtime, latestMtime),
+      project: project || {
+        title: wsName,
+        channel_id: '',
+        aspect_ratio: '9:16',
+        fps: 30,
+        stage: 'script',
+        scenes: [],
+      },
     });
   }
 
@@ -289,7 +514,7 @@ function listWorkspaces() {
   return list;
 }
 
-function createWorkspace(rawName) {
+function createWorkspace(rawName, channelId = null) {
   const cleanName = String(rawName || '')
     .trim()
     .replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -306,10 +531,36 @@ function createWorkspace(rawName) {
     fs.mkdirSync(path.join(wsPath, sub), { recursive: true });
   }
 
+  let aspectRatio = '9:16';
+  let matchedChannelId = '';
+  if (channelId) {
+    const channels = readChannels();
+    const chan = channels.find((c) => c.id === channelId);
+    if (chan) {
+      matchedChannelId = chan.id;
+      aspectRatio = chan.aspect_ratio || '9:16';
+    }
+  }
+
+  const proj = {
+    title: cleanName,
+    channel_id: matchedChannelId,
+    aspect_ratio: aspectRatio,
+    fps: 30,
+    stage: 'script',
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    scenes: [],
+  };
+  try {
+    fs.writeFileSync(path.join(wsPath, 'project.json'), JSON.stringify(proj, null, 2));
+  } catch (_) {}
+
   return {
     name: cleanName,
     path: wsPath,
     subdirs,
+    project: proj,
   };
 }
 
@@ -854,7 +1105,7 @@ async function handleChat(req, res) {
     timestamp: Date.now(),
   });
   if (session.title === 'Sesi Baru' && session.messages.length === 1) {
-    session.title = userMsg.slice(0, 40);
+    session.title = userMsg.slice(0, 45).trim() || 'Sesi Baru';
   }
   session.updated_at = Date.now();
   saveSession(session);
@@ -873,7 +1124,7 @@ async function handleChat(req, res) {
 
   emit({ type: 'status', text: 'Menjalankan Antigravity...' });
 
-  // Susun instruksi dengan konteks dapur produksi dan workspace
+  // Susun instruksi dengan konteks dapur produksi, channel, dan workspace project
   const activeWorkspace = session.workspace || st.active_workspace || '';
   let wsContextPrefix = '';
   let wsPath = '';
@@ -881,7 +1132,23 @@ async function handleChat(req, res) {
   if (activeWorkspace) {
     wsPath = path.join(WORKSPACES_DIR, activeWorkspace);
     if (fs.existsSync(wsPath)) {
+      let chanInfo = '';
+      let projInfo = '';
+      try {
+        const proj = readWorkspaceProject(activeWorkspace);
+        projInfo = `[Project State: Stage="${proj.stage || 'script'}", Aspect Ratio="${proj.aspect_ratio || '9:16'}", Scenes Count=${Array.isArray(proj.scenes) ? proj.scenes.length : 0}]\n`;
+        if (proj.channel_id) {
+          const channels = readChannels();
+          const matchedChan = channels.find((c) => c.id === proj.channel_id);
+          if (matchedChan) {
+            chanInfo = `[Channel Profile: Name="${matchedChan.name}", Niche="${matchedChan.niche}", Target Audience="${matchedChan.target_audience}", Aspect Ratio="${matchedChan.aspect_ratio}", Tone="${matchedChan.tone}", Style Notes="${matchedChan.style_notes}"]\n`;
+          }
+        }
+      } catch (_) {}
+
       wsContextPrefix = `[Konteks Workspace: "${activeWorkspace}" | Path: "${wsPath}"]\n` +
+        chanInfo +
+        projInfo +
         `Anda beroperasi di workspace ini. Simpan file script ke "${wsPath}/scripts", aset ke "${wsPath}/assets", audio ke "${wsPath}/audio", dan render ke "${wsPath}/output".\n\n`;
     }
   }
@@ -920,6 +1187,7 @@ async function handleChat(req, res) {
   // Parameter antigravity: cwd ke $HOME/ContentStudio agar membaca AGENTS.md, .agents/skills, dan engine/
   const workingDir = fs.existsSync(CONTENT_STUDIO_DIR) ? CONTENT_STUDIO_DIR : HOME_DIR;
   const cliArgs = [];
+  cliArgs.push('--dangerously-skip-permissions');
 
   if (wsPath && fs.existsSync(wsPath)) {
     cliArgs.push('--add-dir', wsPath);
@@ -1053,6 +1321,46 @@ const server = http.createServer(async (req, res) => {
     return handleAuthCode(req, res);
   }
 
+  // ── Channels Endpoints ────────────────────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/channels') {
+    const channels = readChannels();
+    return sendJson(res, 200, { status: 'ok', channels });
+  }
+
+  if (req.method === 'POST' && pathname === '/channels') {
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const chan = createChannel(body);
+      return sendJson(res, 200, { status: 'ok', channel: chan });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal membuat channel' });
+    }
+  }
+
+  const chanMatch = pathname.match(/^\/channels\/([^\/]+)$/);
+  if (req.method === 'PUT' && chanMatch) {
+    const chanId = decodeURIComponent(chanMatch[1]);
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const updated = updateChannel(chanId, body);
+      return sendJson(res, 200, { status: 'ok', channel: updated });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal memperbarui channel' });
+    }
+  }
+
+  if (req.method === 'DELETE' && chanMatch) {
+    const chanId = decodeURIComponent(chanMatch[1]);
+    try {
+      const result = deleteChannel(chanId);
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menghapus channel' });
+    }
+  }
+
   // ── Workspace Endpoints ───────────────────────────────────────────────────
   if (req.method === 'GET' && pathname === '/workspaces') {
     const workspaces = listWorkspaces();
@@ -1068,13 +1376,36 @@ const server = http.createServer(async (req, res) => {
     let body = {};
     try { body = await readJsonBody(req); } catch (_) {}
     try {
-      const created = createWorkspace(body.name);
+      const created = createWorkspace(body.name, body.channel_id || body.channelId || null);
       const st = readState();
       st.active_workspace = created.name;
       writeState(st);
       return sendJson(res, 200, { status: 'ok', workspace: created });
     } catch (e) {
       return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal membuat workspace' });
+    }
+  }
+
+  const wsProjMatch = pathname.match(/^\/workspaces\/([^\/]+)\/project$/);
+  if (req.method === 'GET' && wsProjMatch) {
+    const wsName = decodeURIComponent(wsProjMatch[1]);
+    try {
+      const proj = readWorkspaceProject(wsName);
+      return sendJson(res, 200, { status: 'ok', workspace: wsName, project: proj });
+    } catch (e) {
+      return sendJson(res, 404, { status: 'error', error: e.message || 'Gagal membaca project.json' });
+    }
+  }
+
+  if (req.method === 'PUT' && wsProjMatch) {
+    const wsName = decodeURIComponent(wsProjMatch[1]);
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const updated = writeWorkspaceProject(wsName, body.project || body);
+      return sendJson(res, 200, { status: 'ok', workspace: wsName, project: updated });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menyimpan project.json' });
     }
   }
 
@@ -1096,6 +1427,41 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { status: 'ok', ...result });
     } catch (e) {
       return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menghapus workspace' });
+    }
+  }
+
+  // ── Asset Library Endpoints ───────────────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/library') {
+    const category = urlObj.searchParams.get('category');
+    const assets = listLibraryAssets(category);
+    return sendJson(res, 200, { status: 'ok', assets });
+  }
+
+  const libDeleteMatch = pathname.match(/^\/library\/([^\/]+)\/([^\/]+)$/);
+  if (req.method === 'DELETE' && libDeleteMatch) {
+    const cat = decodeURIComponent(libDeleteMatch[1]);
+    const name = decodeURIComponent(libDeleteMatch[2]);
+    try {
+      const result = deleteLibraryAsset(cat, name);
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menghapus aset library' });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/library/copy-to-workspace') {
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const result = copyLibraryAssetToWorkspace(
+        body.category,
+        body.file_name || body.name,
+        body.workspace,
+        body.target_dir
+      );
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menyalin aset ke workspace' });
     }
   }
 
@@ -1191,6 +1557,16 @@ module.exports = {
   createWorkspace,
   deleteWorkspace,
   scanWorkspaceFiles,
+  readChannels,
+  writeChannels,
+  createChannel,
+  updateChannel,
+  deleteChannel,
+  readWorkspaceProject,
+  writeWorkspaceProject,
+  listLibraryAssets,
+  deleteLibraryAsset,
+  copyLibraryAssetToWorkspace,
   handleTts,
   handleAudioMaster,
 };

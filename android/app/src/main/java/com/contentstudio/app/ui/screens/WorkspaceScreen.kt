@@ -4,7 +4,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.FileProvider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,6 +50,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
+import com.contentstudio.app.runtime.ChannelProfile
 import com.contentstudio.app.runtime.LinuxRuntimeManager
 import com.contentstudio.app.runtime.WorkspaceFileItem
 import com.contentstudio.app.runtime.WorkspaceSummary
@@ -84,21 +85,126 @@ fun WorkspaceScreen(
     val scope = rememberCoroutineScope()
 
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
+    var activeTab by remember { mutableStateOf("projects") } // "projects" or "channels"
+
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
+    val channels = remember { mutableStateListOf<ChannelProfile>() }
     val currentFiles = remember { mutableStateListOf<WorkspaceFileItem>() }
 
-    var showCreateDialog by remember { mutableStateOf(false) }
-    var newWorkspaceName by remember { mutableStateOf("") }
-    var createError by remember { mutableStateOf<String?>(null) }
-    var actionStatus by remember { mutableStateOf<String?>(null) }
-    var isBusy by remember { mutableStateOf(false) }
+    var showCreateProjectDialog by remember { mutableStateOf(false) }
+    var newProjectName by remember { mutableStateOf("") }
+    var selectedChannelForProject by remember { mutableStateOf("") }
+    var projectCreateError by remember { mutableStateOf<String?>(null) }
+
+    var showChannelDialog by remember { mutableStateOf(false) }
+    var editingChannel by remember { mutableStateOf<ChannelProfile?>(null) }
+    var channelNameInput by remember { mutableStateOf("") }
+    var channelNicheInput by remember { mutableStateOf("") }
+    var channelAudienceInput by remember { mutableStateOf("") }
+    var channelAspectInput by remember { mutableStateOf("9:16") }
+    var channelToneInput by remember { mutableStateOf("") }
+    var channelNotesInput by remember { mutableStateOf("") }
+    var channelError by remember { mutableStateOf<String?>(null) }
+
+    var channelToDelete by remember { mutableStateOf<ChannelProfile?>(null) }
+    var workspaceToDelete by remember { mutableStateOf<WorkspaceSummary?>(null) }
+    var fileToDelete by remember { mutableStateOf<WorkspaceFileItem?>(null) }
 
     var previewTitle by remember { mutableStateOf("") }
     var previewContent by remember { mutableStateOf("") }
     var showPreviewDialog by remember { mutableStateOf(false) }
     var copiedPreview by remember { mutableStateOf(false) }
-    var fileToDelete by remember { mutableStateOf<WorkspaceFileItem?>(null) }
-    var workspaceToDelete by remember { mutableStateOf<WorkspaceSummary?>(null) }
+
+    var actionStatus by remember { mutableStateOf<String?>(null) }
+    var isBusy by remember { mutableStateOf(false) }
+
+    fun refreshChannels() {
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.listChannels()
+            val arr = res.optJSONArray("channels") ?: return@launch
+            val list = mutableListOf<ChannelProfile>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    ChannelProfile(
+                        id = obj.optString("id", ""),
+                        name = obj.optString("name", ""),
+                        niche = obj.optString("niche", ""),
+                        targetAudience = obj.optString("target_audience", ""),
+                        aspectRatio = obj.optString("aspect_ratio", "9:16"),
+                        tone = obj.optString("tone", ""),
+                        styleNotes = obj.optString("style_notes", ""),
+                        createdAt = obj.optLong("created_at", 0L),
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                channels.clear()
+                channels.addAll(list)
+            }
+        }
+    }
+
+    fun refreshWorkspaces(autoSelectFirst: Boolean = false) {
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.listWorkspaces()
+            val arr = res.optJSONArray("workspaces") ?: return@launch
+            val list = mutableListOf<WorkspaceSummary>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val proj = obj.optJSONObject("project")
+                val chanId = proj?.optString("channel_id", "") ?: ""
+                val aspect = proj?.optString("aspect_ratio", "9:16") ?: "9:16"
+                val stage = proj?.optString("stage", "script") ?: "script"
+                list.add(
+                    WorkspaceSummary(
+                        name = obj.optString("name", ""),
+                        path = obj.optString("path", ""),
+                        filesCount = obj.optInt("files_count", 0),
+                        updatedAt = obj.optLong("updated_at", 0L),
+                        channelId = chanId,
+                        aspectRatio = aspect,
+                        stage = stage,
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                workspaces.clear()
+                workspaces.addAll(list)
+                if (autoSelectFirst && activeWorkspace.isBlank() && list.isNotEmpty()) {
+                    LinuxRuntimeManager.setActiveWorkspace(list.first().name)
+                }
+            }
+        }
+    }
+
+    fun loadWorkspaceFiles(name: String) {
+        if (name.isBlank()) {
+            currentFiles.clear()
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.getWorkspaceFiles(name)
+            val arr = res.optJSONArray("files") ?: return@launch
+            val list = mutableListOf<WorkspaceFileItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    WorkspaceFileItem(
+                        name = obj.optString("name"),
+                        relPath = obj.optString("rel_path"),
+                        size = obj.optLong("size", 0L),
+                        category = obj.optString("category", "assets"),
+                        updatedAt = obj.optLong("updated_at", 0L)
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                currentFiles.clear()
+                currentFiles.addAll(list)
+            }
+        }
+    }
 
     fun isTextFile(fileName: String): Boolean {
         val ext = fileName.substringAfterLast('.', "").lowercase()
@@ -160,60 +266,6 @@ fun WorkspaceScreen(
         }
     }
 
-    fun refreshWorkspaces(autoSelectFirst: Boolean = false) {
-        scope.launch(Dispatchers.IO) {
-            val res = LinuxRuntimeManager.listWorkspaces()
-            val arr = res.optJSONArray("workspaces") ?: return@launch
-            val list = mutableListOf<WorkspaceSummary>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                list.add(
-                    WorkspaceSummary(
-                        name = obj.optString("name"),
-                        path = obj.optString("path"),
-                        filesCount = obj.optInt("files_count", 0),
-                        updatedAt = obj.optLong("updated_at", 0L)
-                    )
-                )
-            }
-            withContext(Dispatchers.Main) {
-                workspaces.clear()
-                workspaces.addAll(list)
-                if (autoSelectFirst && activeWorkspace.isBlank() && list.isNotEmpty()) {
-                    LinuxRuntimeManager.setActiveWorkspace(list.first().name)
-                }
-            }
-        }
-    }
-
-    fun loadWorkspaceFiles(name: String) {
-        if (name.isBlank()) {
-            currentFiles.clear()
-            return
-        }
-        scope.launch(Dispatchers.IO) {
-            val res = LinuxRuntimeManager.getWorkspaceFiles(name)
-            val arr = res.optJSONArray("files") ?: return@launch
-            val list = mutableListOf<WorkspaceFileItem>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                list.add(
-                    WorkspaceFileItem(
-                        name = obj.optString("name"),
-                        relPath = obj.optString("rel_path"),
-                        size = obj.optLong("size", 0L),
-                        category = obj.optString("category", "assets"),
-                        updatedAt = obj.optLong("updated_at", 0L)
-                    )
-                )
-            }
-            withContext(Dispatchers.Main) {
-                currentFiles.clear()
-                currentFiles.addAll(list)
-            }
-        }
-    }
-
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -237,6 +289,7 @@ fun WorkspaceScreen(
     }
 
     LaunchedEffect(Unit) {
+        refreshChannels()
         refreshWorkspaces(autoSelectFirst = true)
     }
 
@@ -249,7 +302,7 @@ fun WorkspaceScreen(
             .fillMaxSize()
             .background(BgDark)
     ) {
-        // TOP BAR
+        // TOP BAR WITH SWITCHER
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -259,56 +312,100 @@ fun WorkspaceScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // SEGMENT SWITCHER: Projects | Channels
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(BgDark)
+                    .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                    .padding(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(
-                    text = "PROYEK STUDIO",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .background(BadgeGreenBg)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                        .background(if (activeTab == "projects") CardHighlight else BgDark)
+                        .clickable { activeTab = "projects" }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "${workspaces.size} PROYEK",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = BadgeGreenText
+                        text = "Projects",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        fontWeight = if (activeTab == "projects") FontWeight.Bold else FontWeight.Normal,
+                        color = if (activeTab == "projects") TextPrimary else TextSecondary
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (activeTab == "channels") CardHighlight else BgDark)
+                        .clickable { activeTab = "channels" }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Channels",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        fontWeight = if (activeTab == "channels") FontWeight.Bold else FontWeight.Normal,
+                        color = if (activeTab == "channels") TextPrimary else TextSecondary
                     )
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(ActionSolidBg)
-                    .clickable {
-                        newWorkspaceName = ""
-                        createError = null
-                        showCreateDialog = true
-                    }
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = "+ PROYEK BARU",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = ActionSolidText
-                )
+            // ACTION BUTTON
+            if (activeTab == "projects") {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(ActionSolidBg)
+                        .clickable {
+                            newProjectName = ""
+                            selectedChannelForProject = ""
+                            projectCreateError = null
+                            showCreateProjectDialog = true
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "+ New Project",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ActionSolidText
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(ActionSolidBg)
+                        .clickable {
+                            editingChannel = null
+                            channelNameInput = ""
+                            channelNicheInput = ""
+                            channelAudienceInput = ""
+                            channelAspectInput = "9:16"
+                            channelToneInput = ""
+                            channelNotesInput = ""
+                            channelError = null
+                            showChannelDialog = true
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "+ New Channel",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ActionSolidText
+                    )
+                }
             }
         }
 
-        // STATUS / ALERT BANNER
+        // STATUS BANNER
         if (!actionStatus.isNullOrBlank()) {
             Box(
                 modifier = Modifier
@@ -326,73 +423,60 @@ fun WorkspaceScreen(
             }
         }
 
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // SECTION: DAFTAR PROYEK
-            item {
-                Text(
-                    text = "DAFTAR WORKSPACE",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextMuted,
-                    letterSpacing = 1.sp
-                )
-            }
-
-            if (workspaces.isEmpty()) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(SurfaceCard)
-                            .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                            .padding(20.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Belum ada proyek. Ketuk [+ PROYEK BARU] untuk memulai.",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 13.sp,
-                            color = TextSecondary
-                        )
+        // CONTENT SECTION
+        if (activeTab == "channels") {
+            // ── CHANNELS VIEW ────────────────────────────────────────────────
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 32.dp)
+            ) {
+                if (channels.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(SurfaceCard)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No channels created yet. Tap + New Channel to set up a profile.",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 13.sp,
+                                color = TextSecondary
+                            )
+                        }
                     }
-                }
-            } else {
-                items(workspaces) { ws ->
-                    val isActive = ws.name == activeWorkspace
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isActive) CardHighlight else SurfaceCard)
-                            .border(1.dp, if (isActive) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
-                            .clickable {
-                                LinuxRuntimeManager.setActiveWorkspace(ws.name)
-                            }
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = ws.name,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                                if (isActive) {
+                } else {
+                    items(channels) { chan ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(SurfaceCard)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = chan.name,
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(4.dp))
@@ -401,70 +485,282 @@ fun WorkspaceScreen(
                                             .padding(horizontal = 6.dp, vertical = 2.dp)
                                     ) {
                                         Text(
-                                            text = "AKTIF",
+                                            text = chan.aspectRatio,
                                             fontFamily = FontFamily.Monospace,
-                                            fontSize = 9.sp,
+                                            fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = BadgeGreenText
                                         )
                                     }
                                 }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "${ws.filesCount} file total",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 12.sp,
-                                color = TextSecondary
-                            )
-                        }
 
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(if (isActive) ActionSolidBg else CardHighlight)
-                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .clickable {
-                                        LinuxRuntimeManager.setActiveWorkspace(ws.name)
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = if (isActive) "DIPILIH" else "PILIH",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isActive) ActionSolidText else TextPrimary
-                                )
+                                if (chan.niche.isNotBlank() || chan.targetAudience.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = listOf(chan.niche, chan.targetAudience).filter { it.isNotBlank() }.joinToString(" • "),
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 12.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+
+                                if (chan.tone.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Tone: ${chan.tone}",
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 11.sp,
+                                        color = TextMuted
+                                    )
+                                }
                             }
 
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(CardHighlight)
-                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .clickable { workspaceToDelete = ws }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "HAPUS",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = ErrorCardText
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            editingChannel = chan
+                                            channelNameInput = chan.name
+                                            channelNicheInput = chan.niche
+                                            channelAudienceInput = chan.targetAudience
+                                            channelAspectInput = chan.aspectRatio
+                                            channelToneInput = chan.tone
+                                            channelNotesInput = chan.styleNotes
+                                            channelError = null
+                                            showChannelDialog = true
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "Edit",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable { channelToDelete = chan }
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "Delete",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ErrorCardText
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+        } else {
+            // ── PROJECTS VIEW ────────────────────────────────────────────────
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(bottom = 32.dp)
+            ) {
+                item {
+                    Text(
+                        text = "Projects",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextMuted,
+                        letterSpacing = 1.sp
+                    )
+                }
 
-            // SECTION: FILE DALAM PROYEK AKTIF
-            if (activeWorkspace.isNotBlank()) {
+                if (workspaces.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(SurfaceCard)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                                .padding(20.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No projects yet. Tap + New Project to start.",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 13.sp,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                } else {
+                    items(workspaces) { ws ->
+                        val isActive = ws.name == activeWorkspace
+                        val matchedChannel = channels.find { it.id == ws.channelId }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isActive) CardHighlight else SurfaceCard)
+                                .border(1.dp, if (isActive) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
+                                .clickable {
+                                    LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                }
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = ws.name,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                    if (isActive) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(BadgeGreenBg)
+                                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "Active",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = BadgeGreenText
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (matchedChannel != null) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(SurfaceCard)
+                                                .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
+                                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                                        ) {
+                                            Text(
+                                                text = matchedChannel.name,
+                                                fontFamily = FontFamily.Default,
+                                                fontSize = 10.sp,
+                                                color = TextSecondary
+                                            )
+                                        }
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(3.dp))
+                                            .background(SurfaceCard)
+                                            .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
+                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = ws.aspectRatio,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            color = TextSecondary
+                                        )
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(3.dp))
+                                            .background(SurfaceCard)
+                                            .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
+                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = ws.stage.replaceFirstChar { it.uppercase() },
+                                            fontFamily = FontFamily.Default,
+                                            fontSize = 10.sp,
+                                            color = TextSecondary
+                                        )
+                                    }
+
+                                    Text(
+                                        text = "${ws.filesCount} files",
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 11.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                            }
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(if (isActive) ActionSolidBg else CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = if (isActive) "Selected" else "Select",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isActive) ActionSolidText else TextPrimary
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable { workspaceToDelete = ws }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "Delete",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ErrorCardText
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // SECTION: FILES IN ACTIVE PROJECT
                 item {
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(
@@ -473,7 +769,7 @@ fun WorkspaceScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "FILE: $activeWorkspace",
+                            text = if (activeWorkspace.isNotBlank()) "Files in $activeWorkspace" else "Project Files",
                             fontFamily = FontFamily.Default,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -481,23 +777,41 @@ fun WorkspaceScreen(
                             letterSpacing = 1.sp
                         )
 
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(CardHighlight)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                .clickable {
-                                    importLauncher.launch("*/*")
+                        if (activeWorkspace.isNotBlank()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable { loadWorkspaceFiles(activeWorkspace) }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "Refresh",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
                                 }
-                                .padding(horizontal = 9.dp, vertical = 5.dp)
-                        ) {
-                            Text(
-                                text = "[IMPORT ASET]",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary
-                            )
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(ActionSolidBg)
+                                        .clickable { importLauncher.launch("*/*") }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "+ Import",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ActionSolidText
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -514,7 +828,7 @@ fun WorkspaceScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "Belum ada file di proyek ini. Impor media atau mulai perintah di tab AGEN.",
+                                text = "No files in this project yet. Import media or prompt Agent tab.",
                                 fontFamily = FontFamily.Default,
                                 fontSize = 12.sp,
                                 color = TextSecondary
@@ -535,11 +849,11 @@ fun WorkspaceScreen(
                             "output" -> ActionSolidText
                             else -> TextSecondary
                         }
-                        val sizeKb = (file.size / 1024.0)
-                        val sizeStr = if (sizeKb >= 1024) String.format(Locale.US, "%.1f MB", sizeKb / 1024.0) else String.format(Locale.US, "%.0f KB", sizeKb)
-
+                        val sizeKb = file.size / 1024
+                        val sizeStr = if (sizeKb > 1024) String.format(Locale.US, "%.1f MB", sizeKb / 1024.0) else "$sizeKb KB"
                         val isText = isTextFile(file.name)
                         val isMedia = isMediaFile(file.name)
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -608,7 +922,7 @@ fun WorkspaceScreen(
                                             .padding(horizontal = 8.dp, vertical = 5.dp)
                                     ) {
                                         Text(
-                                            text = "BACA",
+                                            text = "Read",
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
@@ -625,7 +939,7 @@ fun WorkspaceScreen(
                                             .padding(horizontal = 8.dp, vertical = 5.dp)
                                     ) {
                                         Text(
-                                            text = "BUKA",
+                                            text = "Open",
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
@@ -643,7 +957,7 @@ fun WorkspaceScreen(
                                         .padding(horizontal = 8.dp, vertical = 5.dp)
                                 ) {
                                     Text(
-                                        text = "SIMPAN",
+                                        text = "Export",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -660,7 +974,7 @@ fun WorkspaceScreen(
                                         .padding(horizontal = 8.dp, vertical = 5.dp)
                                 ) {
                                     Text(
-                                        text = "HAPUS",
+                                        text = "Delete",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -675,17 +989,17 @@ fun WorkspaceScreen(
         }
     }
 
-    // DIALOG PROYEK BARU
-    if (showCreateDialog) {
+    // DIALOG: CREATE NEW PROJECT
+    if (showCreateProjectDialog) {
         AlertDialog(
             onDismissRequest = {
-                if (!isBusy) showCreateDialog = false
+                if (!isBusy) showCreateProjectDialog = false
             },
             containerColor = SurfaceCard,
             shape = RoundedCornerShape(6.dp),
             title = {
                 Text(
-                    text = "PROYEK BARU",
+                    text = "New Project",
                     fontFamily = FontFamily.Default,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
@@ -695,7 +1009,7 @@ fun WorkspaceScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Masukkan nama proyek (folder workspace):",
+                        text = "Project folder name:",
                         fontFamily = FontFamily.Default,
                         fontSize = 12.sp,
                         color = TextSecondary
@@ -709,17 +1023,17 @@ fun WorkspaceScreen(
                             .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
-                        if (newWorkspaceName.isEmpty()) {
+                        if (newProjectName.isEmpty()) {
                             Text(
-                                text = "misal: video_promo_01",
+                                text = "e.g. promo_video_01",
                                 color = TextMuted,
                                 fontSize = 13.sp,
                                 fontFamily = FontFamily.Monospace
                             )
                         }
                         BasicTextField(
-                            value = newWorkspaceName,
-                            onValueChange = { newWorkspaceName = it.replace(" ", "_") },
+                            value = newProjectName,
+                            onValueChange = { newProjectName = it.replace(" ", "_") },
                             modifier = Modifier.fillMaxWidth(),
                             textStyle = TextStyle(
                                 color = TextPrimary,
@@ -731,7 +1045,52 @@ fun WorkspaceScreen(
                         )
                     }
 
-                    if (!createError.isNullOrBlank()) {
+                    if (channels.isNotEmpty()) {
+                        Text(
+                            text = "Link to Channel (optional):",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (selectedChannelForProject.isEmpty()) CardHighlight else BgDark)
+                                    .border(1.dp, if (selectedChannelForProject.isEmpty()) TextPrimary else BorderSubtle, RoundedCornerShape(4.dp))
+                                    .clickable { selectedChannelForProject = "" }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "None",
+                                    fontSize = 11.sp,
+                                    color = if (selectedChannelForProject.isEmpty()) TextPrimary else TextSecondary
+                                )
+                            }
+                            channels.forEach { ch ->
+                                val isChSel = selectedChannelForProject == ch.id
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(if (isChSel) CardHighlight else BgDark)
+                                        .border(1.dp, if (isChSel) TextPrimary else BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable { selectedChannelForProject = ch.id }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = ch.name,
+                                        fontSize = 11.sp,
+                                        color = if (isChSel) TextPrimary else TextSecondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (!projectCreateError.isNullOrBlank()) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -741,7 +1100,7 @@ fun WorkspaceScreen(
                                 .padding(8.dp)
                         ) {
                             Text(
-                                text = createError ?: "",
+                                text = projectCreateError ?: "",
                                 fontFamily = FontFamily.Default,
                                 fontSize = 11.sp,
                                 color = ErrorCardText
@@ -753,24 +1112,27 @@ fun WorkspaceScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val clean = newWorkspaceName.trim()
+                        val clean = newProjectName.trim()
                         if (clean.isBlank()) {
-                            createError = "Nama proyek tidak boleh kosong"
+                            projectCreateError = "Project name cannot be empty"
                             return@Button
                         }
                         isBusy = true
-                        createError = null
+                        projectCreateError = null
                         scope.launch(Dispatchers.IO) {
-                            val res = LinuxRuntimeManager.createWorkspace(clean)
+                            val res = LinuxRuntimeManager.createWorkspace(
+                                clean,
+                                selectedChannelForProject.ifBlank { null }
+                            )
                             withContext(Dispatchers.Main) {
                                 isBusy = false
                                 if (res.optString("status") == "ok") {
-                                    showCreateDialog = false
+                                    showCreateProjectDialog = false
                                     refreshWorkspaces()
                                     LinuxRuntimeManager.setActiveWorkspace(clean)
-                                    actionStatus = "Proyek '$clean' berhasil dibuat"
+                                    actionStatus = "Project '$clean' created"
                                 } else {
-                                    createError = res.optString("error", "Gagal membuat proyek")
+                                    projectCreateError = res.optString("error", "Failed to create project")
                                 }
                             }
                         }
@@ -783,7 +1145,7 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                 ) {
                     Text(
-                        text = "BUAT",
+                        text = "Create",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -792,7 +1154,7 @@ fun WorkspaceScreen(
             },
             dismissButton = {
                 Button(
-                    onClick = { showCreateDialog = false },
+                    onClick = { showCreateProjectDialog = false },
                     shape = RoundedCornerShape(4.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = CardHighlight,
@@ -801,7 +1163,309 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Text(
-                        text = "BATAL",
+                        text = "Cancel",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // DIALOG: CREATE OR EDIT CHANNEL
+    if (showChannelDialog) {
+        val isEdit = editingChannel != null
+        AlertDialog(
+            onDismissRequest = {
+                if (!isBusy) showChannelDialog = false
+            },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = if (isEdit) "Edit Channel" else "New Channel",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Channel Name:", fontSize = 11.sp, color = TextSecondary)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(InputContainerBg)
+                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        BasicTextField(
+                            value = channelNameInput,
+                            onValueChange = { channelNameInput = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
+                            cursorBrush = SolidColor(TextPrimary),
+                            singleLine = true
+                        )
+                    }
+
+                    Text("Niche / Category:", fontSize = 11.sp, color = TextSecondary)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(InputContainerBg)
+                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        BasicTextField(
+                            value = channelNicheInput,
+                            onValueChange = { channelNicheInput = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
+                            cursorBrush = SolidColor(TextPrimary),
+                            singleLine = true
+                        )
+                    }
+
+                    Text("Target Audience:", fontSize = 11.sp, color = TextSecondary)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(InputContainerBg)
+                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        BasicTextField(
+                            value = channelAudienceInput,
+                            onValueChange = { channelAudienceInput = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
+                            cursorBrush = SolidColor(TextPrimary),
+                            singleLine = true
+                        )
+                    }
+
+                    Text("Aspect Ratio:", fontSize = 11.sp, color = TextSecondary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("9:16", "16:9").forEach { ratio ->
+                            val isSel = channelAspectInput == ratio
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (isSel) CardHighlight else BgDark)
+                                    .border(1.dp, if (isSel) TextPrimary else BorderSubtle, RoundedCornerShape(4.dp))
+                                    .clickable { channelAspectInput = ratio }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = ratio,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSel) TextPrimary else TextSecondary
+                                )
+                            }
+                        }
+                    }
+
+                    Text("Tone of Voice:", fontSize = 11.sp, color = TextSecondary)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(InputContainerBg)
+                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        BasicTextField(
+                            value = channelToneInput,
+                            onValueChange = { channelToneInput = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
+                            cursorBrush = SolidColor(TextPrimary),
+                            singleLine = true
+                        )
+                    }
+
+                    Text("Style Notes:", fontSize = 11.sp, color = TextSecondary)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(InputContainerBg)
+                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        BasicTextField(
+                            value = channelNotesInput,
+                            onValueChange = { channelNotesInput = it },
+                            modifier = Modifier.fillMaxSize(),
+                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
+                            cursorBrush = SolidColor(TextPrimary)
+                        )
+                    }
+
+                    if (!channelError.isNullOrBlank()) {
+                        Text(text = channelError ?: "", color = ErrorCardText, fontSize = 11.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = channelNameInput.trim()
+                        if (name.isBlank()) {
+                            channelError = "Channel name cannot be empty"
+                            return@Button
+                        }
+                        isBusy = true
+                        channelError = null
+                        scope.launch(Dispatchers.IO) {
+                            val res = if (isEdit) {
+                                LinuxRuntimeManager.updateChannel(
+                                    id = editingChannel!!.id,
+                                    name = name,
+                                    niche = channelNicheInput,
+                                    targetAudience = channelAudienceInput,
+                                    aspectRatio = channelAspectInput,
+                                    tone = channelToneInput,
+                                    styleNotes = channelNotesInput
+                                )
+                            } else {
+                                LinuxRuntimeManager.createChannel(
+                                    name = name,
+                                    niche = channelNicheInput,
+                                    targetAudience = channelAudienceInput,
+                                    aspectRatio = channelAspectInput,
+                                    tone = channelToneInput,
+                                    styleNotes = channelNotesInput
+                                )
+                            }
+                            withContext(Dispatchers.Main) {
+                                isBusy = false
+                                if (res.optString("status") == "ok") {
+                                    showChannelDialog = false
+                                    refreshChannels()
+                                    actionStatus = if (isEdit) "Channel '$name' updated" else "Channel '$name' created"
+                                } else {
+                                    channelError = res.optString("error", "Failed to save channel")
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ActionSolidBg,
+                        contentColor = ActionSolidText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = if (isEdit) "Save" else "Create",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { showChannelDialog = false },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "Cancel",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // DIALOG: CONFIRM DELETE CHANNEL
+    if (channelToDelete != null) {
+        val targetChan = channelToDelete!!
+        AlertDialog(
+            onDismissRequest = { channelToDelete = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "Delete Channel",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ErrorCardText
+                )
+            },
+            text = {
+                Text(
+                    text = "Delete channel \"${targetChan.name}\" permanently?",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = TextPrimary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val toDel = targetChan.id
+                        val delName = targetChan.name
+                        channelToDelete = null
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.deleteChannel(toDel)
+                            withContext(Dispatchers.Main) {
+                                if (res.optString("status") == "ok") {
+                                    actionStatus = "Channel '$delName' deleted"
+                                    refreshChannels()
+                                } else {
+                                    actionStatus = "Failed to delete channel: ${res.optString("error", "Error")}"
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ErrorCardBg,
+                        contentColor = ErrorCardText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Delete",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { channelToDelete = null },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Cancel",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -863,7 +1527,7 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = if (copiedPreview) "TERSALIN" else "SALIN",
+                        text = if (copiedPreview) "Copied" else "Copy",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -881,7 +1545,7 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "TUTUP",
+                        text = "Close",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -900,7 +1564,7 @@ fun WorkspaceScreen(
             shape = RoundedCornerShape(6.dp),
             title = {
                 Text(
-                    text = "HAPUS FILE",
+                    text = "Delete File",
                     fontFamily = FontFamily.Default,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
@@ -909,7 +1573,7 @@ fun WorkspaceScreen(
             },
             text = {
                 Text(
-                    text = "Hapus file \"${target.name}\" secara permanen dari proyek?",
+                    text = "Delete file \"${target.name}\" permanently from project?",
                     fontFamily = FontFamily.Default,
                     fontSize = 13.sp,
                     color = TextPrimary
@@ -921,11 +1585,11 @@ fun WorkspaceScreen(
                         val deleted = LinuxRuntimeManager.deleteWorkspaceFile(context, activeWorkspace, target.relPath)
                         fileToDelete = null
                         if (deleted) {
-                            actionStatus = "File '${target.name}' telah dihapus"
+                            actionStatus = "File '${target.name}' deleted"
                             loadWorkspaceFiles(activeWorkspace)
                             refreshWorkspaces()
                         } else {
-                            actionStatus = "Gagal menghapus file '${target.name}'"
+                            actionStatus = "Failed to delete file '${target.name}'"
                         }
                     },
                     shape = RoundedCornerShape(4.dp),
@@ -936,7 +1600,7 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "HAPUS",
+                        text = "Delete",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -954,7 +1618,7 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "BATAL",
+                        text = "Cancel",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -973,7 +1637,7 @@ fun WorkspaceScreen(
             shape = RoundedCornerShape(6.dp),
             title = {
                 Text(
-                    text = "HAPUS PROYEK",
+                    text = "Delete Project",
                     fontFamily = FontFamily.Default,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
@@ -982,7 +1646,7 @@ fun WorkspaceScreen(
             },
             text = {
                 Text(
-                    text = "Hapus proyek \"${targetWs.name}\" beserta seluruh file di dalamnya secara permanen?",
+                    text = "Delete project \"${targetWs.name}\" and all its files permanently?",
                     fontFamily = FontFamily.Default,
                     fontSize = 13.sp,
                     color = TextPrimary
@@ -997,10 +1661,10 @@ fun WorkspaceScreen(
                             val res = LinuxRuntimeManager.deleteWorkspace(toDel)
                             withContext(Dispatchers.Main) {
                                 if (res.optString("status") == "ok") {
-                                    actionStatus = "Proyek '$toDel' telah dihapus"
+                                    actionStatus = "Project '$toDel' deleted"
                                     refreshWorkspaces()
                                 } else {
-                                    actionStatus = "Gagal menghapus proyek: ${res.optString("error", "Error")}"
+                                    actionStatus = "Failed to delete project: ${res.optString("error", "Error")}"
                                 }
                             }
                         }
@@ -1013,7 +1677,7 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "HAPUS",
+                        text = "Delete",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -1031,7 +1695,7 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "BATAL",
+                        text = "Cancel",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold

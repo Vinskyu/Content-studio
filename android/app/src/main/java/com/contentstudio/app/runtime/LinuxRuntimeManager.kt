@@ -35,11 +35,34 @@ data class ChatSessionSummary(
     val messageCount: Int,
 )
 
+data class ChannelProfile(
+    val id: String,
+    val name: String,
+    val niche: String = "",
+    val targetAudience: String = "",
+    val aspectRatio: String = "9:16",
+    val tone: String = "",
+    val styleNotes: String = "",
+    val createdAt: Long = 0L,
+)
+
 data class WorkspaceSummary(
     val name: String,
     val path: String,
     val filesCount: Int,
     val updatedAt: Long,
+    val channelId: String = "",
+    val aspectRatio: String = "9:16",
+    val stage: String = "script",
+)
+
+data class LibraryAssetItem(
+    val name: String,
+    val category: String,
+    val size: Long,
+    val mtime: Long,
+    val path: String,
+    val relPath: String,
 )
 
 data class WorkspaceFileItem(
@@ -837,9 +860,14 @@ object LinuxRuntimeManager {
         }
     }
 
-    fun createWorkspace(name: String): JSONObject {
+    fun createWorkspace(name: String, channelId: String? = null): JSONObject {
         return try {
-            val body = JSONObject().apply { put("name", name) }.toString()
+            val body = JSONObject().apply {
+                put("name", name)
+                if (channelId != null) {
+                    put("channel_id", channelId)
+                }
+            }.toString()
             val res = httpRequest("POST", "/workspaces", body)
             if (res.optString("status") == "ok") {
                 _activeWorkspace.value = name
@@ -850,6 +878,188 @@ object LinuxRuntimeManager {
                 put("status", "error")
                 put("error", e.message ?: "Gagal membuat workspace")
             }
+        }
+    }
+
+    // ── Channels API ─────────────────────────────────────────────────────────
+
+    fun listChannels(): JSONObject {
+        return try {
+            httpRequest("GET", "/channels")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal memuat channel")
+            }
+        }
+    }
+
+    fun createChannel(
+        name: String,
+        niche: String = "",
+        targetAudience: String = "",
+        aspectRatio: String = "9:16",
+        tone: String = "",
+        styleNotes: String = ""
+    ): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("name", name)
+                put("niche", niche)
+                put("target_audience", targetAudience)
+                put("aspect_ratio", aspectRatio)
+                put("tone", tone)
+                put("style_notes", styleNotes)
+            }.toString()
+            httpRequest("POST", "/channels", body)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal membuat channel")
+            }
+        }
+    }
+
+    fun updateChannel(
+        id: String,
+        name: String,
+        niche: String = "",
+        targetAudience: String = "",
+        aspectRatio: String = "9:16",
+        tone: String = "",
+        styleNotes: String = ""
+    ): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("name", name)
+                put("niche", niche)
+                put("target_audience", targetAudience)
+                put("aspect_ratio", aspectRatio)
+                put("tone", tone)
+                put("style_notes", styleNotes)
+            }.toString()
+            httpRequest("PUT", "/channels/$id", body)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal memperbarui channel")
+            }
+        }
+    }
+
+    fun deleteChannel(id: String): JSONObject {
+        return try {
+            httpRequest("DELETE", "/channels/$id")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal menghapus channel")
+            }
+        }
+    }
+
+    // ── Workspace Project API ────────────────────────────────────────────────
+
+    fun getWorkspaceProject(workspace: String): JSONObject {
+        return try {
+            httpRequest("GET", "/workspaces/$workspace/project")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal membaca konfigurasi proyek")
+            }
+        }
+    }
+
+    fun updateWorkspaceProject(workspace: String, projectJson: String): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("project", JSONObject(projectJson))
+            }.toString()
+            httpRequest("PUT", "/workspaces/$workspace/project", body)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal menyimpan konfigurasi proyek")
+            }
+        }
+    }
+
+    // ── Asset Library API ────────────────────────────────────────────────────
+
+    fun listLibraryAssets(category: String? = null): JSONObject {
+        return try {
+            val path = if (!category.isNullOrBlank()) "/library?category=$category" else "/library"
+            httpRequest("GET", path)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal memuat pustaka aset")
+            }
+        }
+    }
+
+    fun deleteLibraryAsset(category: String, name: String): JSONObject {
+        return try {
+            httpRequest("DELETE", "/library/$category/$name")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal menghapus aset pustaka")
+            }
+        }
+    }
+
+    fun copyLibraryAssetToWorkspace(
+        category: String,
+        name: String,
+        workspace: String,
+        targetDir: String? = null
+    ): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("category", category)
+                put("file_name", name)
+                put("workspace", workspace)
+                if (targetDir != null) put("target_dir", targetDir)
+            }.toString()
+            httpRequest("POST", "/library/copy-to-workspace", body)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal menyalin aset ke proyek")
+            }
+        }
+    }
+
+    fun getLibraryDir(): File {
+        val homeDir = appContext?.let { BootstrapInstaller.getPaths(it).homeDir }
+            ?: (System.getenv("HOME") ?: "/data/user/0/com.agy/files")
+        return File(homeDir, "ContentStudio/library")
+    }
+
+    fun importFileToLibrary(context: Context, uri: Uri, category: String): Result<File> {
+        return runCatching {
+            var fileName = "import_${System.currentTimeMillis()}"
+            val returnCursor = context.contentResolver.query(uri, null, null, null, null)
+            returnCursor?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1 && cursor.moveToFirst()) {
+                    val name = cursor.getString(nameIndex)
+                    if (!name.isNullOrBlank()) fileName = name
+                }
+            }
+            val safeCat = category.lowercase().trim().ifBlank { "other" }
+            val libDir = getLibraryDir()
+            val destDir = File(libDir, safeCat)
+            if (!destDir.exists()) destDir.mkdirs()
+            val destFile = File(destDir, fileName)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            } ?: error("Gagal membaca file dari input stream")
+            destFile
         }
     }
 

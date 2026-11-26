@@ -122,7 +122,7 @@ fun AuthScreen(
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = "[ANTIGRAVITY CLI]",
+                        text = "Antigravity CLI",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -199,7 +199,7 @@ fun AuthScreen(
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                text = if (copiedError) "[TERSALIN]" else "[SALIN]",
+                                text = if (copiedError) "Copied" else "Copy",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,

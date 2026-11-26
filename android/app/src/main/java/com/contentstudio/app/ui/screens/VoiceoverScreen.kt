@@ -473,7 +473,7 @@ fun VoiceoverScreen(
                         .padding(horizontal = 7.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = if (activeWorkspace.isNotBlank()) "[WS: $activeWorkspace]" else "[PILIH WS]",
+                        text = if (activeWorkspace.isNotBlank()) "Project: $activeWorkspace" else "Select Project",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -491,7 +491,7 @@ fun VoiceoverScreen(
                     .padding(horizontal = 9.dp, vertical = 5.dp)
             ) {
                 Text(
-                    text = "SEGAR",
+                    text = "Refresh",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -512,7 +512,7 @@ fun VoiceoverScreen(
                     .padding(12.dp)
             ) {
                 Text(
-                    text = "Buat atau pilih proyek dulu di tab [PROYEK]",
+                    text = "Select or create a project in Projects tab first.",
                     fontFamily = FontFamily.Default,
                     fontSize = 12.sp,
                     color = TextSecondary
@@ -520,7 +520,7 @@ fun VoiceoverScreen(
             }
         }
 
-        // SWITCHER FLAT 2 MODE: [TTS AI] | [REKAM MIC]
+        // SWITCHER FLAT 2 MODE: AI Voice | Record
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -540,7 +540,7 @@ fun VoiceoverScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "[TTS AI]",
+                    text = "AI Voice",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -559,7 +559,7 @@ fun VoiceoverScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "[REKAM MIC]",
+                    text = "Record",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -753,7 +753,7 @@ fun VoiceoverScreen(
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Text(
-                                    text = "[MUAT NASKAH]",
+                                    text = "Load Script",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
@@ -884,7 +884,7 @@ fun VoiceoverScreen(
                                         .padding(horizontal = 7.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = "[A-]",
+                                        text = "A-",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -903,7 +903,7 @@ fun VoiceoverScreen(
                                         .padding(horizontal = 7.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = "[A+]",
+                                        text = "A+",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -920,7 +920,7 @@ fun VoiceoverScreen(
                                         .padding(horizontal = 7.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = if (isAutoScroll) "[GULIR: ON]" else "[AUTO-SCROLL]",
+                                        text = if (isAutoScroll) "Scroll On" else "Auto Scroll",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -937,7 +937,7 @@ fun VoiceoverScreen(
                                         .padding(horizontal = 7.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = "[MUAT]",
+                                        text = "Load",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -993,7 +993,7 @@ fun VoiceoverScreen(
                         ) {
                             if (teleprompterText.isEmpty()) {
                                 Text(
-                                    text = "Tulis naskah atau ketuk [MUAT] untuk membaca naskah saat rekaman...",
+                                    text = "Type script or tap Load to read while recording...",
                                     fontFamily = FontFamily.Default,
                                     fontSize = promptFontSizeSp.sp,
                                     lineHeight = (promptFontSizeSp * 1.5).sp,
@@ -1197,7 +1197,7 @@ fun VoiceoverScreen(
                     ) {
                         Text(
                             text = if (activeWorkspace.isBlank()) {
-                                "Pilih proyek di tab [PROYEK] untuk melihat file audio."
+                                "Select a project in Projects tab to view audio files."
                             } else {
                                 "Belum ada file audio di folder audio/ proyek ini."
                             },
