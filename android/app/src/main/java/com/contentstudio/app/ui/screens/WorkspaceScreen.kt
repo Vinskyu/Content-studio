@@ -51,8 +51,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import com.contentstudio.app.runtime.ChannelDna
 import com.contentstudio.app.runtime.ChannelProfile
 import com.contentstudio.app.runtime.LinuxRuntimeManager
+import com.contentstudio.app.runtime.PatternBeat
+import com.contentstudio.app.runtime.PatternItem
 import com.contentstudio.app.runtime.WorkspaceFileItem
 import com.contentstudio.app.runtime.WorkspaceSummary
 import com.contentstudio.app.ui.theme.ActionSolidBg
@@ -79,7 +82,8 @@ import java.util.Locale
 @Composable
 fun WorkspaceScreen(
     modifier: Modifier = Modifier,
-    onNavigateToVoice: (() -> Unit)? = null
+    onNavigateToVoice: (() -> Unit)? = null,
+    onNavigateToAgent: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -87,10 +91,11 @@ fun WorkspaceScreen(
 
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
     var selectedProjectForBoard by remember { mutableStateOf<String?>(null) }
-    var activeTab by remember { mutableStateOf("projects") } // "projects" or "channels"
+    var activeTab by remember { mutableStateOf("projects") } // "projects", "channels", or "patterns"
 
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
     val channels = remember { mutableStateListOf<ChannelProfile>() }
+    val patterns = remember { mutableStateListOf<PatternItem>() }
     val currentFiles = remember { mutableStateListOf<WorkspaceFileItem>() }
 
     var showCreateProjectDialog by remember { mutableStateOf(false) }
@@ -99,16 +104,19 @@ fun WorkspaceScreen(
     var projectCreateError by remember { mutableStateOf<String?>(null) }
 
     var showChannelDialog by remember { mutableStateOf(false) }
-    var editingChannel by remember { mutableStateOf<ChannelProfile?>(null) }
     var channelNameInput by remember { mutableStateOf("") }
-    var channelNicheInput by remember { mutableStateOf("") }
-    var channelAudienceInput by remember { mutableStateOf("") }
     var channelAspectInput by remember { mutableStateOf("9:16") }
-    var channelToneInput by remember { mutableStateOf("") }
-    var channelVisualRulesInput by remember { mutableStateOf("") }
-    var channelSubtitleStyleInput by remember { mutableStateOf("") }
-    var channelNotesInput by remember { mutableStateOf("") }
     var channelError by remember { mutableStateOf<String?>(null) }
+
+    var channelForDnaRef by remember { mutableStateOf<ChannelProfile?>(null) }
+    var dnaRefTextInput by remember { mutableStateOf("") }
+    var channelToInspectDna by remember { mutableStateOf<ChannelProfile?>(null) }
+
+    var showCreatePatternDialog by remember { mutableStateOf(false) }
+    var newPatternName by remember { mutableStateOf("") }
+    var newPatternAspect by remember { mutableStateOf("9:16") }
+    var patternCreateError by remember { mutableStateOf<String?>(null) }
+    var patternToDelete by remember { mutableStateOf<PatternItem?>(null) }
 
     var channelToDelete by remember { mutableStateOf<ChannelProfile?>(null) }
     var workspaceToDelete by remember { mutableStateOf<WorkspaceSummary?>(null) }
@@ -129,6 +137,22 @@ fun WorkspaceScreen(
             val list = mutableListOf<ChannelProfile>()
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
+                val dnaObj = obj.optJSONObject("dna")
+                val traitsList = mutableListOf<String>()
+                if (dnaObj != null) {
+                    val traitsArr = dnaObj.optJSONArray("learned_traits")
+                    if (traitsArr != null) {
+                        for (k in 0 until traitsArr.length()) {
+                            traitsList.add(traitsArr.optString(k))
+                        }
+                    }
+                }
+                val dna = ChannelDna(
+                    learnedTraits = traitsList,
+                    referenceNotes = dnaObj?.optString("reference_notes", "") ?: "",
+                    avgSceneDuration = dnaObj?.optDouble("avg_scene_duration", 3.5)?.toFloat() ?: 3.5f,
+                    styleSummary = dnaObj?.optString("style_summary", "") ?: "",
+                )
                 list.add(
                     ChannelProfile(
                         id = obj.optString("id", ""),
@@ -141,12 +165,51 @@ fun WorkspaceScreen(
                         subtitleStyle = obj.optString("subtitle_style", ""),
                         styleNotes = obj.optString("style_notes", ""),
                         createdAt = obj.optLong("created_at", 0L),
+                        dna = dna,
                     )
                 )
             }
             withContext(Dispatchers.Main) {
                 channels.clear()
                 channels.addAll(list)
+            }
+        }
+    }
+
+    fun refreshPatterns() {
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.listPatterns()
+            val arr = res.optJSONArray("patterns") ?: return@launch
+            val list = mutableListOf<PatternItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val beatsArr = obj.optJSONArray("beats")
+                val beats = mutableListOf<PatternBeat>()
+                if (beatsArr != null) {
+                    for (j in 0 until beatsArr.length()) {
+                        val b = beatsArr.getJSONObject(j)
+                        beats.add(
+                            PatternBeat(
+                                role = b.optString("role", "Beat"),
+                                duration = b.optDouble("duration", 3.0).toFloat()
+                            )
+                        )
+                    }
+                }
+                list.add(
+                    PatternItem(
+                        id = obj.optString("id", ""),
+                        name = obj.optString("name", "Pola Ritme"),
+                        aspectRatio = obj.optString("aspect_ratio", "9:16"),
+                        beatsCount = obj.optInt("beats_count", beats.size),
+                        totalDuration = obj.optDouble("total_duration", 0.0).toFloat(),
+                        beats = beats
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                patterns.clear()
+                patterns.addAll(list)
             }
         }
     }
@@ -296,6 +359,7 @@ fun WorkspaceScreen(
 
     LaunchedEffect(Unit) {
         refreshChannels()
+        refreshPatterns()
         refreshWorkspaces(autoSelectFirst = true)
     }
 
@@ -310,7 +374,8 @@ fun WorkspaceScreen(
                 selectedProjectForBoard = null
                 refreshWorkspaces()
             },
-            onNavigateToVoice = onNavigateToVoice
+            onNavigateToVoice = onNavigateToVoice,
+            onNavigateToAgent = onNavigateToAgent
         )
         return
     }
@@ -330,7 +395,7 @@ fun WorkspaceScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // SEGMENT SWITCHER: Projects | Channels
+            // SEGMENT SWITCHER: Projects | Channels | Patterns
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
@@ -344,7 +409,7 @@ fun WorkspaceScreen(
                         .clip(RoundedCornerShape(4.dp))
                         .background(if (activeTab == "projects") CardHighlight else BgDark)
                         .clickable { activeTab = "projects" }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text(
                         text = "Projects",
@@ -360,7 +425,7 @@ fun WorkspaceScreen(
                         .clip(RoundedCornerShape(4.dp))
                         .background(if (activeTab == "channels") CardHighlight else BgDark)
                         .clickable { activeTab = "channels" }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text(
                         text = "Channels",
@@ -370,57 +435,91 @@ fun WorkspaceScreen(
                         color = if (activeTab == "channels") TextPrimary else TextSecondary
                     )
                 }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (activeTab == "patterns") CardHighlight else BgDark)
+                        .clickable { activeTab = "patterns" }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Patterns",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        fontWeight = if (activeTab == "patterns") FontWeight.Bold else FontWeight.Normal,
+                        color = if (activeTab == "patterns") TextPrimary else TextSecondary
+                    )
+                }
             }
 
             // ACTION BUTTON
-            if (activeTab == "projects") {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(ActionSolidBg)
-                        .clickable {
-                            newProjectName = ""
-                            selectedChannelForProject = ""
-                            projectCreateError = null
-                            showCreateProjectDialog = true
-                        }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "+ New Project",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = ActionSolidText
-                    )
+            when (activeTab) {
+                "projects" -> {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ActionSolidBg)
+                            .clickable {
+                                newProjectName = ""
+                                selectedChannelForProject = ""
+                                projectCreateError = null
+                                showCreateProjectDialog = true
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "+ New Project",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ActionSolidText
+                        )
+                    }
                 }
-            } else {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(ActionSolidBg)
-                        .clickable {
-                            editingChannel = null
-                            channelNameInput = ""
-                            channelNicheInput = ""
-                            channelAudienceInput = ""
-                            channelAspectInput = "9:16"
-                            channelToneInput = ""
-                            channelVisualRulesInput = ""
-                            channelSubtitleStyleInput = ""
-                            channelNotesInput = ""
-                            channelError = null
-                            showChannelDialog = true
-                        }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "+ New Channel",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = ActionSolidText
-                    )
+                "channels" -> {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ActionSolidBg)
+                            .clickable {
+                                channelNameInput = ""
+                                channelAspectInput = "9:16"
+                                channelError = null
+                                showChannelDialog = true
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "+ New Channel",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ActionSolidText
+                        )
+                    }
+                }
+                else -> {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ActionSolidBg)
+                            .clickable {
+                                newPatternName = ""
+                                newPatternAspect = "9:16"
+                                patternCreateError = null
+                                showCreatePatternDialog = true
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "+ New Pattern",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ActionSolidText
+                        )
+                    }
                 }
             }
         }
@@ -514,23 +613,22 @@ fun WorkspaceScreen(
                                     }
                                 }
 
-                                if (chan.niche.isNotBlank() || chan.targetAudience.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Tempo: ${String.format(Locale.US, "%.1f", chan.dna.avgSceneDuration)}s/adegan • ${if (chan.dna.styleSummary.isNotBlank()) chan.dna.styleSummary else "Gaya dinamis"}",
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 12.sp,
+                                    color = TextSecondary
+                                )
+
+                                if (chan.dna.learnedTraits.isNotEmpty()) {
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        text = listOf(chan.niche, chan.targetAudience).filter { it.isNotBlank() }.joinToString(" • "),
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 12.sp,
-                                        color = TextSecondary
-                                    )
-                                }
-
-                                if (chan.tone.isNotBlank()) {
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Tone: ${chan.tone}",
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 11.sp,
-                                        color = TextMuted
+                                        text = "DNA: ${chan.dna.learnedTraits.take(2).joinToString(" | ")}",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = TextMuted,
+                                        maxLines = 2
                                     )
                                 }
                             }
@@ -545,22 +643,32 @@ fun WorkspaceScreen(
                                         .background(CardHighlight)
                                         .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
                                         .clickable {
-                                            editingChannel = chan
-                                            channelNameInput = chan.name
-                                            channelNicheInput = chan.niche
-                                            channelAudienceInput = chan.targetAudience
-                                            channelAspectInput = chan.aspectRatio
-                                            channelToneInput = chan.tone
-                                            channelVisualRulesInput = chan.visualRules.ifBlank { chan.styleNotes }
-                                            channelSubtitleStyleInput = chan.subtitleStyle
-                                            channelNotesInput = chan.styleNotes
-                                            channelError = null
-                                            showChannelDialog = true
+                                            channelForDnaRef = chan
+                                            dnaRefTextInput = ""
                                         }
                                         .padding(horizontal = 8.dp, vertical = 5.dp)
                                 ) {
                                     Text(
-                                        text = "Edit",
+                                        text = "From Ref",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            channelToInspectDna = chan
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "Inspect",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -584,6 +692,113 @@ fun WorkspaceScreen(
                                         color = ErrorCardText
                                     )
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (activeTab == "patterns") {
+            // ── PATTERNS VIEW ────────────────────────────────────────────────
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 32.dp)
+            ) {
+                if (patterns.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(SurfaceCard)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No patterns created yet. Tap + New Pattern to add a rhythm template.",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 13.sp,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                } else {
+                    items(patterns) { pat ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(SurfaceCard)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = pat.name,
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(BadgeGreenBg)
+                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = pat.aspectRatio,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = BadgeGreenText
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "${pat.beatsCount} Beats • ${String.format(Locale.US, "%.1f", pat.totalDuration)}s",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    color = TextSecondary
+                                )
+
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = pat.beats.joinToString(" → ") { "${it.role} (${String.format(Locale.US, "%.1f", it.duration)}s)" },
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = TextMuted
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(CardHighlight)
+                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                    .clickable { patternToDelete = pat }
+                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = "Delete",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ErrorCardText
+                                )
                             }
                         }
                     }
@@ -1211,9 +1426,8 @@ fun WorkspaceScreen(
         )
     }
 
-    // DIALOG: CREATE OR EDIT CHANNEL
+    // DIALOG: ZERO-FORM NEW CHANNEL
     if (showChannelDialog) {
-        val isEdit = editingChannel != null
         AlertDialog(
             onDismissRequest = {
                 if (!isBusy) showChannelDialog = false
@@ -1222,7 +1436,7 @@ fun WorkspaceScreen(
             shape = RoundedCornerShape(6.dp),
             title = {
                 Text(
-                    text = if (isEdit) "Edit Channel" else "New Channel",
+                    text = "New Channel",
                     fontFamily = FontFamily.Default,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
@@ -1231,9 +1445,14 @@ fun WorkspaceScreen(
             },
             text = {
                 Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    Text(
+                        text = "Set up a channel identity. Channel DNA will evolve automatically from references and project renders.",
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+
                     Text("Channel Name:", fontSize = 11.sp, color = TextSecondary)
                     Box(
                         modifier = Modifier
@@ -1246,44 +1465,6 @@ fun WorkspaceScreen(
                         BasicTextField(
                             value = channelNameInput,
                             onValueChange = { channelNameInput = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
-                            cursorBrush = SolidColor(TextPrimary),
-                            singleLine = true
-                        )
-                    }
-
-                    Text("Niche / Category:", fontSize = 11.sp, color = TextSecondary)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(InputContainerBg)
-                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        BasicTextField(
-                            value = channelNicheInput,
-                            onValueChange = { channelNicheInput = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
-                            cursorBrush = SolidColor(TextPrimary),
-                            singleLine = true
-                        )
-                    }
-
-                    Text("Target Audience:", fontSize = 11.sp, color = TextSecondary)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(InputContainerBg)
-                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        BasicTextField(
-                            value = channelAudienceInput,
-                            onValueChange = { channelAudienceInput = it },
                             modifier = Modifier.fillMaxWidth(),
                             textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
                             cursorBrush = SolidColor(TextPrimary),
@@ -1313,44 +1494,6 @@ fun WorkspaceScreen(
                         }
                     }
 
-                    Text("Tone of Voice:", fontSize = 11.sp, color = TextSecondary)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(InputContainerBg)
-                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        BasicTextField(
-                            value = channelToneInput,
-                            onValueChange = { channelToneInput = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
-                            cursorBrush = SolidColor(TextPrimary),
-                            singleLine = true
-                        )
-                    }
-
-                    Text("Visual Rules:", fontSize = 11.sp, color = TextSecondary)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(65.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(InputContainerBg)
-                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        BasicTextField(
-                            value = channelVisualRulesInput,
-                            onValueChange = { channelVisualRulesInput = it },
-                            modifier = Modifier.fillMaxSize(),
-                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
-                            cursorBrush = SolidColor(TextPrimary)
-                        )
-                    }
-
                     if (!channelError.isNullOrBlank()) {
                         Text(text = channelError ?: "", color = ErrorCardText, fontSize = 11.sp)
                     }
@@ -1367,38 +1510,18 @@ fun WorkspaceScreen(
                         isBusy = true
                         channelError = null
                         scope.launch(Dispatchers.IO) {
-                            val res = if (isEdit) {
-                                LinuxRuntimeManager.updateChannel(
-                                    id = editingChannel!!.id,
-                                    name = name,
-                                    niche = channelNicheInput,
-                                    targetAudience = channelAudienceInput,
-                                    aspectRatio = channelAspectInput,
-                                    tone = channelToneInput,
-                                    visualRules = channelVisualRulesInput,
-                                    subtitleStyle = channelSubtitleStyleInput,
-                                    styleNotes = channelVisualRulesInput
-                                )
-                            } else {
-                                LinuxRuntimeManager.createChannel(
-                                    name = name,
-                                    niche = channelNicheInput,
-                                    targetAudience = channelAudienceInput,
-                                    aspectRatio = channelAspectInput,
-                                    tone = channelToneInput,
-                                    visualRules = channelVisualRulesInput,
-                                    subtitleStyle = channelSubtitleStyleInput,
-                                    styleNotes = channelVisualRulesInput
-                                )
-                            }
+                            val res = LinuxRuntimeManager.createChannel(
+                                name = name,
+                                aspectRatio = channelAspectInput
+                            )
                             withContext(Dispatchers.Main) {
                                 isBusy = false
                                 if (res.optString("status") == "ok") {
                                     showChannelDialog = false
                                     refreshChannels()
-                                    actionStatus = if (isEdit) "Channel '$name' updated" else "Channel '$name' created"
+                                    actionStatus = "Channel '$name' created"
                                 } else {
-                                    channelError = res.optString("error", "Failed to save channel")
+                                    channelError = res.optString("error", "Failed to create channel")
                                 }
                             }
                         }
@@ -1411,7 +1534,7 @@ fun WorkspaceScreen(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                 ) {
                     Text(
-                        text = if (isEdit) "Save" else "Create",
+                        text = "Create",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -1427,6 +1550,454 @@ fun WorkspaceScreen(
                         contentColor = TextPrimary
                     ),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "Cancel",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // DIALOG: EXTRACT DNA FROM REFERENCE
+    if (channelForDnaRef != null) {
+        val targetChan = channelForDnaRef!!
+        AlertDialog(
+            onDismissRequest = { if (!isBusy) channelForDnaRef = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "Extract DNA: ${targetChan.name}",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Paste video scripts, transcript excerpts, or stylistic guidelines to extract visual pacing and rules into channel DNA.",
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(130.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(InputContainerBg)
+                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                            .padding(10.dp)
+                    ) {
+                        BasicTextField(
+                            value = dnaRefTextInput,
+                            onValueChange = { dnaRefTextInput = it },
+                            modifier = Modifier.fillMaxSize(),
+                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
+                            cursorBrush = SolidColor(TextPrimary)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val text = dnaRefTextInput.trim()
+                        if (text.isBlank()) return@Button
+                        isBusy = true
+                        actionStatus = "Extracting channel DNA..."
+                        val cid = targetChan.id
+                        channelForDnaRef = null
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.extractChannelDna(cid, text)
+                            withContext(Dispatchers.Main) {
+                                isBusy = false
+                                if (res.optString("status") == "ok") {
+                                    actionStatus = "DNA extracted successfully for channel"
+                                    refreshChannels()
+                                } else {
+                                    actionStatus = "Failed to extract DNA: ${res.optString("error")}"
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ActionSolidBg,
+                        contentColor = ActionSolidText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "Extract DNA",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { channelForDnaRef = null },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "Cancel",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // DIALOG: INSPECT CHANNEL DNA
+    if (channelToInspectDna != null) {
+        val chan = channelToInspectDna!!
+        AlertDialog(
+            onDismissRequest = { channelToInspectDna = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "DNA Profile: ${chan.name}",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "AVERAGE TEMPO",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextMuted
+                    )
+                    Text(
+                        text = "${String.format(Locale.US, "%.1f", chan.dna.avgSceneDuration)}s per scene",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 13.sp,
+                        color = TextPrimary
+                    )
+
+                    Text(
+                        text = "STYLE SUMMARY",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextMuted
+                    )
+                    Text(
+                        text = chan.dna.styleSummary.ifBlank { "Belum ada ringkasan gaya" },
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        color = TextPrimary
+                    )
+
+                    Text(
+                        text = "LEARNED TRAITS",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextMuted
+                    )
+                    if (chan.dna.learnedTraits.isEmpty()) {
+                        Text(
+                            text = "Belum ada trait tersimpan",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                    } else {
+                        chan.dna.learnedTraits.forEach { trait ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(BgDark)
+                                    .border(0.5.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                    .padding(8.dp)
+                            ) {
+                                Text(
+                                    text = "• $trait",
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 11.sp,
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+                    }
+
+                    if (chan.dna.referenceNotes.isNotBlank()) {
+                        Text(
+                            text = "REFERENCE EXCERPT",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextMuted
+                        )
+                        Text(
+                            text = chan.dna.referenceNotes,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = TextSecondary
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { channelToInspectDna = null },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ActionSolidBg,
+                        contentColor = ActionSolidText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "Close",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {}
+        )
+    }
+
+    // DIALOG: CREATE PATTERN
+    if (showCreatePatternDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isBusy) showCreatePatternDialog = false },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "New Living Pattern",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Create a universal rhythm template without niche. Initialized with default 4 beats.",
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+
+                    Text("Pattern Name:", fontSize = 11.sp, color = TextSecondary)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(InputContainerBg)
+                            .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        BasicTextField(
+                            value = newPatternName,
+                            onValueChange = { newPatternName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
+                            cursorBrush = SolidColor(TextPrimary),
+                            singleLine = true
+                        )
+                    }
+
+                    Text("Aspect Ratio:", fontSize = 11.sp, color = TextSecondary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("9:16", "16:9").forEach { ratio ->
+                            val isSel = newPatternAspect == ratio
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (isSel) CardHighlight else BgDark)
+                                    .border(1.dp, if (isSel) TextPrimary else BorderSubtle, RoundedCornerShape(4.dp))
+                                    .clickable { newPatternAspect = ratio }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = ratio,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSel) TextPrimary else TextSecondary
+                                )
+                            }
+                        }
+                    }
+
+                    if (!patternCreateError.isNullOrBlank()) {
+                        Text(text = patternCreateError ?: "", color = ErrorCardText, fontSize = 11.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = newPatternName.trim()
+                        if (name.isBlank()) {
+                            patternCreateError = "Pattern name cannot be empty"
+                            return@Button
+                        }
+                        isBusy = true
+                        patternCreateError = null
+                        val defaultBeats = org.json.JSONArray().apply {
+                            put(org.json.JSONObject().apply { put("role", "Hook"); put("duration", 2.5) })
+                            put(org.json.JSONObject().apply { put("role", "Setup"); put("duration", 4.0) })
+                            put(org.json.JSONObject().apply { put("role", "Twist"); put("duration", 4.0) })
+                            put(org.json.JSONObject().apply { put("role", "Close"); put("duration", 2.5) })
+                        }
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.createPattern(
+                                name = name,
+                                aspectRatio = newPatternAspect,
+                                beatsJsonArray = defaultBeats
+                            )
+                            withContext(Dispatchers.Main) {
+                                isBusy = false
+                                if (res.optString("status") == "ok") {
+                                    showCreatePatternDialog = false
+                                    refreshPatterns()
+                                    actionStatus = "Pattern '$name' created"
+                                } else {
+                                    patternCreateError = res.optString("error", "Failed to create pattern")
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ActionSolidBg,
+                        contentColor = ActionSolidText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "Create",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { showCreatePatternDialog = false },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "Cancel",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // DIALOG: CONFIRM DELETE PATTERN
+    if (patternToDelete != null) {
+        val targetPat = patternToDelete!!
+        AlertDialog(
+            onDismissRequest = { patternToDelete = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "Delete Pattern",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ErrorCardText
+                )
+            },
+            text = {
+                Text(
+                    text = "Delete pattern \"${targetPat.name}\" permanently?",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = TextPrimary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val toDel = targetPat.id
+                        val delName = targetPat.name
+                        patternToDelete = null
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.deletePattern(toDel)
+                            withContext(Dispatchers.Main) {
+                                if (res.optString("status") == "ok") {
+                                    actionStatus = "Pattern '$delName' deleted"
+                                    refreshPatterns()
+                                } else {
+                                    actionStatus = "Failed to delete pattern: ${res.optString("error")}"
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ErrorCardBg,
+                        contentColor = ErrorCardText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Delete",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { patternToDelete = null },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
                         text = "Cancel",

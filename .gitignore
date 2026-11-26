@@ -26,3 +26,7 @@ android/local.properties
 # OS files
 .DS_Store
 Thumbs.db
+
+# Scratch test directories
+scratch/
+

@@ -53,7 +53,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import com.contentstudio.app.runtime.ChatController
 import com.contentstudio.app.runtime.LinuxRuntimeManager
+import com.contentstudio.app.runtime.PatternBeat
+import com.contentstudio.app.runtime.PatternItem
 import com.contentstudio.app.runtime.WorkspaceFileItem
 import com.contentstudio.app.ui.theme.StudioAccent
 import com.contentstudio.app.ui.theme.StudioBadge
@@ -91,7 +94,8 @@ data class SceneItem(
     var narration: String,
     var prompt: String,
     var visual: String,
-    var duration: Float
+    var duration: Float,
+    var beatRole: String = "Beat",
 )
 
 @Composable
@@ -99,7 +103,8 @@ fun ProjectBoardScreen(
     workspaceName: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    onNavigateToVoice: (() -> Unit)? = null
+    onNavigateToVoice: (() -> Unit)? = null,
+    onNavigateToAgent: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -140,6 +145,10 @@ fun ProjectBoardScreen(
     var showFilesModal by remember { mutableStateOf(false) }
     var showLibraryPickerForScene by remember { mutableStateOf<Int?>(null) }
     var activeAudioPickingType by remember { mutableStateOf<String?>(null) } // "vo" or "bgm"
+    var showApplyPatternDialog by remember { mutableStateOf(false) }
+    val availablePatterns = remember { mutableStateListOf<PatternItem>() }
+    var showSavePatternDialog by remember { mutableStateOf(false) }
+    var newPatternNameInput by remember { mutableStateOf("") }
 
     val libraryAssets = remember { mutableStateListOf<Pair<String, String>>() } // cat, name
     val rawFiles = remember { mutableStateListOf<WorkspaceFileItem>() }
@@ -220,7 +229,8 @@ fun ProjectBoardScreen(
                                     narration = sc.optString("narration", sc.optString("text", "")),
                                     prompt = sc.optString("prompt", ""),
                                     visual = sc.optString("visual", ""),
-                                    duration = sc.optDouble("duration", 4.0).toFloat()
+                                    duration = sc.optDouble("duration", 4.0).toFloat(),
+                                    beatRole = sc.optString("beat_role", sc.optString("title", "Beat"))
                                 )
                             )
                         }
@@ -288,6 +298,8 @@ fun ProjectBoardScreen(
                 scenesList.forEach { sc ->
                     val scObj = JSONObject().apply {
                         put("id", sc.id)
+                        put("title", sc.beatRole)
+                        put("beat_role", sc.beatRole)
                         put("narration", sc.narration)
                         put("prompt", sc.prompt)
                         put("visual", sc.visual)
@@ -418,6 +430,14 @@ fun ProjectBoardScreen(
             onBack = onBack,
             actions = {
                 StudioBadge(text = aspectRatio, isAccent = true)
+                Spacer(modifier = Modifier.width(4.dp))
+                StudioSmallButton(
+                    text = "Refresh",
+                    onClick = {
+                        loadProject()
+                        statusMessage = "Project refreshed from disk"
+                    }
+                )
                 Spacer(modifier = Modifier.width(4.dp))
                 StudioSmallButton(
                     text = "Files",
@@ -551,6 +571,13 @@ fun ProjectBoardScreen(
                                     color = TextMuted
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    StudioSmallButton(
+                                        text = "Ask Agent",
+                                        onClick = {
+                                            ChatController.setDraftPrompt("Bantu saya perbaiki naskah untuk project '$workspaceName':\n\n$scriptText")
+                                            onNavigateToAgent?.invoke()
+                                        }
+                                    )
                                     StudioSecondaryButton(
                                         text = "Save Script",
                                         onClick = { saveScriptContent() },
@@ -574,6 +601,90 @@ fun ProjectBoardScreen(
                             .fillMaxSize()
                             .padding(horizontal = 16.dp)
                     ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            StudioSmallButton(
+                                text = "Apply Pattern",
+                                onClick = {
+                                    scope.launch(Dispatchers.IO) {
+                                        val res = LinuxRuntimeManager.listPatterns()
+                                        val arr = res.optJSONArray("patterns")
+                                        val list = mutableListOf<PatternItem>()
+                                        if (arr != null) {
+                                            for (i in 0 until arr.length()) {
+                                                val obj = arr.getJSONObject(i)
+                                                val bArr = obj.optJSONArray("beats")
+                                                val beats = mutableListOf<PatternBeat>()
+                                                if (bArr != null) {
+                                                    for (j in 0 until bArr.length()) {
+                                                        val b = bArr.getJSONObject(j)
+                                                        beats.add(
+                                                            PatternBeat(
+                                                                role = b.optString("role", "Beat"),
+                                                                duration = b.optDouble("duration", 3.0).toFloat()
+                                                            )
+                                                        )
+                                                    }
+                                                }
+                                                list.add(
+                                                    PatternItem(
+                                                        id = obj.optString("id", ""),
+                                                        name = obj.optString("name", "Pola Ritme"),
+                                                        aspectRatio = obj.optString("aspect_ratio", "9:16"),
+                                                        beatsCount = obj.optInt("beats_count", beats.size),
+                                                        totalDuration = obj.optDouble("total_duration", 0.0).toFloat(),
+                                                        beats = beats
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            availablePatterns.clear()
+                                            availablePatterns.addAll(list)
+                                            showApplyPatternDialog = true
+                                        }
+                                    }
+                                }
+                            )
+                            StudioSmallButton(
+                                text = "Save as Pattern",
+                                enabled = scenesList.isNotEmpty(),
+                                onClick = {
+                                    newPatternNameInput = "$workspaceName Pattern"
+                                    showSavePatternDialog = true
+                                }
+                            )
+                            StudioSmallButton(
+                                text = "Match VO",
+                                enabled = !voFile.isNullOrBlank(),
+                                onClick = {
+                                    scope.launch(Dispatchers.IO) {
+                                        val res = LinuxRuntimeManager.syncVoDuration(workspaceName)
+                                        withContext(Dispatchers.Main) {
+                                            res.onSuccess {
+                                                statusMessage = "Scene duration synchronized with VO audio"
+                                                loadProject()
+                                            }.onFailure { err ->
+                                                errorMessage = err.message ?: "Sync VO failed"
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+                            StudioSmallButton(
+                                text = "Ask Agent",
+                                onClick = {
+                                    ChatController.setDraftPrompt("Bantu susun ulang adegan dan beat_role untuk project '$workspaceName': ")
+                                    onNavigateToAgent?.invoke()
+                                }
+                            )
+                        }
+
                         LazyColumn(
                             modifier = Modifier
                                 .weight(1f)
@@ -608,6 +719,14 @@ fun ProjectBoardScreen(
                                                 StudioBadge(
                                                     text = "Scene ${String.format(Locale.US, "%02d", index + 1)}",
                                                     isAccent = true
+                                                )
+
+                                                StudioTextField(
+                                                    value = scene.beatRole,
+                                                    onValueChange = { scene.beatRole = it },
+                                                    placeholder = "Role",
+                                                    singleLine = true,
+                                                    modifier = Modifier.width(90.dp)
                                                 )
 
                                                 // Duration stepper
@@ -912,6 +1031,26 @@ fun ProjectBoardScreen(
                                         )
                                     }
                                 }
+                            }
+
+                            if (voFile != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                StudioSmallButton(
+                                    text = "Match VO Duration to Scenes",
+                                    onClick = {
+                                        scope.launch(Dispatchers.IO) {
+                                            val res = LinuxRuntimeManager.syncVoDuration(workspaceName)
+                                            withContext(Dispatchers.Main) {
+                                                res.onSuccess {
+                                                    statusMessage = "Scene duration synchronized with VO audio"
+                                                    loadProject()
+                                                }.onFailure { err ->
+                                                    errorMessage = err.message ?: "Sync VO failed"
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
                             }
                         }
 
@@ -1239,6 +1378,25 @@ fun ProjectBoardScreen(
                                 onSelect = { resolutionIndex = it }
                             )
                         }
+
+                        StudioSecondaryButton(
+                            text = "Promote to DNA",
+                            enabled = scenesList.isNotEmpty(),
+                            onClick = {
+                                scope.launch(Dispatchers.IO) {
+                                    val res = LinuxRuntimeManager.promoteWorkspaceDna(workspaceName)
+                                    withContext(Dispatchers.Main) {
+                                        if (res.optString("status") == "ok") {
+                                            val trait = res.optString("learned_trait", "")
+                                            statusMessage = "Promoted to Channel DNA: $trait"
+                                        } else {
+                                            errorMessage = res.optString("error", "Failed to promote to DNA")
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
 
                         // PROGRESS BAR / ACTION BUTTON
                         if (isRendering) {
@@ -1625,6 +1783,170 @@ fun ProjectBoardScreen(
                     text = "Cancel",
                     onClick = { activeAudioPickingType = null },
                     height = 36.dp
+                )
+            }
+        )
+    }
+
+    // DIALOG: APPLY PATTERN
+    if (showApplyPatternDialog) {
+        AlertDialog(
+            onDismissRequest = { showApplyPatternDialog = false },
+            containerColor = StudioSurface,
+            shape = RoundedCornerShape(8.dp),
+            title = {
+                Text(
+                    text = "Apply Living Pattern",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 350.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (availablePatterns.isEmpty()) {
+                        Text(
+                            text = "No patterns available",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            color = TextMuted
+                        )
+                    } else {
+                        availablePatterns.forEach { pat ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(StudioSurfaceElevated)
+                                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        showApplyPatternDialog = false
+                                        scope.launch(Dispatchers.IO) {
+                                            val res = LinuxRuntimeManager.applyPattern(workspaceName, pat.id)
+                                            withContext(Dispatchers.Main) {
+                                                res.onSuccess {
+                                                    statusMessage = "Pattern '${pat.name}' applied"
+                                                    loadProject()
+                                                }.onFailure { err ->
+                                                    errorMessage = err.message ?: "Failed to apply pattern"
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .padding(10.dp)
+                            ) {
+                                Column {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = pat.name,
+                                            fontFamily = FontFamily.Default,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = TextPrimary
+                                        )
+                                        StudioBadge(text = pat.aspectRatio)
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "${pat.beatsCount} Beats • ${pat.totalDuration}s",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = pat.beats.joinToString(" → ") { "${it.role} (${it.duration}s)" },
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                StudioSmallButton(
+                    text = "Close",
+                    onClick = { showApplyPatternDialog = false }
+                )
+            }
+        )
+    }
+
+    // DIALOG: SAVE AS PATTERN
+    if (showSavePatternDialog) {
+        AlertDialog(
+            onDismissRequest = { showSavePatternDialog = false },
+            containerColor = StudioSurface,
+            shape = RoundedCornerShape(8.dp),
+            title = {
+                Text(
+                    text = "Save as Pattern",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Extract rhythm and beats from this project into a reusable living pattern (narration and visuals will be stripped).",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+                    StudioTextField(
+                        value = newPatternNameInput,
+                        onValueChange = { newPatternNameInput = it },
+                        placeholder = "Pattern Name",
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                StudioPrimaryButton(
+                    text = "Save",
+                    height = 36.dp,
+                    onClick = {
+                        val name = newPatternNameInput.trim()
+                        if (name.isBlank()) return@StudioPrimaryButton
+                        showSavePatternDialog = false
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.saveWorkspaceAsPattern(workspaceName, name)
+                            withContext(Dispatchers.Main) {
+                                if (res.optString("status") == "ok") {
+                                    statusMessage = "Pattern '$name' saved successfully"
+                                } else {
+                                    errorMessage = res.optString("error", "Failed to save pattern")
+                                }
+                            }
+                        }
+                    }
+                )
+            },
+            dismissButton = {
+                StudioSmallButton(
+                    text = "Cancel",
+                    onClick = { showSavePatternDialog = false }
                 )
             }
         )

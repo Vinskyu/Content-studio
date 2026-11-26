@@ -310,6 +310,13 @@ fun ChatScreen(
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
 
     var inputText by remember { mutableStateOf("") }
+    val draftPrompt by ChatController.draftPrompt.collectAsState()
+    LaunchedEffect(draftPrompt) {
+        if (draftPrompt.isNotBlank()) {
+            inputText = draftPrompt
+            ChatController.consumeDraftPrompt()
+        }
+    }
     var showHistorySheet by remember { mutableStateOf(false) }
     var showWorkspaceSheet by remember { mutableStateOf(false) }
     var copiedMsgId by remember { mutableStateOf<String?>(null) }

@@ -33,6 +33,19 @@ object ChatController {
     private val _liveStatus = MutableStateFlow("")
     val liveStatus: StateFlow<String> = _liveStatus.asStateFlow()
 
+    private val _draftPrompt = MutableStateFlow("")
+    val draftPrompt: StateFlow<String> = _draftPrompt.asStateFlow()
+
+    fun setDraftPrompt(prompt: String) {
+        _draftPrompt.value = prompt
+    }
+
+    fun consumeDraftPrompt(): String {
+        val current = _draftPrompt.value
+        _draftPrompt.value = ""
+        return current
+    }
+
     private var isInitialized = false
     private var activeConnection: java.net.HttpURLConnection? = null
 

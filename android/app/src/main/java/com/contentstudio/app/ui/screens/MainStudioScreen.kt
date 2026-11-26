@@ -63,7 +63,10 @@ fun MainStudioScreen(
                 .fillMaxWidth()
         ) {
             when (selectedTab) {
-                0 -> WorkspaceScreen(onNavigateToVoice = { selectedTab = 2 })
+                0 -> WorkspaceScreen(
+                    onNavigateToVoice = { selectedTab = 2 },
+                    onNavigateToAgent = { selectedTab = 3 }
+                )
                 1 -> LibraryScreen()
                 2 -> VoiceoverScreen()
                 3 -> ChatScreen()

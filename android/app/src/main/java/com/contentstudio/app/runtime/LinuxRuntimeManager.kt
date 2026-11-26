@@ -35,6 +35,13 @@ data class ChatSessionSummary(
     val messageCount: Int,
 )
 
+data class ChannelDna(
+    val learnedTraits: List<String> = emptyList(),
+    val referenceNotes: String = "",
+    val avgSceneDuration: Float = 3.5f,
+    val styleSummary: String = "",
+)
+
 data class ChannelProfile(
     val id: String,
     val name: String,
@@ -46,6 +53,21 @@ data class ChannelProfile(
     val subtitleStyle: String = "",
     val styleNotes: String = "",
     val createdAt: Long = 0L,
+    val dna: ChannelDna = ChannelDna(),
+)
+
+data class PatternBeat(
+    val role: String,
+    val duration: Float,
+)
+
+data class PatternItem(
+    val id: String,
+    val name: String,
+    val aspectRatio: String = "9:16",
+    val beatsCount: Int = 0,
+    val totalDuration: Float = 0f,
+    val beats: List<PatternBeat> = emptyList(),
 )
 
 data class WorkspaceSummary(
@@ -965,6 +987,115 @@ object LinuxRuntimeManager {
                 put("status", "error")
                 put("error", e.message ?: "Gagal menghapus channel")
             }
+        }
+    }
+
+    fun extractChannelDna(channelId: String, referenceText: String): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("reference_text", referenceText)
+            }.toString()
+            httpRequest("POST", "/channels/$channelId/extract-dna", body, timeoutMs = 35_000)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal mengekstrak DNA channel")
+            }
+        }
+    }
+
+    fun promoteWorkspaceDna(workspace: String): JSONObject {
+        return try {
+            httpRequest("POST", "/workspaces/$workspace/promote-dna")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal mempromosikan ke DNA channel")
+            }
+        }
+    }
+
+    // ── Living Patterns API ──────────────────────────────────────────────────
+
+    fun listPatterns(): JSONObject {
+        return try {
+            httpRequest("GET", "/patterns")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal memuat daftar pola ritme")
+            }
+        }
+    }
+
+    fun createPattern(name: String, aspectRatio: String = "9:16", beatsJsonArray: org.json.JSONArray): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("name", name)
+                put("aspect_ratio", aspectRatio)
+                put("beats", beatsJsonArray)
+            }.toString()
+            httpRequest("POST", "/patterns", body)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal membuat pola ritme")
+            }
+        }
+    }
+
+    fun deletePattern(id: String): JSONObject {
+        return try {
+            httpRequest("DELETE", "/patterns/$id")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal menghapus pola ritme")
+            }
+        }
+    }
+
+    fun saveWorkspaceAsPattern(workspace: String, patternName: String): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("name", patternName)
+            }.toString()
+            httpRequest("POST", "/workspaces/$workspace/save-as-pattern", body)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal menyimpan pola dari proyek")
+            }
+        }
+    }
+
+    fun applyPattern(workspace: String, patternId: String): Result<JSONObject> {
+        return try {
+            val body = JSONObject().apply {
+                put("pattern_id", patternId)
+            }.toString()
+            val res = httpRequest("POST", "/workspaces/$workspace/apply-pattern", body)
+            if (res.optString("status") == "ok") {
+                val proj = res.optJSONObject("project") ?: JSONObject()
+                Result.success(proj)
+            } else {
+                Result.failure(Exception(res.optString("error", "Gagal menerapkan pola")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun syncVoDuration(workspace: String): Result<JSONObject> {
+        return try {
+            val res = httpRequest("POST", "/workspaces/$workspace/sync-vo-duration", timeoutMs = 60_000)
+            if (res.optString("status") == "ok") {
+                Result.success(res)
+            } else {
+                Result.failure(Exception(res.optString("error", "Gagal sinkronisasi durasi audio VO")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

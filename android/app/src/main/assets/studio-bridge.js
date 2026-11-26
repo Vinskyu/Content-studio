@@ -20,6 +20,7 @@ const WORKSPACES_DIR = path.join(CONTENT_STUDIO_DIR, 'workspaces');
 const SESSIONS_DIR = path.join(HOME_DIR, '.contentstudio', 'sessions');
 const STATE_FILE = path.join(HOME_DIR, '.contentstudio', 'state.json');
 const CHANNELS_FILE = path.join(CONTENT_STUDIO_DIR, 'channels.json');
+const PATTERNS_FILE = path.join(CONTENT_STUDIO_DIR, 'patterns.json');
 const LIBRARY_DIR = path.join(CONTENT_STUDIO_DIR, 'library');
 const LIBRARY_CATEGORIES = ['video', 'audio', 'image', 'other'];
 
@@ -273,13 +274,218 @@ function countFilesRecursive(dir) {
   return { count, latestMtime };
 }
 
-// ── Channel Hub ─────────────────────────────────────────────────────────────
+// ── Living Patterns ─────────────────────────────────────────────────────────
+
+const DEFAULT_PATTERNS = [
+  {
+    id: 'fast-hook-twist',
+    name: 'Fast Hook-Twist',
+    aspect_ratio: '9:16',
+    beats_count: 4,
+    total_duration: 13.0,
+    beats: [
+      { role: 'Hook', duration: 2.5 },
+      { role: 'Setup', duration: 4.0 },
+      { role: 'Twist', duration: 4.0 },
+      { role: 'Close', duration: 2.5 },
+    ],
+  },
+  {
+    id: 'visual-breather',
+    name: 'Visual Breather',
+    aspect_ratio: '9:16',
+    beats_count: 4,
+    total_duration: 16.0,
+    beats: [
+      { role: 'Open Visual', duration: 5.0 },
+      { role: 'Short Beat', duration: 3.0 },
+      { role: 'Main Visual', duration: 4.5 },
+      { role: 'Outro', duration: 3.5 },
+    ],
+  },
+  {
+    id: '3-beat-breakdown',
+    name: '3-Beat Breakdown',
+    aspect_ratio: '9:16',
+    beats_count: 5,
+    total_duration: 17.0,
+    beats: [
+      { role: 'Hook', duration: 2.5 },
+      { role: 'Point 1', duration: 4.0 },
+      { role: 'Point 2', duration: 4.0 },
+      { role: 'Point 3', duration: 4.0 },
+      { role: 'Wrap', duration: 2.5 },
+    ],
+  },
+];
+
+function readPatterns() {
+  try {
+    if (fs.existsSync(PATTERNS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(PATTERNS_FILE, 'utf8'));
+      if (Array.isArray(data)) {
+        return data.map((p) => {
+          const beats = Array.isArray(p.beats) ? p.beats : [];
+          const totalDur = beats.reduce((sum, b) => sum + (parseFloat(b.duration) || 0), 0);
+          return {
+            id: p.id,
+            name: p.name || 'Pola Ritme',
+            aspect_ratio: p.aspect_ratio || '9:16',
+            beats_count: beats.length,
+            total_duration: parseFloat(totalDur.toFixed(1)),
+            beats,
+          };
+        });
+      }
+    }
+  } catch (_) {}
+
+  try {
+    fs.mkdirSync(path.dirname(PATTERNS_FILE), { recursive: true });
+    fs.writeFileSync(PATTERNS_FILE, JSON.stringify(DEFAULT_PATTERNS, null, 2));
+  } catch (_) {}
+  return DEFAULT_PATTERNS;
+}
+
+function writePatterns(list) {
+  try {
+    fs.mkdirSync(path.dirname(PATTERNS_FILE), { recursive: true });
+    fs.writeFileSync(PATTERNS_FILE, JSON.stringify(list, null, 2));
+  } catch (_) {}
+}
+
+function createPattern(data) {
+  const name = String(data.name || '').trim();
+  if (!name) {
+    throw new Error('Nama pola tidak boleh kosong');
+  }
+  const patterns = readPatterns();
+  const id = `pat_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
+  const beats = Array.isArray(data.beats)
+    ? data.beats.map((b, idx) => ({
+        role: String(b.role || `Beat ${idx + 1}`).trim(),
+        duration: Math.max(0.5, parseFloat(b.duration) || 3.0),
+      }))
+    : [];
+  const totalDur = beats.reduce((sum, b) => sum + b.duration, 0);
+  const newPat = {
+    id,
+    name,
+    aspect_ratio: data.aspect_ratio === '16:9' ? '16:9' : '9:16',
+    beats_count: beats.length,
+    total_duration: parseFloat(totalDur.toFixed(1)),
+    beats,
+  };
+  patterns.push(newPat);
+  writePatterns(patterns);
+  return newPat;
+}
+
+function deletePattern(id) {
+  const patterns = readPatterns();
+  const filtered = patterns.filter((p) => p.id !== id);
+  if (filtered.length === patterns.length) {
+    throw new Error(`Pola "${id}" tidak ditemukan`);
+  }
+  writePatterns(filtered);
+  return { deleted: id };
+}
+
+function saveWorkspaceAsPattern(wsName, body) {
+  const cleanWs = path.basename(wsName);
+  const proj = readWorkspaceProject(cleanWs);
+  const scenes = Array.isArray(proj.scenes) ? proj.scenes : [];
+  if (scenes.length === 0) {
+    throw new Error('Project belum memiliki adegan untuk disimpan sebagai pola');
+  }
+
+  // Wajib STRIP: narration, prompt, visual_file (ambil murni beat_role & duration)
+  const beats = scenes.map((s, idx) => ({
+    role: String(s.beat_role || s.title || `Beat ${idx + 1}`).trim(),
+    duration: Math.max(0.5, parseFloat(s.duration) || 3.0),
+  }));
+
+  const patName = String((body && body.name) ? body.name : `${proj.name || cleanWs} Pattern`).trim();
+  return createPattern({
+    name: patName,
+    aspect_ratio: proj.aspect_ratio || '9:16',
+    beats,
+  });
+}
+
+function applyPatternToWorkspace(wsName, body) {
+  const cleanWs = path.basename(wsName);
+  const proj = readWorkspaceProject(cleanWs);
+  let targetBeats = [];
+
+  if (body && Array.isArray(body.beats) && body.beats.length > 0) {
+    targetBeats = body.beats;
+  } else if (body && body.pattern_id) {
+    const patterns = readPatterns();
+    const found = patterns.find((p) => p.id === body.pattern_id);
+    if (!found) throw new Error(`Pola dengan ID "${body.pattern_id}" tidak ditemukan`);
+    targetBeats = found.beats;
+  } else {
+    throw new Error('Pattern ID atau beats wajib disertakan');
+  }
+
+  if (!Array.isArray(proj.scenes)) {
+    proj.scenes = [];
+  }
+
+  // Menerapkan susunan durasi & beat_role tanpa merusak naskah/aset yang sudah ada
+  for (let i = 0; i < targetBeats.length; i++) {
+    const beat = targetBeats[i];
+    const dur = Math.max(0.5, parseFloat(beat.duration) || 3.0);
+    const role = String(beat.role || `Beat ${i + 1}`).trim();
+
+    if (proj.scenes[i]) {
+      proj.scenes[i].beat_role = role;
+      proj.scenes[i].duration = dur;
+      if (!proj.scenes[i].title) {
+        proj.scenes[i].title = role;
+      }
+    } else {
+      proj.scenes.push({
+        id: `sc_${Date.now()}_${i + 1}`,
+        title: role,
+        beat_role: role,
+        duration: dur,
+        narration: '',
+        visual_file: null,
+        transition: 'none',
+      });
+    }
+  }
+
+  writeWorkspaceProject(cleanWs, proj);
+  return proj;
+}
+
+// ── Channel Hub & DNA Evolution ─────────────────────────────────────────────
 
 function readChannels() {
   try {
     if (fs.existsSync(CHANNELS_FILE)) {
       const data = JSON.parse(fs.readFileSync(CHANNELS_FILE, 'utf8'));
-      if (Array.isArray(data)) return data;
+      if (Array.isArray(data)) {
+        return data.map((c) => {
+          if (!c.dna || typeof c.dna !== 'object') {
+            c.dna = {
+              learned_traits: [],
+              reference_notes: c.style_notes || '',
+              avg_scene_duration: 3.5,
+              style_summary: c.tone || '',
+            };
+          } else {
+            if (!Array.isArray(c.dna.learned_traits)) c.dna.learned_traits = [];
+            if (typeof c.dna.reference_notes !== 'string') c.dna.reference_notes = '';
+            if (typeof c.dna.avg_scene_duration !== 'number') c.dna.avg_scene_duration = 3.5;
+            if (typeof c.dna.style_summary !== 'string') c.dna.style_summary = '';
+          }
+          return c;
+        });
+      }
     }
   } catch (_) {}
   return [];
@@ -309,6 +515,12 @@ function createChannel(data) {
     visual_rules: String(data.visual_rules || data.visualRules || data.style_notes || '').trim(),
     subtitle_style: String(data.subtitle_style || data.subtitleStyle || '').trim(),
     style_notes: String(data.style_notes || data.visual_rules || '').trim(),
+    dna: {
+      learned_traits: Array.isArray(data.dna && data.dna.learned_traits) ? data.dna.learned_traits : [],
+      reference_notes: String((data.dna && data.dna.reference_notes) || data.reference_notes || data.style_notes || '').trim(),
+      avg_scene_duration: typeof (data.dna && data.dna.avg_scene_duration) === 'number' ? data.dna.avg_scene_duration : 3.5,
+      style_summary: String((data.dna && data.dna.style_summary) || data.tone || '').trim(),
+    },
     created_at: Date.now(),
   };
   channels.push(newChan);
@@ -333,6 +545,12 @@ function updateChannel(id, data) {
     visual_rules: data.visual_rules !== undefined ? String(data.visual_rules).trim() : (data.visualRules !== undefined ? String(data.visualRules).trim() : existing.visual_rules || existing.style_notes || ''),
     subtitle_style: data.subtitle_style !== undefined ? String(data.subtitle_style).trim() : (data.subtitleStyle !== undefined ? String(data.subtitleStyle).trim() : existing.subtitle_style || ''),
     style_notes: data.style_notes !== undefined ? String(data.style_notes).trim() : (data.visual_rules !== undefined ? String(data.visual_rules).trim() : existing.style_notes || ''),
+    dna: {
+      learned_traits: Array.isArray(data.dna && data.dna.learned_traits) ? data.dna.learned_traits : (existing.dna && existing.dna.learned_traits ? existing.dna.learned_traits : []),
+      reference_notes: String((data.dna && data.dna.reference_notes) || (existing.dna && existing.dna.reference_notes) || '').trim(),
+      avg_scene_duration: typeof (data.dna && data.dna.avg_scene_duration) === 'number' ? data.dna.avg_scene_duration : (existing.dna && typeof existing.dna.avg_scene_duration === 'number' ? existing.dna.avg_scene_duration : 3.5),
+      style_summary: String((data.dna && data.dna.style_summary) || (existing.dna && existing.dna.style_summary) || '').trim(),
+    },
     updated_at: Date.now(),
   };
   channels[idx] = updated;
@@ -348,6 +566,268 @@ function deleteChannel(id) {
   }
   writeChannels(filtered);
   return { deleted: id };
+}
+
+function localHeuristicDnaExtraction(referenceText) {
+  const text = String(referenceText || '').trim();
+  const lower = text.toLowerCase();
+
+  let avgDur = 3.5;
+  if (lower.includes('short') || lower.includes('tiktok') || lower.includes('reels') || lower.includes('cepat') || lower.includes('fast')) {
+    avgDur = 2.8;
+  } else if (lower.includes('panjang') || lower.includes('tutorial') || lower.includes('dokumenter') || lower.includes('deep dive') || lower.includes('explainer')) {
+    avgDur = 4.8;
+  }
+
+  const traits = [];
+  if (lower.includes('hook') || lower.includes('pancing')) {
+    traits.push('Hook tajam dan visual punch dalam 3 detik awal');
+  } else {
+    traits.push('Pembuka langsung to-the-point tanpa intro panjang');
+  }
+
+  if (lower.includes('cepat') || lower.includes('dinamis') || lower.includes('ritme')) {
+    traits.push('Pacing dinamis dengan pergantian visual setiap 2-3 detik');
+  } else {
+    traits.push('Pacing teratur menyesuaikan penekanan kata kunci naskah');
+  }
+
+  if (lower.includes('sub') || lower.includes('teks') || lower.includes('caption')) {
+    traits.push('Tipografi tegas di area tengah bawah dengan penekanan kata');
+  } else {
+    traits.push('Visual bersih fokus pada kontras subjek utama');
+  }
+
+  const summary = text.length > 120 ? text.slice(0, 117) + '...' : (text || 'Gaya konten dinamis');
+
+  return {
+    style_summary: summary,
+    reference_notes: text.slice(0, 1000),
+    avg_scene_duration: avgDur,
+    learned_traits: traits,
+  };
+}
+
+async function extractChannelDna(channelId, refText) {
+  const channels = readChannels();
+  const chan = channels.find((c) => c.id === channelId);
+  if (!chan) throw new Error(`Channel "${channelId}" tidak ditemukan`);
+
+  const text = String(refText || '').trim();
+  if (!text) throw new Error('Teks referensi tidak boleh kosong');
+
+  let extracted = null;
+
+  if (fs.existsSync(ANTIGRAVITY_BIN)) {
+    try {
+      const prompt = `Analisis teks referensi ini dan berikan ringkasan DNA gaya konten dalam format JSON murni:
+{
+  "style_summary": "1 kalimat ringkasan gaya",
+  "reference_notes": "catatan referensi",
+  "avg_scene_duration": 3.2,
+  "learned_traits": ["trait visual", "trait tempo", "trait audio"]
+}
+HANYA kembalikan JSON tanpa markdown.
+Teks referensi:
+${text.slice(0, 2000)}`;
+
+      const { stdout } = await new Promise((resolve, reject) => {
+        let p = null;
+        const timer = setTimeout(() => {
+          if (p) try { p.kill('SIGTERM'); } catch (_) {}
+          reject(new Error('Timeout'));
+        }, 25000);
+
+        try {
+          p = spawn(ANTIGRAVITY_BIN, ['--dangerously-skip-permissions', '-p', prompt], {
+            env: getAntigravityEnv(false),
+            cwd: HOME_DIR,
+          });
+          let out = '';
+          p.stdout.on('data', (d) => { out += d.toString('utf8'); });
+          p.on('close', (code) => {
+            clearTimeout(timer);
+            if (code === 0) resolve({ stdout: out });
+            else reject(new Error(`Antigravity exit code ${code}`));
+          });
+          p.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          reject(e);
+        }
+      });
+
+      const cleanJson = stripAnsi(stdout).replace(/```json/g, '').replace(/```/g, '').trim();
+      const match = cleanJson.match(/\{[\s\S]*\}/);
+      if (match) {
+        extracted = JSON.parse(match[0]);
+      }
+    } catch (_) {}
+  }
+
+  if (!extracted) {
+    extracted = localHeuristicDnaExtraction(text);
+  }
+
+  if (!chan.dna) {
+    chan.dna = { learned_traits: [], reference_notes: '', avg_scene_duration: 3.5, style_summary: '' };
+  }
+  chan.dna.reference_notes = extracted.reference_notes || text.slice(0, 1000);
+  chan.dna.style_summary = extracted.style_summary || chan.dna.style_summary || '';
+  chan.dna.avg_scene_duration = typeof extracted.avg_scene_duration === 'number' ? extracted.avg_scene_duration : 3.5;
+  if (Array.isArray(extracted.learned_traits)) {
+    for (const t of extracted.learned_traits) {
+      if (t && !chan.dna.learned_traits.includes(t)) {
+        chan.dna.learned_traits.push(t);
+      }
+    }
+  }
+
+  writeChannels(channels);
+  return chan;
+}
+
+function promoteWorkspaceDna(wsName) {
+  const cleanWs = path.basename(wsName);
+  const proj = readWorkspaceProject(cleanWs);
+  if (!proj) throw new Error(`Workspace "${cleanWs}" tidak ditemukan`);
+
+  const channels = readChannels();
+  let chan = proj.channel_id ? channels.find((c) => c.id === proj.channel_id) : null;
+  if (!chan && channels.length > 0) {
+    chan = channels[0];
+    proj.channel_id = chan.id;
+    writeWorkspaceProject(cleanWs, proj);
+  }
+  if (!chan) throw new Error('Belum ada channel untuk menampung DNA proyek ini');
+
+  if (!chan.dna) {
+    chan.dna = { learned_traits: [], reference_notes: '', avg_scene_duration: 3.5, style_summary: '' };
+  }
+
+  const scenes = Array.isArray(proj.scenes) ? proj.scenes : [];
+  const count = scenes.length;
+  const totalDur = scenes.reduce((sum, s) => sum + (parseFloat(s.duration) || 0), 0);
+  const avgDur = count > 0 ? parseFloat((totalDur / count).toFixed(1)) : 3.5;
+  const roles = scenes.map((s) => s.beat_role || 'Beat').join(' -> ');
+  const trait = `Pola ${count} adegan (ritme rata-rata ${avgDur}s): ${roles.slice(0, 90)}`;
+
+  if (!chan.dna.learned_traits.includes(trait)) {
+    chan.dna.learned_traits.unshift(trait);
+  }
+  chan.dna.avg_scene_duration = avgDur;
+  writeChannels(channels);
+
+  return { channel: chan, dna: chan.dna, learned_trait: trait, avg_scene_duration: avgDur };
+}
+
+async function syncVoDuration(wsName) {
+  const cleanWs = path.basename(wsName);
+  const proj = readWorkspaceProject(cleanWs);
+  if (!proj) throw new Error(`Workspace "${cleanWs}" tidak ditemukan`);
+
+  const wsPath = path.join(WORKSPACES_DIR, cleanWs);
+  let voPath = (proj.audio && proj.audio.vo_file) ? proj.audio.vo_file : null;
+  if (voPath && !path.isAbsolute(voPath)) {
+    voPath = path.join(wsPath, voPath);
+  }
+
+  if (!voPath || !fs.existsSync(voPath)) {
+    const candidates = [
+      path.join(wsPath, 'voiceover.m4a'),
+      path.join(wsPath, 'voiceover.mp3'),
+      path.join(wsPath, 'voiceover.wav'),
+      path.join(wsPath, 'audio', 'voiceover.m4a'),
+      path.join(wsPath, 'audio', 'voiceover.mp3'),
+    ];
+    for (const cand of candidates) {
+      if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+        voPath = cand;
+        proj.audio = proj.audio || {};
+        proj.audio.vo_file = path.relative(wsPath, cand);
+        break;
+      }
+    }
+    if (!voPath || !fs.existsSync(voPath)) {
+      const audioSub = path.join(wsPath, 'audio');
+      if (fs.existsSync(audioSub)) {
+        const audioFiles = fs.readdirSync(audioSub)
+          .filter((f) => ['.mp3', '.m4a', '.wav', '.aac'].includes(path.extname(f).toLowerCase()))
+          .sort((a, b) => fs.statSync(path.join(audioSub, b)).mtimeMs - fs.statSync(path.join(audioSub, a)).mtimeMs);
+        if (audioFiles.length > 0) {
+          voPath = path.join(audioSub, audioFiles[0]);
+          proj.audio = proj.audio || {};
+          proj.audio.vo_file = path.join('audio', audioFiles[0]);
+        }
+      }
+    }
+  }
+
+  if (!voPath || !fs.existsSync(voPath)) {
+    throw new Error('Belum ada file rekaman VO di audio project atau direktori workspace');
+  }
+
+  const ffprobeBin = fs.existsSync(path.join(PREFIX_DIR, 'bin', 'ffprobe')) ? path.join(PREFIX_DIR, 'bin', 'ffprobe') : 'ffprobe';
+  let totalVoSec = 0;
+  try {
+    const { stdout } = await execFileAsync(ffprobeBin, [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      voPath,
+    ]);
+    totalVoSec = Math.max(1.0, parseFloat(stdout.trim()) || 0);
+  } catch (probeErr) {
+    throw new Error(`Gagal membaca durasi audio VO: ${probeErr.message}`);
+  }
+
+  if (totalVoSec <= 0) {
+    throw new Error('Durasi file VO tidak valid atau kosong');
+  }
+
+  const scenes = Array.isArray(proj.scenes) ? proj.scenes : [];
+  if (scenes.length === 0) {
+    return { status: 'ok', total_duration: totalVoSec, scenes: [] };
+  }
+
+  const wordCounts = scenes.map((sc) => {
+    const text = String(sc.narration || sc.text || '').trim();
+    if (!text) return 0;
+    return text.split(/\s+/).filter(Boolean).length;
+  });
+  const totalWords = wordCounts.reduce((a, b) => a + b, 0);
+
+  if (totalWords > 0) {
+    let accumulated = 0;
+    for (let i = 0; i < scenes.length; i++) {
+      if (i === scenes.length - 1) {
+        const remaining = Math.max(1.0, parseFloat((totalVoSec - accumulated).toFixed(1)));
+        scenes[i].duration = remaining;
+      } else {
+        const ratio = wordCounts[i] > 0 ? (wordCounts[i] / totalWords) : (1 / (totalWords * 2));
+        const dur = Math.max(1.0, parseFloat((ratio * totalVoSec).toFixed(1)));
+        scenes[i].duration = dur;
+        accumulated += dur;
+      }
+    }
+  } else {
+    const perScene = Math.max(1.0, parseFloat((totalVoSec / scenes.length).toFixed(1)));
+    let accumulated = 0;
+    for (let i = 0; i < scenes.length; i++) {
+      if (i === scenes.length - 1) {
+        scenes[i].duration = Math.max(1.0, parseFloat((totalVoSec - accumulated).toFixed(1)));
+      } else {
+        scenes[i].duration = perScene;
+        accumulated += perScene;
+      }
+    }
+  }
+
+  writeWorkspaceProject(cleanWs, proj);
+  return { status: 'ok', total_duration: totalVoSec, audio_duration: totalVoSec, scenes: proj.scenes };
 }
 
 // ── Workspace & Project Management ──────────────────────────────────────────
@@ -1559,12 +2039,14 @@ async function handleChat(req, res) {
       let projInfo = '';
       try {
         const proj = readWorkspaceProject(activeWorkspace);
-        projInfo = `[Project State: Stage="${proj.stage || 'script'}", Aspect Ratio="${proj.aspect_ratio || '9:16'}", Scenes Count=${Array.isArray(proj.scenes) ? proj.scenes.length : 0}]\n`;
+        projInfo = `[Project File: "${wsPath}/project.json" | Stage: "${proj.stage || 'script'}" | Aspect Ratio: "${proj.aspect_ratio || '9:16'}" | Scenes: ${Array.isArray(proj.scenes) ? proj.scenes.length : 0}]\n` +
+          `[Scene Schema: [{"id": "scene_1", "title": "Hook", "beat_role": "Hook", "duration": 2.5, "narration": "...", "prompt": "...", "visual": "assets/...", "transition": "none"}]]\n`;
         if (proj.channel_id) {
           const channels = readChannels();
           const matchedChan = channels.find((c) => c.id === proj.channel_id);
           if (matchedChan) {
-            chanInfo = `[Channel Profile: Name="${matchedChan.name}", Niche="${matchedChan.niche}", Target Audience="${matchedChan.target_audience}", Aspect Ratio="${matchedChan.aspect_ratio}", Tone="${matchedChan.tone}", Style Notes="${matchedChan.style_notes}"]\n`;
+            const dnaObj = matchedChan.dna || {};
+            chanInfo = `[Channel DNA: Name="${matchedChan.name}", Aspect Ratio="${matchedChan.aspect_ratio}", Avg Scene Duration=${dnaObj.avg_scene_duration || 3.5}s, Learned Traits=${JSON.stringify(dnaObj.learned_traits || [])}]\n`;
           }
         }
       } catch (_) {}
@@ -1572,9 +2054,9 @@ async function handleChat(req, res) {
       let rawPrefix = `[Konteks Workspace: "${activeWorkspace}" | Path: "${wsPath}"]\n` +
         chanInfo +
         projInfo +
-        `Anda beroperasi di workspace ini. Simpan file script ke "${wsPath}/scripts", aset ke "${wsPath}/assets", audio ke "${wsPath}/audio", dan render ke "${wsPath}/output".\n\n`;
-      if (rawPrefix.length > 1500) {
-        rawPrefix = rawPrefix.slice(0, 1490) + '...\n\n';
+        `Anda beroperasi di workspace ini. Anda dapat langsung memodifikasi file "${wsPath}/project.json" atau "${wsPath}/scripts/main.txt" saat diminta membuat atau mengubah naskah dan susunan adegan. Simpan file script ke "${wsPath}/scripts", aset ke "${wsPath}/assets", audio ke "${wsPath}/audio", dan render ke "${wsPath}/renders".\n\n`;
+      if (rawPrefix.length > 1800) {
+        rawPrefix = rawPrefix.slice(0, 1790) + '...\n\n';
       }
       wsContextPrefix = rawPrefix;
     }
@@ -1803,6 +2285,19 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  const chanDnaMatch = pathname.match(/^\/channels\/([^\/]+)\/extract-dna$/);
+  if (req.method === 'POST' && chanDnaMatch) {
+    const chanId = decodeURIComponent(chanDnaMatch[1]);
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const updated = await extractChannelDna(chanId, body.reference_text || body.text || '');
+      return sendJson(res, 200, { status: 'ok', channel: updated });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal mengekstrak DNA channel' });
+    }
+  }
+
   // ── Workspace Endpoints ───────────────────────────────────────────────────
   if (req.method === 'GET' && pathname === '/workspaces') {
     const workspaces = listWorkspaces();
@@ -1938,6 +2433,82 @@ const server = http.createServer(async (req, res) => {
       });
     }
     return sendJson(res, 200, job);
+  }
+
+  const wsSavePatMatch = pathname.match(/^\/workspaces\/([^\/]+)\/save-as-pattern$/);
+  if (req.method === 'POST' && wsSavePatMatch) {
+    const wsName = decodeURIComponent(wsSavePatMatch[1]);
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const pat = saveWorkspaceAsPattern(wsName, body);
+      return sendJson(res, 200, { status: 'ok', pattern: pat });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menyimpan pola dari proyek' });
+    }
+  }
+
+  const wsApplyPatMatch = pathname.match(/^\/workspaces\/([^\/]+)\/apply-pattern$/);
+  if (req.method === 'POST' && wsApplyPatMatch) {
+    const wsName = decodeURIComponent(wsApplyPatMatch[1]);
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const updatedProj = applyPatternToWorkspace(wsName, body);
+      return sendJson(res, 200, { status: 'ok', project: updatedProj, scenes: updatedProj.scenes || [] });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menerapkan pola ke proyek' });
+    }
+  }
+
+  const wsPromoteDnaMatch = pathname.match(/^\/workspaces\/([^\/]+)\/promote-dna$/);
+  if (req.method === 'POST' && wsPromoteDnaMatch) {
+    const wsName = decodeURIComponent(wsPromoteDnaMatch[1]);
+    try {
+      const result = promoteWorkspaceDna(wsName);
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal mempromosikan ritme ke DNA channel' });
+    }
+  }
+
+  const wsSyncVoMatch = pathname.match(/^\/workspaces\/([^\/]+)\/sync-vo-duration$/);
+  if (req.method === 'POST' && wsSyncVoMatch) {
+    const wsName = decodeURIComponent(wsSyncVoMatch[1]);
+    try {
+      const result = await syncVoDuration(wsName);
+      return sendJson(res, 200, result);
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal sinkronisasi durasi audio VO' });
+    }
+  }
+
+  // ── Living Patterns Endpoints ─────────────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/patterns') {
+    const patterns = readPatterns();
+    return sendJson(res, 200, { status: 'ok', patterns });
+  }
+
+  if (req.method === 'POST' && pathname === '/patterns') {
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const created = createPattern(body);
+      return sendJson(res, 200, { status: 'ok', pattern: created });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal membuat pola ritme' });
+    }
+  }
+
+  const patDeleteMatch = pathname.match(/^\/patterns\/([^\/]+)$/);
+  if (req.method === 'DELETE' && patDeleteMatch) {
+    const patId = decodeURIComponent(patDeleteMatch[1]);
+    try {
+      const result = deletePattern(patId);
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menghapus pola ritme' });
+    }
   }
 
   // ── Asset Library Endpoints ───────────────────────────────────────────────
@@ -2086,4 +2657,13 @@ module.exports = {
   copyLibraryAssetToWorkspace,
   handleTts,
   handleAudioMaster,
+  readPatterns,
+  writePatterns,
+  createPattern,
+  deletePattern,
+  saveWorkspaceAsPattern,
+  applyPatternToWorkspace,
+  extractChannelDna,
+  promoteWorkspaceDna,
+  syncVoDuration,
 };
