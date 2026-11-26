@@ -937,8 +937,3 @@ fun ChatScreen(
         }
     }
 
-/**
- * Kompatibilitas dengan MainActivity lama yang mengimpor AgentScreen
- */
-@Composable
-fun AgentScreen(modifier: Modifier = Modifier) = ChatScreen(modifier)

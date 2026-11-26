@@ -599,6 +599,16 @@ object LinuxRuntimeManager {
         val env = buildEnvironment(paths)
         val nodeBin = "${paths.prefixDir}/bin/node"
 
+        try {
+            copyAssetToHome(context, "bionic-compat.js", "${paths.homeDir}/bionic-compat.js")
+            copyAssetToHome(context, "proxy.js", "${paths.homeDir}/proxy.js")
+            copyAssetToHome(context, "studio-bridge.js", "${paths.homeDir}/studio-bridge.js")
+            copyAssetToHome(context, "pty-bridge.py", "${paths.homeDir}/pty-bridge.py")
+            File("${paths.homeDir}/pty-bridge.py").setExecutable(true)
+        } catch (e: Exception) {
+            appendLog("[4/4] Peringatan sinkronisasi aset jembatan: ${e.message}")
+        }
+
         if (!isProcessAlive(proxyProcess)) {
             val pbProxy = ProcessBuilder(nodeBin, "${paths.homeDir}/proxy.js")
             pbProxy.environment().clear()
@@ -660,6 +670,10 @@ object LinuxRuntimeManager {
             val sid = res.optString("active_session_id", "")
             if (sid.isNotBlank()) {
                 _activeSessionId.value = sid
+            }
+            val ws = res.optString("active_workspace", "")
+            if (ws.isNotBlank() && _activeWorkspace.value.isBlank()) {
+                _activeWorkspace.value = ws
             }
             res
         } catch (_: Exception) {

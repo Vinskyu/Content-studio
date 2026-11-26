@@ -51,9 +51,32 @@ function getAntigravityEnv(isAuthMode = false) {
   return env;
 }
 
+function resolvePythonBin() {
+  const candidates = [
+    path.join(PREFIX_DIR, 'bin', 'python3'),
+    path.join(PREFIX_DIR, 'bin', 'python'),
+    '/data/user/0/com.agy/files/usr/bin/python3',
+    '/data/user/0/com.agy/files/usr/bin/python',
+    'python3',
+    'python',
+  ];
+  for (const c of candidates) {
+    if (c.startsWith('/') && fs.existsSync(c)) return c;
+  }
+  return 'python3';
+}
+
 function resolvePtyBridge() {
-  if (fs.existsSync(PTY_BRIDGE_PATH)) return PTY_BRIDGE_PATH;
-  if (fs.existsSync(PTY_BRIDGE_FALLBACK)) return PTY_BRIDGE_FALLBACK;
+  const candidates = [
+    PTY_BRIDGE_PATH,
+    PTY_BRIDGE_FALLBACK,
+    path.join(HOME_DIR, 'pty-bridge.py'),
+    path.join(__dirname, 'pty-bridge.py'),
+    '/data/user/0/com.agy/files/pty-bridge.py',
+  ];
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) return c;
+  }
   return null;
 }
 
@@ -372,7 +395,8 @@ function handleAuthStart(res) {
   const authEnv = getAntigravityEnv(true);
 
   if (ptyHelper && fs.existsSync(ptyHelper)) {
-    proc = spawn('python3', [ptyHelper, ANTIGRAVITY_BIN, '-p', 'ping'], {
+    const pythonBin = resolvePythonBin();
+    proc = spawn(pythonBin, [ptyHelper, ANTIGRAVITY_BIN, '-p', 'ping'], {
       env: authEnv,
       cwd: HOME_DIR,
       stdio: ['pipe', 'pipe', 'pipe'],

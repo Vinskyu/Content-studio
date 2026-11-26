@@ -25,13 +25,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.contentstudio.app.ui.theme.ActionSolidBg
-import com.contentstudio.app.ui.theme.ActionSolidText
 import com.contentstudio.app.ui.theme.BgDark
 import com.contentstudio.app.ui.theme.BorderSubtle
 import com.contentstudio.app.ui.theme.CardHighlight
 import com.contentstudio.app.ui.theme.SurfaceCard
-import com.contentstudio.app.ui.theme.TextMuted
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
 
