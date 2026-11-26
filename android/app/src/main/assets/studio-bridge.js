@@ -313,6 +313,28 @@ function createWorkspace(rawName) {
   };
 }
 
+function deleteWorkspace(rawName) {
+  const cleanName = path.basename(String(rawName || '')).trim();
+  if (!cleanName || cleanName === '.' || cleanName === '..') {
+    throw new Error('Nama workspace tidak valid');
+  }
+  const wsPath = path.resolve(WORKSPACES_DIR, cleanName);
+  const baseWsDir = path.resolve(WORKSPACES_DIR);
+  if (wsPath !== baseWsDir && !wsPath.startsWith(baseWsDir + path.sep)) {
+    throw new Error('Akses direktori di luar workspaces dilarang');
+  }
+  if (!fs.existsSync(wsPath) || !fs.statSync(wsPath).isDirectory()) {
+    throw new Error(`Workspace "${cleanName}" tidak ditemukan`);
+  }
+  fs.rmSync(wsPath, { recursive: true, force: true });
+  const st = readState();
+  if (st.active_workspace === cleanName) {
+    st.active_workspace = '';
+    writeState(st);
+  }
+  return { deleted: cleanName };
+}
+
 function scanWorkspaceFiles(wsName) {
   const cleanName = path.basename(String(wsName || ''));
   const wsPath = path.join(WORKSPACES_DIR, cleanName);
@@ -574,6 +596,224 @@ async function handleAuthCode(req, res) {
   });
 }
 
+// ── Audio Studio (TTS & Mastering) ─────────────────────────────────────────
+
+function ensureEdgeTts() {
+  return new Promise((resolve) => {
+    const pythonBin = resolvePythonBin();
+    const checkProc = spawn(pythonBin, ['-c', 'import edge_tts'], {
+      env: getAntigravityEnv(false),
+    });
+    checkProc.on('close', (code) => {
+      if (code === 0) return resolve(true);
+      console.log('[studio-bridge] edge_tts tidak ditemukan, mencoba auto-install via pip...');
+      const pipProc = spawn(pythonBin, ['-m', 'pip', 'install', '--no-cache-dir', '--break-system-packages', 'edge-tts'], {
+        env: getAntigravityEnv(false),
+      });
+      pipProc.on('close', (pipCode) => {
+        if (pipCode === 0) return resolve(true);
+        const pipProc2 = spawn(pythonBin, ['-m', 'pip', 'install', '--no-cache-dir', 'edge-tts'], {
+          env: getAntigravityEnv(false),
+        });
+        pipProc2.on('close', (pipCode2) => resolve(pipCode2 === 0));
+        pipProc2.on('error', () => resolve(false));
+      });
+      pipProc.on('error', () => resolve(false));
+    });
+    checkProc.on('error', () => resolve(false));
+  });
+}
+
+async function handleTts(req, res) {
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { status: 'error', error: 'JSON tidak valid' });
+  }
+
+  const workspace = path.basename(String(body.workspace || '').trim());
+  const text = String(body.text || '').trim();
+
+  if (!workspace) {
+    return sendJson(res, 400, { status: 'error', error: 'Workspace belum dipilih' });
+  }
+  if (!text) {
+    return sendJson(res, 400, { status: 'error', error: 'Teks naskah kosong' });
+  }
+
+  const wsPath = path.join(WORKSPACES_DIR, workspace);
+  if (!fs.existsSync(wsPath)) {
+    return sendJson(res, 404, { status: 'error', error: `Workspace "${workspace}" tidak ditemukan` });
+  }
+
+  const audioDir = path.join(wsPath, 'audio');
+  fs.mkdirSync(audioDir, { recursive: true });
+
+  // Khusus Multilingual Neural - Dilarang keras pakai Ardi atau Gadis
+  const allowedVoices = {
+    'brian': 'en-US-BrianMultilingualNeural',
+    'en-us-brianmultilingualneural': 'en-US-BrianMultilingualNeural',
+    'andrew': 'en-US-AndrewMultilingualNeural',
+    'en-us-andrewmultilingualneural': 'en-US-AndrewMultilingualNeural',
+    'remy': 'fr-FR-RemyMultilingualNeural',
+    'fr-fr-remymultilingualneural': 'fr-FR-RemyMultilingualNeural',
+    'emma': 'en-US-EmmaMultilingualNeural',
+    'en-us-emmamultilingualneural': 'en-US-EmmaMultilingualNeural',
+    'ava': 'en-US-AvaMultilingualNeural',
+    'en-us-avamultilingualneural': 'en-US-AvaMultilingualNeural',
+  };
+
+  const voiceKey = String(body.voice || '').trim().toLowerCase();
+  const voice = allowedVoices[voiceKey] || 'en-US-BrianMultilingualNeural';
+
+  const rate = String(body.rate || '+0%').trim();
+  const pitch = String(body.pitch || '+0Hz').trim();
+
+  await ensureEdgeTts();
+
+  const tmpDir = path.join(CONTENT_STUDIO_DIR, 'tmp');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const tmpTxt = path.join(tmpDir, `tmp_tts_${Date.now()}_${crypto.randomBytes(3).toString('hex')}.txt`);
+  const outName = `tts_${Date.now()}.mp3`;
+  const outMp3 = path.join(audioDir, outName);
+
+  try {
+    fs.writeFileSync(tmpTxt, text, 'utf8');
+  } catch (err) {
+    return sendJson(res, 500, { status: 'error', error: `Gagal membuat file sementara: ${err.message}` });
+  }
+
+  const pythonBin = resolvePythonBin();
+  // WAJIB gunakan --rate=... dan --pitch=... agar nilai negatif tidak tertukar sebagai argumen CLI
+  const args = [
+    '-m',
+    'edge_tts',
+    '--voice', voice,
+    `--rate=${rate}`,
+    `--pitch=${pitch}`,
+    '--file', tmpTxt,
+    '--write-media', outMp3,
+  ];
+
+  const proc = spawn(pythonBin, args, {
+    env: getAntigravityEnv(false),
+    cwd: CONTENT_STUDIO_DIR,
+  });
+
+  let procErr = '';
+  proc.stderr.on('data', (d) => { procErr += d.toString('utf8'); });
+
+  proc.on('close', (code) => {
+    try { fs.unlinkSync(tmpTxt); } catch (_) {}
+    if (code === 0 && fs.existsSync(outMp3) && fs.statSync(outMp3).size > 0) {
+      const st = fs.statSync(outMp3);
+      return sendJson(res, 200, {
+        status: 'ok',
+        file: {
+          name: outName,
+          rel_path: `audio/${outName}`,
+          size: st.size,
+          path: outMp3,
+        },
+      });
+    } else {
+      const errClean = cleanStderr(procErr) || `edge-tts selesai dengan kode ${code}`;
+      return sendJson(res, 500, { status: 'error', error: `Gagal membuat TTS: ${errClean}` });
+    }
+  });
+
+  proc.on('error', (err) => {
+    try { fs.unlinkSync(tmpTxt); } catch (_) {}
+    return sendJson(res, 500, { status: 'error', error: `Gagal menjalankan edge-tts: ${err.message}` });
+  });
+}
+
+async function handleAudioMaster(req, res) {
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { status: 'error', error: 'JSON tidak valid' });
+  }
+
+  const workspace = path.basename(String(body.workspace || '').trim());
+  const relOrFileName = String(body.file || '').trim();
+
+  if (!workspace) {
+    return sendJson(res, 400, { status: 'error', error: 'Workspace belum dipilih' });
+  }
+  if (!relOrFileName) {
+    return sendJson(res, 400, { status: 'error', error: 'Parameter file audio kosong' });
+  }
+
+  const wsPath = path.join(WORKSPACES_DIR, workspace);
+  if (!fs.existsSync(wsPath)) {
+    return sendJson(res, 404, { status: 'error', error: `Workspace "${workspace}" tidak ditemukan` });
+  }
+
+  let inputPath = path.resolve(wsPath, relOrFileName);
+  if (!fs.existsSync(inputPath)) {
+    inputPath = path.resolve(wsPath, 'audio', path.basename(relOrFileName));
+  }
+  if (!fs.existsSync(inputPath) || !fs.statSync(inputPath).isFile()) {
+    return sendJson(res, 404, { status: 'error', error: `File audio input tidak ditemukan: ${relOrFileName}` });
+  }
+
+  const ext = path.extname(inputPath);
+  const baseName = path.basename(inputPath, ext);
+  // Hindari nama ganda _master_master.m4a
+  const cleanBase = baseName.replace(/(_master)+$/, '');
+  const outName = `${cleanBase}_master.m4a`;
+  const outputPath = path.join(path.dirname(inputPath), outName);
+
+  const ffmpegBin = path.join(PREFIX_DIR, 'bin', 'ffmpeg');
+  const targetFfmpeg = fs.existsSync(ffmpegBin) ? ffmpegBin : 'ffmpeg';
+
+  const filterChain = 'highpass=f=80,afftdn=nf=-25,equalizer=f=120:t=q:w=1:g=2.5,acompressor=threshold=-18dB:ratio=3:attack=5:release=50,loudnorm=I=-14:TP=-1.5:LRA=11';
+
+  const args = [
+    '-y',
+    '-i', inputPath,
+    '-vn',
+    '-af', filterChain,
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    outputPath,
+  ];
+
+  const proc = spawn(targetFfmpeg, args, {
+    env: getAntigravityEnv(false),
+    cwd: wsPath,
+  });
+
+  let procErr = '';
+  proc.stderr.on('data', (d) => { procErr += d.toString('utf8'); });
+
+  proc.on('close', (code) => {
+    if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+      const st = fs.statSync(outputPath);
+      const relOut = path.relative(wsPath, outputPath);
+      return sendJson(res, 200, {
+        status: 'ok',
+        file: {
+          name: outName,
+          rel_path: relOut,
+          size: st.size,
+          path: outputPath,
+        },
+      });
+    } else {
+      const errClean = cleanStderr(procErr) || `FFmpeg selesai dengan kode ${code}`;
+      return sendJson(res, 500, { status: 'error', error: `Gagal mastering audio: ${errClean}` });
+    }
+  });
+
+  proc.on('error', (err) => {
+    return sendJson(res, 500, { status: 'error', error: `Gagal menjalankan FFmpeg: ${err.message}` });
+  });
+}
+
 // ── Chat Stream Handler (Connected to ContentStudio Kitchen) ────────────────
 
 async function handleChat(req, res) {
@@ -646,13 +886,28 @@ async function handleChat(req, res) {
     }
   }
 
-  const recentHistory = session.messages.slice(-8, -1);
+  const previousTurns = session.messages.slice(0, -1);
+  const recentHistory = previousTurns.slice(-6);
   let promptToSend = userMsg;
   if (recentHistory.length > 0) {
-    const historyLines = recentHistory.map((m) =>
-      `${m.role === 'user' ? 'USER' : 'ASSISTANT'}: ${m.content}`
-    );
-    promptToSend = `${wsContextPrefix}Konteks percakapan sebelumnya:\n${historyLines.join('\n')}\n\nInstruksi terbaru USER:\n${userMsg}`;
+    const historyLines = [];
+    let historyChars = 0;
+    for (let i = recentHistory.length - 1; i >= 0; i--) {
+      const m = recentHistory[i];
+      const roleStr = m.role === 'user' ? 'USER' : 'ASSISTANT';
+      const cleanContent = String(m.content || '').slice(0, 2000);
+      const line = `${roleStr}: ${cleanContent}`;
+      if (historyChars + line.length > 5000 && historyLines.length > 0) {
+        break;
+      }
+      historyLines.unshift(line);
+      historyChars += line.length;
+    }
+    if (historyLines.length > 0) {
+      promptToSend = `${wsContextPrefix}Konteks percakapan sebelumnya:\n${historyLines.join('\n')}\n\nInstruksi terbaru USER:\n${userMsg}`;
+    } else if (wsContextPrefix) {
+      promptToSend = `${wsContextPrefix}${userMsg}`;
+    }
   } else if (wsContextPrefix) {
     promptToSend = `${wsContextPrefix}${userMsg}`;
   }
@@ -720,7 +975,14 @@ async function handleChat(req, res) {
     }
 
     if (code === 0) {
-      const finalReply = cleanStdout || '(Selesai tanpa output teks)';
+      let finalReply = cleanStdout;
+      if (!finalReply) {
+        if (cleanErr) {
+          finalReply = `[Error/Stderr Antigravity]: ${cleanErr}`;
+        } else {
+          finalReply = '[Peringatan] Antigravity menyelesaikan proses tanpa output teks.';
+        }
+      }
       session.messages.push({
         role: 'assistant',
         content: finalReply,
@@ -729,7 +991,11 @@ async function handleChat(req, res) {
       session.updated_at = Date.now();
       saveSession(session);
 
-      emit({ type: 'done', text: finalReply, session_id: session.id });
+      if (!cleanStdout && cleanErr) {
+        emit({ type: 'error', text: finalReply, session_id: session.id });
+      } else {
+        emit({ type: 'done', text: finalReply, session_id: session.id });
+      }
     } else {
       const errorDetail = cleanErr || cleanStdout || `Antigravity CLI keluar dengan kode ${code}`;
       const finalReply = `[Error kode ${code}] ${errorDetail}`;
@@ -822,6 +1088,17 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { status: 'ok', workspace: wsName, files });
   }
 
+  const wsDeleteMatch = pathname.match(/^\/workspaces\/([^\/]+)$/);
+  if (req.method === 'DELETE' && wsDeleteMatch) {
+    const wsName = decodeURIComponent(wsDeleteMatch[1]);
+    try {
+      const result = deleteWorkspace(wsName);
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menghapus workspace' });
+    }
+  }
+
   // ── Sessions Endpoints ────────────────────────────────────────────────────
   if (req.method === 'GET' && pathname === '/sessions') {
     const st = readState();
@@ -889,6 +1166,15 @@ const server = http.createServer(async (req, res) => {
     return handleChat(req, res);
   }
 
+  // ── Audio Studio Endpoints ───────────────────────────────────────────────
+  if (req.method === 'POST' && pathname === '/tts') {
+    return handleTts(req, res);
+  }
+
+  if (req.method === 'POST' && pathname === '/audio/master') {
+    return handleAudioMaster(req, res);
+  }
+
   return sendJson(res, 404, { status: 'error', error: 'Endpoint tidak ditemukan' });
 });
 
@@ -903,5 +1189,8 @@ module.exports = {
   cleanStderr,
   listWorkspaces,
   createWorkspace,
+  deleteWorkspace,
   scanWorkspaceFiles,
+  handleTts,
+  handleAudioMaster,
 };

@@ -23,6 +23,16 @@ android {
         }
     }
 
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("studio-debug.p12")
+            storePassword = "contentstudio123"
+            keyAlias = "contentstudio"
+            keyPassword = "contentstudio123"
+            storeType = "PKCS12"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -33,6 +43,7 @@ android {
         }
         debug {
             isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

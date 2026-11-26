@@ -403,6 +403,19 @@ object LinuxRuntimeManager {
                     appendLog("[2/4] ffmpeg ($prefix/bin/ffmpeg) terverifikasi dan siap.")
                 }
 
+                // Pastikan edge-tts terpasang untuk fitur TTS AI
+                appendLog("[2/4] Memeriksa modul edge-tts...")
+                try {
+                    val installEdgeTtsCmd = """
+                        python3 -m pip --version >/dev/null 2>&1 || python3 -m ensurepip >/dev/null 2>&1 || true;
+                        python3 -c "import edge_tts" >/dev/null 2>&1 || python3 -m pip install --no-cache-dir --break-system-packages edge-tts 2>&1 || python3 -m pip install --no-cache-dir edge-tts 2>&1 || true
+                    """.trimIndent()
+                    runInPrefix(context, installEdgeTtsCmd)
+                    appendLog("[2/4] edge-tts terverifikasi.")
+                } catch (e: Exception) {
+                    appendLog("[2/4] Catatan instalasi edge-tts: ${e.message}")
+                }
+
                 // TAHAP 3: Unduh Antigravity CLI (ARM64)
                 _setupStage.value = 3
                 val agyBin = File(prefix, "bin/antigravity")
@@ -840,6 +853,68 @@ object LinuxRuntimeManager {
         }
     }
 
+    fun deleteWorkspace(name: String): JSONObject {
+        return try {
+            val res = httpRequest("DELETE", "/workspaces/$name")
+            if (res.optString("status") == "ok") {
+                if (_activeWorkspace.value == name) {
+                    val remainingRes = listWorkspaces()
+                    val arr = remainingRes.optJSONArray("workspaces")
+                    if (arr != null && arr.length() > 0) {
+                        _activeWorkspace.value = arr.getJSONObject(0).optString("name", "")
+                    } else {
+                        _activeWorkspace.value = ""
+                    }
+                }
+            }
+            res
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal menghapus workspace")
+            }
+        }
+    }
+
+    fun generateTts(
+        workspace: String,
+        text: String,
+        voice: String = "en-US-BrianMultilingualNeural",
+        rate: String = "+0%",
+        pitch: String = "+0Hz",
+    ): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("workspace", workspace)
+                put("text", text)
+                put("voice", voice)
+                put("rate", rate)
+                put("pitch", pitch)
+            }.toString()
+            httpRequest("POST", "/tts", body, timeoutMs = 120_000)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal membuat TTS audio")
+            }
+        }
+    }
+
+    fun masterAudio(workspace: String, fileNameOrRelPath: String): JSONObject {
+        return try {
+            val body = JSONObject().apply {
+                put("workspace", workspace)
+                put("file", fileNameOrRelPath)
+            }.toString()
+            httpRequest("POST", "/audio/master", body, timeoutMs = 120_000)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal mastering audio")
+            }
+        }
+    }
+
     fun getWorkspaceFiles(name: String): JSONObject {
         return try {
             httpRequest("GET", "/workspaces/$name/files")
@@ -1003,6 +1078,12 @@ object LinuxRuntimeManager {
         return dir
     }
 
+    fun getWorkspaceScriptsDir(context: Context, workspaceName: String): File {
+        val dir = File(getWorkspaceDir(context, workspaceName), "scripts")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     fun importAssetToWorkspace(context: Context, workspaceName: String, uri: Uri): Result<File> {
         return runCatching {
             val destDir = getWorkspaceAssetsDir(context, workspaceName)
@@ -1019,6 +1100,26 @@ object LinuxRuntimeManager {
                     input.copyTo(output)
                 }
             } ?: error("Tidak dapat membuka file")
+            destFile
+        }
+    }
+
+    fun importAudioToWorkspace(context: Context, workspaceName: String, uri: Uri): Result<File> {
+        return runCatching {
+            val destDir = getWorkspaceAudioDir(context, workspaceName)
+            var fileName = "import_${System.currentTimeMillis()}.m4a"
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1 && cursor.moveToFirst()) {
+                    fileName = cursor.getString(nameIndex)
+                }
+            }
+            val destFile = File(destDir, fileName)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            } ?: error("Tidak dapat membuka file audio")
             destFile
         }
     }

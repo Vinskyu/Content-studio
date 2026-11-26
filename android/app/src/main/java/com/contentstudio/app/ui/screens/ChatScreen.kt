@@ -30,10 +30,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -292,7 +296,7 @@ fun ChatScreen(
                 .fillMaxWidth()
                 .background(SurfaceCard)
                 .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 16.dp, vertical = 11.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -322,26 +326,6 @@ fun ChatScreen(
                         color = BadgeGreenText
                     )
                 }
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (activeWorkspace.isNotBlank()) CardHighlight else SurfaceCard)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .clickable {
-                            refreshWorkspacesList()
-                            showWorkspaceSheet = true
-                        }
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = if (activeWorkspace.isNotBlank()) "[WS: $activeWorkspace]" else "[PILIH WS]",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (activeWorkspace.isNotBlank()) TextPrimary else TextSecondary
-                    )
-                }
             }
 
             Row(
@@ -361,7 +345,9 @@ fun ChatScreen(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        color = TextPrimary,
+                        softWrap = false,
+                        maxLines = 1
                     )
                 }
 
@@ -381,10 +367,56 @@ fun ChatScreen(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        color = TextPrimary,
+                        softWrap = false,
+                        maxLines = 1
                     )
                 }
             }
+        }
+
+        // SUB-BAR WORKSPACE (Pill tipis di bawah top bar, anti-pecah di layar HP)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(BgDark)
+                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (activeWorkspace.isNotBlank()) CardHighlight else SurfaceCard)
+                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                    .clickable {
+                        refreshWorkspacesList()
+                        showWorkspaceSheet = true
+                    }
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = if (activeWorkspace.isNotBlank()) "[PROYEK: $activeWorkspace]" else "[PILIH PROYEK]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (activeWorkspace.isNotBlank()) TextPrimary else TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false
+                )
+            }
+
+            Text(
+                text = if (activeSessionId.isNotBlank()) activeSessionId.takeLast(8) else "sesi baru",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = TextMuted,
+                maxLines = 1,
+                softWrap = false
+            )
         }
 
         // CHAT THREAD
@@ -705,6 +737,12 @@ fun ChatScreen(
                         ),
                         cursorBrush = SolidColor(TextPrimary),
                         maxLines = 4,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = {
+                            if (!isStreaming && inputText.isNotBlank()) {
+                                sendMessage(inputText)
+                            }
+                        }),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }

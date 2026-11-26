@@ -1,8 +1,10 @@
 package com.contentstudio.app.ui.screens
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -96,10 +98,39 @@ fun WorkspaceScreen(
     var showPreviewDialog by remember { mutableStateOf(false) }
     var copiedPreview by remember { mutableStateOf(false) }
     var fileToDelete by remember { mutableStateOf<WorkspaceFileItem?>(null) }
+    var workspaceToDelete by remember { mutableStateOf<WorkspaceSummary?>(null) }
 
     fun isTextFile(fileName: String): Boolean {
         val ext = fileName.substringAfterLast('.', "").lowercase()
         return ext in listOf("md", "txt", "json", "srt", "py", "sh", "lrc")
+    }
+
+    fun isMediaFile(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in listOf("mp4", "mkv", "jpg", "jpeg", "png", "webp", "m4a", "mp3", "wav", "aac")
+    }
+
+    fun openMediaFile(file: WorkspaceFileItem) {
+        try {
+            val targetFile = LinuxRuntimeManager.getWorkspaceFile(context, activeWorkspace, file.relPath)
+            if (!targetFile.exists() || !targetFile.isFile) {
+                actionStatus = "File tidak ditemukan di storage: ${file.name}"
+                return
+            }
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                targetFile
+            )
+            val mimeType = LinuxRuntimeManager.getMimeType(targetFile.name)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            actionStatus = "Gagal membuka media: ${e.message}"
+        }
     }
 
     fun previewTextFile(file: WorkspaceFileItem) {
@@ -388,20 +419,45 @@ fun WorkspaceScreen(
                             )
                         }
 
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(if (isActive) ActionSolidBg else CardHighlight)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = if (isActive) "DIPILIH" else "PILIH",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isActive) ActionSolidText else TextPrimary
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (isActive) ActionSolidBg else CardHighlight)
+                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                    .clickable {
+                                        LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = if (isActive) "DIPILIH" else "PILIH",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isActive) ActionSolidText else TextPrimary
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(CardHighlight)
+                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                    .clickable { workspaceToDelete = ws }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "HAPUS",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ErrorCardText
+                                )
+                            }
                         }
                     }
                 }
@@ -483,6 +539,7 @@ fun WorkspaceScreen(
                         val sizeStr = if (sizeKb >= 1024) String.format(Locale.US, "%.1f MB", sizeKb / 1024.0) else String.format(Locale.US, "%.0f KB", sizeKb)
 
                         val isText = isTextFile(file.name)
+                        val isMedia = isMediaFile(file.name)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -498,6 +555,7 @@ fun WorkspaceScreen(
                                     .weight(1f)
                                     .clickable {
                                         if (isText) previewTextFile(file)
+                                        else if (isMedia) openMediaFile(file)
                                     }
                             ) {
                                 Row(
@@ -551,6 +609,23 @@ fun WorkspaceScreen(
                                     ) {
                                         Text(
                                             text = "BACA",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                } else if (isMedia) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(CardHighlight)
+                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                            .clickable { openMediaFile(file) }
+                                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    ) {
+                                        Text(
+                                            text = "BUKA",
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
@@ -871,6 +946,83 @@ fun WorkspaceScreen(
             dismissButton = {
                 Button(
                     onClick = { fileToDelete = null },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "BATAL",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // DIALOG KONFIRMASI HAPUS WORKSPACE
+    if (workspaceToDelete != null) {
+        val targetWs = workspaceToDelete!!
+        AlertDialog(
+            onDismissRequest = { workspaceToDelete = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "HAPUS PROYEK",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ErrorCardText
+                )
+            },
+            text = {
+                Text(
+                    text = "Hapus proyek \"${targetWs.name}\" beserta seluruh file di dalamnya secara permanen?",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = TextPrimary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val toDel = targetWs.name
+                        workspaceToDelete = null
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.deleteWorkspace(toDel)
+                            withContext(Dispatchers.Main) {
+                                if (res.optString("status") == "ok") {
+                                    actionStatus = "Proyek '$toDel' telah dihapus"
+                                    refreshWorkspaces()
+                                } else {
+                                    actionStatus = "Gagal menghapus proyek: ${res.optString("error", "Error")}"
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ErrorCardBg,
+                        contentColor = ErrorCardText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "HAPUS",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { workspaceToDelete = null },
                     shape = RoundedCornerShape(4.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = CardHighlight,
