@@ -31,11 +31,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.contentstudio.app.runtime.ChatController
-import com.contentstudio.app.ui.theme.BadgeGreenText
-import com.contentstudio.app.ui.theme.BgDark
-import com.contentstudio.app.ui.theme.BorderSubtle
-import com.contentstudio.app.ui.theme.TextPrimary
-import com.contentstudio.app.ui.theme.TextSecondary
+import com.contentstudio.app.ui.theme.StudioAccent
+import com.contentstudio.app.ui.theme.StudioBg
+import com.contentstudio.app.ui.theme.StudioBorder
+import com.contentstudio.app.ui.theme.StudioPrimary
+import com.contentstudio.app.ui.theme.TextMuted
 
 enum class StudioTab(val label: String) {
     STUDIO("Studio"),
@@ -54,7 +54,7 @@ fun MainStudioScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(BgDark)
+            .background(StudioBg)
     ) {
         // CONTENT AREA (WEIGHT 1)
         Box(
@@ -63,7 +63,7 @@ fun MainStudioScreen(
                 .fillMaxWidth()
         ) {
             when (selectedTab) {
-                0 -> WorkspaceScreen()
+                0 -> WorkspaceScreen(onNavigateToVoice = { selectedTab = 2 })
                 1 -> LibraryScreen()
                 2 -> VoiceoverScreen()
                 3 -> ChatScreen()
@@ -75,8 +75,8 @@ fun MainStudioScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
-                .background(BgDark)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp)),
+                .background(StudioBg)
+                .border(0.5.dp, StudioBorder, RoundedCornerShape(0.dp)),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -98,7 +98,7 @@ fun MainStudioScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(2.dp)
-                            .background(if (isSelected) TextPrimary else BgDark)
+                            .background(if (isSelected) StudioPrimary else StudioBg)
                     )
 
                     // Tab Label + Streaming Dot
@@ -111,8 +111,8 @@ fun MainStudioScreen(
                             text = tab.label,
                             fontFamily = FontFamily.Default,
                             fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isSelected) TextPrimary else TextSecondary,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                            color = if (isSelected) StudioPrimary else TextMuted,
                             letterSpacing = 0.5.sp
                         )
 
@@ -122,7 +122,7 @@ fun MainStudioScreen(
                                 modifier = Modifier
                                     .size(6.dp)
                                     .clip(CircleShape)
-                                    .background(BadgeGreenText)
+                                    .background(StudioAccent)
                             )
                         }
                     }

@@ -78,13 +78,15 @@ import java.util.Locale
 
 @Composable
 fun WorkspaceScreen(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onNavigateToVoice: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
 
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
+    var selectedProjectForBoard by remember { mutableStateOf<String?>(null) }
     var activeTab by remember { mutableStateOf("projects") } // "projects" or "channels"
 
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
@@ -299,6 +301,18 @@ fun WorkspaceScreen(
 
     LaunchedEffect(activeWorkspace) {
         loadWorkspaceFiles(activeWorkspace)
+    }
+
+    if (selectedProjectForBoard != null) {
+        ProjectBoardScreen(
+            workspaceName = selectedProjectForBoard!!,
+            onBack = {
+                selectedProjectForBoard = null
+                refreshWorkspaces()
+            },
+            onNavigateToVoice = onNavigateToVoice
+        )
+        return
     }
 
     Column(
@@ -627,6 +641,7 @@ fun WorkspaceScreen(
                                 .border(1.dp, if (isActive) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
                                 .clickable {
                                     LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                    selectedProjectForBoard = ws.name
                                 }
                                 .padding(14.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -746,19 +761,19 @@ fun WorkspaceScreen(
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
-                                        .background(if (isActive) ActionSolidBg else CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .background(ActionSolidBg)
                                         .clickable {
                                             LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                            selectedProjectForBoard = ws.name
                                         }
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
                                     Text(
-                                        text = if (isActive) "Selected" else "Select",
+                                        text = "Board",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isActive) ActionSolidText else TextPrimary
+                                        color = ActionSolidText
                                     )
                                 }
 

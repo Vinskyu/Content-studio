@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,9 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,10 +45,12 @@ import androidx.core.content.FileProvider
 import com.contentstudio.app.runtime.LibraryAssetItem
 import com.contentstudio.app.runtime.LinuxRuntimeManager
 import com.contentstudio.app.runtime.WorkspaceSummary
+import com.contentstudio.app.ui.theme.StudioTopBar
+import com.contentstudio.app.ui.theme.StudioSegmentedControl
+import com.contentstudio.app.ui.theme.StudioTextField
+import com.contentstudio.app.ui.theme.StudioPrimaryButton
 import com.contentstudio.app.ui.theme.ActionSolidBg
 import com.contentstudio.app.ui.theme.ActionSolidText
-import com.contentstudio.app.ui.theme.BadgeGreenBg
-import com.contentstudio.app.ui.theme.BadgeGreenText
 import com.contentstudio.app.ui.theme.BgDark
 import com.contentstudio.app.ui.theme.BorderSubtle
 import com.contentstudio.app.ui.theme.CardHighlight
@@ -256,122 +255,40 @@ fun LibraryScreen(
             .background(BgDark)
     ) {
         // TOP HEADER
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SurfaceCard)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Library",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(BadgeGreenBg)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "${filteredAssets.size} Assets",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = BadgeGreenText
-                    )
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(ActionSolidBg)
-                    .clickable { importLauncher.launch("*/*") }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = "+ Import",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = ActionSolidText
+        StudioTopBar(
+            title = "Library",
+            subtitle = "${filteredAssets.size} Assets",
+            actions = {
+                StudioPrimaryButton(
+                    text = "Import",
+                    onClick = { importLauncher.launch("*/*") },
+                    height = 36.dp
                 )
             }
-        }
+        )
 
-        // CATEGORY PILLS & SEARCH
+        // CATEGORY SEGMENTED CONTROL & SEARCH
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceCard)
-                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val categories = listOf("all" to "All", "video" to "Video", "audio" to "Audio", "image" to "Image")
-                categories.forEach { (catId, catLabel) ->
-                    val isSelected = selectedCategory == catId
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(if (isSelected) CardHighlight else BgDark)
-                            .border(1.dp, if (isSelected) TextPrimary else BorderSubtle, RoundedCornerShape(4.dp))
-                            .clickable { selectedCategory = catId }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = catLabel,
-                            fontFamily = FontFamily.Default,
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) TextPrimary else TextSecondary
-                        )
-                    }
-                }
-            }
+            val categories = listOf("All", "Video", "Audio", "Image")
+            val catKeys = listOf("all", "video", "audio", "image")
+            val selectedIdx = catKeys.indexOf(selectedCategory).coerceAtLeast(0)
 
-            Spacer(modifier = Modifier.height(10.dp))
+            StudioSegmentedControl(
+                options = categories,
+                selectedIndex = selectedIdx,
+                onSelect = { selectedCategory = catKeys[it] }
+            )
 
-            // SEARCH BAR
-            BasicTextField(
+            StudioTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                textStyle = TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = TextPrimary
-                ),
-                cursorBrush = SolidColor(TextPrimary),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(BgDark)
-                    .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                decorationBox = { innerTextField ->
-                    if (searchQuery.isEmpty()) {
-                        Text(
-                            text = "Search assets...",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 12.sp,
-                            color = TextSecondary
-                        )
-                    }
-                    innerTextField()
-                }
+                placeholder = "Search assets...",
+                singleLine = true
             )
         }
 

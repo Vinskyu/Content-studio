@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.contentstudio.app.runtime.LinuxRuntimeManager
+import com.contentstudio.app.ui.theme.StudioTopBar
+import com.contentstudio.app.ui.theme.StudioSmallButton
 import com.contentstudio.app.ui.theme.ActionSolidBg
 import com.contentstudio.app.ui.theme.ActionSolidText
 import com.contentstudio.app.ui.theme.BadgeGreenBg
@@ -449,78 +451,37 @@ fun VoiceoverScreen(
             .background(BgDark)
     ) {
         // TOP BAR
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SurfaceCard)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Audio Studio",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (activeWorkspace.isNotBlank()) BadgeGreenBg else SurfaceCard)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .clickable {
-                            scope.launch(Dispatchers.IO) {
-                                val res = LinuxRuntimeManager.listWorkspaces()
-                                val arr = res.optJSONArray("workspaces")
-                                val list = mutableListOf<String>()
-                                if (arr != null) {
-                                    for (i in 0 until arr.length()) {
-                                        val nm = arr.getJSONObject(i).optString("name", "")
-                                        if (nm.isNotBlank()) list.add(nm)
-                                    }
-                                }
-                                withContext(Dispatchers.Main) {
-                                    availableProjects.clear()
-                                    availableProjects.addAll(list)
-                                    showProjectPicker = true
+        StudioTopBar(
+            title = "Audio Studio",
+            subtitle = if (activeWorkspace.isNotBlank()) "Project: $activeWorkspace" else null,
+            actions = {
+                StudioSmallButton(
+                    text = if (activeWorkspace.isNotBlank()) activeWorkspace else "Switch Project",
+                    onClick = {
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.listWorkspaces()
+                            val arr = res.optJSONArray("workspaces")
+                            val list = mutableListOf<String>()
+                            if (arr != null) {
+                                for (i in 0 until arr.length()) {
+                                    val nm = arr.getJSONObject(i).optString("name", "")
+                                    if (nm.isNotBlank()) list.add(nm)
                                 }
                             }
+                            withContext(Dispatchers.Main) {
+                                availableProjects.clear()
+                                availableProjects.addAll(list)
+                                showProjectPicker = true
+                            }
                         }
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = if (activeWorkspace.isNotBlank()) "Project: $activeWorkspace" else "Select Project",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (activeWorkspace.isNotBlank()) BadgeGreenText else TextSecondary
-                    )
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(CardHighlight)
-                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                    .clickable { refreshRecordings() }
-                    .padding(horizontal = 9.dp, vertical = 5.dp)
-            ) {
-                Text(
+                    }
+                )
+                StudioSmallButton(
                     text = "Refresh",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    onClick = { refreshRecordings() }
                 )
             }
-        }
+        )
 
         // PERINGATAN JIKA BELUM ADA PROYEK
         if (activeWorkspace.isBlank()) {

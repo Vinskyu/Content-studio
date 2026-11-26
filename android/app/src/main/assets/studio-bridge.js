@@ -1,10 +1,13 @@
 'use strict';
 
 const http = require('http');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
+const util = require('util');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+const execFileAsync = util.promisify(execFile);
 
 const PORT = parseInt(process.env.PORT || '18950', 10);
 const HOST = '127.0.0.1';
@@ -33,6 +36,7 @@ for (const cat of LIBRARY_CATEGORIES) {
 
 let activeChatProc = null;
 let activeAuthProc = null;
+const renderJobs = new Map();
 let lastAuthError = null;
 
 function getAntigravityEnv(isAuthMode = false) {
@@ -1115,6 +1119,375 @@ async function handleAudioMaster(req, res) {
   });
 }
 
+// ── FFmpeg Auto-Render Pipeline ─────────────────────────────────────────────
+
+function formatSrtTime(sec) {
+  const totalMs = Math.max(0, Math.round(sec * 1000));
+  const hrs = Math.floor(totalMs / 3600000);
+  const mins = Math.floor((totalMs % 3600000) / 60000);
+  const secs = Math.floor((totalMs % 60000) / 1000);
+  const ms = totalMs % 1000;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+}
+
+async function executeRenderPipeline(cleanWs, proj, options, job) {
+  const wsPath = path.join(WORKSPACES_DIR, cleanWs);
+  const ffmpegBin = fs.existsSync(path.join(PREFIX_DIR, 'bin', 'ffmpeg')) ? path.join(PREFIX_DIR, 'bin', 'ffmpeg') : 'ffmpeg';
+  const tmpDir = path.join(wsPath, '.tmp_render');
+
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    const is169 = (proj.aspect_ratio === '16:9');
+    const is1080p = (options && options.resolution === '1080p');
+    const targetW = is169 ? (is1080p ? 1920 : 1280) : (is1080p ? 1080 : 720);
+    const targetH = is169 ? (is1080p ? 1080 : 720) : (is1080p ? 1920 : 1280);
+
+    const scenes = Array.isArray(proj.scenes) ? proj.scenes : [];
+    if (scenes.length === 0) {
+      throw new Error('Tambahkan minimal 1 adegan sebelum render');
+    }
+
+    job.step = 'Mempersiapkan adegan...';
+    job.progress = 10;
+
+    const segmentFiles = [];
+
+    // 1. Process each scene into uniform 30fps MP4 segment
+    for (let i = 0; i < scenes.length; i++) {
+      const scene = scenes[i];
+      const duration = Math.max(0.5, parseFloat(scene.duration) || 4.0);
+      const segPath = path.join(tmpDir, `seg_${i}.mp4`);
+      segmentFiles.push(segPath);
+
+      job.step = `Memproses adegan ${i + 1} dari ${scenes.length}...`;
+      job.progress = Math.round(10 + ((i + 0.5) / scenes.length) * 50);
+
+      let visualPath = null;
+      if (scene.visual && typeof scene.visual === 'string' && scene.visual.trim() && scene.visual !== 'Empty Visual') {
+        const candidate1 = path.join(wsPath, scene.visual.trim());
+        const candidate2 = path.join(wsPath, 'assets', scene.visual.trim());
+        const candidate3 = path.join(LIBRARY_DIR, scene.visual.trim());
+        if (fs.existsSync(candidate1) && fs.statSync(candidate1).isFile()) {
+          visualPath = candidate1;
+        } else if (fs.existsSync(candidate2) && fs.statSync(candidate2).isFile()) {
+          visualPath = candidate2;
+        } else if (fs.existsSync(candidate3) && fs.statSync(candidate3).isFile()) {
+          visualPath = candidate3;
+        }
+      }
+
+      if (visualPath) {
+        const ext = path.extname(visualPath).toLowerCase();
+        const isImage = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'].includes(ext);
+
+        if (isImage) {
+          if (options && options.motion) {
+            const numFrames = Math.max(1, Math.round(duration * 30));
+            const vf = `zoompan=z='min(zoom+0.0015,1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${numFrames}:s=${targetW}x${targetH}:fps=30,setsar=1`;
+            try {
+              await execFileAsync(ffmpegBin, [
+                '-y',
+                '-loop', '1',
+                '-i', visualPath,
+                '-vf', vf,
+                '-t', String(duration),
+                '-pix_fmt', 'yuv420p',
+                '-c:v', 'libx264',
+                '-preset', 'ultrafast',
+                '-crf', '23',
+                '-an',
+                segPath,
+              ], { cwd: wsPath });
+            } catch (_) {
+              // Fallback to static scale/crop if zoompan fails
+              const fallbackVf = `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},setsar=1`;
+              await execFileAsync(ffmpegBin, [
+                '-y',
+                '-loop', '1',
+                '-i', visualPath,
+                '-t', String(duration),
+                '-vf', fallbackVf,
+                '-r', '30',
+                '-pix_fmt', 'yuv420p',
+                '-c:v', 'libx264',
+                '-preset', 'ultrafast',
+                '-crf', '23',
+                '-an',
+                segPath,
+              ], { cwd: wsPath });
+            }
+          } else {
+            const vf = `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},setsar=1`;
+            await execFileAsync(ffmpegBin, [
+              '-y',
+              '-loop', '1',
+              '-i', visualPath,
+              '-t', String(duration),
+              '-vf', vf,
+              '-r', '30',
+              '-pix_fmt', 'yuv420p',
+              '-c:v', 'libx264',
+              '-preset', 'ultrafast',
+              '-crf', '23',
+              '-an',
+              segPath,
+            ], { cwd: wsPath });
+          }
+        } else {
+          // Video input
+          const vf = `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},setsar=1`;
+          await execFileAsync(ffmpegBin, [
+            '-y',
+            '-stream_loop', '-1',
+            '-i', visualPath,
+            '-t', String(duration),
+            '-vf', vf,
+            '-r', '30',
+            '-pix_fmt', 'yuv420p',
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-crf', '23',
+            '-an',
+            segPath,
+          ], { cwd: wsPath });
+        }
+      } else {
+        // Dark canvas for empty visual
+        await execFileAsync(ffmpegBin, [
+          '-y',
+          '-f', 'lavfi',
+          '-i', `color=c=0x101014:s=${targetW}x${targetH}:d=${duration}:r=30`,
+          '-pix_fmt', 'yuv420p',
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          '-crf', '23',
+          '-an',
+          segPath,
+        ], { cwd: wsPath });
+      }
+    }
+
+    // 2. Concat segments
+    job.step = 'Menggabungkan segmen video...';
+    job.progress = 65;
+
+    const concatTxtPath = path.join(tmpDir, 'concat.txt');
+    const concatLines = segmentFiles.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
+    fs.writeFileSync(concatTxtPath, concatLines, 'utf8');
+
+    const mergedVideoPath = path.join(tmpDir, 'merged.mp4');
+    try {
+      await execFileAsync(ffmpegBin, [
+        '-y',
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', concatTxtPath,
+        '-c', 'copy',
+        mergedVideoPath,
+      ], { cwd: wsPath });
+    } catch (_) {
+      await execFileAsync(ffmpegBin, [
+        '-y',
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', concatTxtPath,
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
+        '-an',
+        mergedVideoPath,
+      ], { cwd: wsPath });
+    }
+
+    let currentVideoPath = mergedVideoPath;
+
+    // 3. Generate subtitles (.srt) & burn-in if requested
+    job.step = 'Membuat naskah subtitle (.srt)...';
+    job.progress = 75;
+
+    const rendersDir = path.join(wsPath, 'renders');
+    fs.mkdirSync(rendersDir, { recursive: true });
+    const srtPath = path.join(rendersDir, 'subtitles.srt');
+
+    let srtContent = '';
+    let cumSec = 0;
+    scenes.forEach((sc, idx) => {
+      const dur = Math.max(0.5, parseFloat(sc.duration) || 4.0);
+      const startStr = formatSrtTime(cumSec);
+      const endStr = formatSrtTime(cumSec + dur);
+      cumSec += dur;
+      const narration = (sc.narration || sc.text || '').trim();
+      if (narration) {
+        srtContent += `${idx + 1}\n${startStr} --> ${endStr}\n${narration}\n\n`;
+      }
+    });
+    fs.writeFileSync(srtPath, srtContent, 'utf8');
+
+    if (options && options.burn_subtitles && srtContent.trim()) {
+      job.step = 'Burn-in subtitle ke video...';
+      job.progress = 80;
+      const subbedVideoPath = path.join(tmpDir, 'subbed.mp4');
+      const escapedSrt = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      const subVf = `subtitles='${escapedSrt}':force_style='FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=45'`;
+      try {
+        await execFileAsync(ffmpegBin, [
+          '-y',
+          '-i', currentVideoPath,
+          '-vf', subVf,
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          '-crf', '23',
+          '-an',
+          subbedVideoPath,
+        ], { cwd: wsPath });
+        if (fs.existsSync(subbedVideoPath) && fs.statSync(subbedVideoPath).size > 0) {
+          currentVideoPath = subbedVideoPath;
+        }
+      } catch (subErr) {
+        job.step = 'Burn-in subtitle dilewati, melanjutkan mixing audio...';
+      }
+    }
+
+    // 4. Audio Mixing (VO + BGM)
+    job.step = 'Mixing audio (VO & BGM)...';
+    job.progress = 88;
+
+    let voPath = null;
+    if (proj.audio && proj.audio.vo_file) {
+      const c1 = path.join(wsPath, 'audio', proj.audio.vo_file);
+      const c2 = path.join(wsPath, proj.audio.vo_file);
+      if (fs.existsSync(c1) && fs.statSync(c1).isFile()) voPath = c1;
+      else if (fs.existsSync(c2) && fs.statSync(c2).isFile()) voPath = c2;
+    }
+
+    let bgmPath = null;
+    if (proj.audio && proj.audio.bgm_file) {
+      const c1 = path.join(wsPath, 'audio', proj.audio.bgm_file);
+      const c2 = path.join(wsPath, proj.audio.bgm_file);
+      const c3 = path.join(LIBRARY_DIR, 'audio', proj.audio.bgm_file);
+      if (fs.existsSync(c1) && fs.statSync(c1).isFile()) bgmPath = c1;
+      else if (fs.existsSync(c2) && fs.statSync(c2).isFile()) bgmPath = c2;
+      else if (fs.existsSync(c3) && fs.statSync(c3).isFile()) bgmPath = c3;
+    }
+
+    const bgmVol = (proj.audio && proj.audio.bgm_volume != null) ? Number(proj.audio.bgm_volume) : 0.18;
+    const autoDuck = !!(proj.audio && proj.audio.auto_duck);
+
+    const timestamp = Date.now();
+    const finalName = `final_${timestamp}.mp4`;
+    const finalOutPath = path.join(rendersDir, finalName);
+
+    if (voPath && bgmPath) {
+      const filterComplex = autoDuck
+        ? `[2:a]volume=${bgmVol}[bgm];[bgm][1:a]sidechaincompress=threshold=0.1:ratio=5:attack=20:release=300[ducked];[1:a][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]`
+        : `[2:a]volume=${bgmVol}[bgm];[1:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]`;
+
+      try {
+        await execFileAsync(ffmpegBin, [
+          '-y',
+          '-i', currentVideoPath,
+          '-i', voPath,
+          '-stream_loop', '-1',
+          '-i', bgmPath,
+          '-filter_complex', filterComplex,
+          '-map', '0:v',
+          '-map', '[aout]',
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', '192k',
+          '-shortest',
+          finalOutPath,
+        ], { cwd: wsPath });
+      } catch (_) {
+        const fallbackFilter = `[2:a]volume=${bgmVol}[bgm];[1:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]`;
+        await execFileAsync(ffmpegBin, [
+          '-y',
+          '-i', currentVideoPath,
+          '-i', voPath,
+          '-stream_loop', '-1',
+          '-i', bgmPath,
+          '-filter_complex', fallbackFilter,
+          '-map', '0:v',
+          '-map', '[aout]',
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', '192k',
+          '-shortest',
+          finalOutPath,
+        ], { cwd: wsPath });
+      }
+    } else if (voPath) {
+      await execFileAsync(ffmpegBin, [
+        '-y',
+        '-i', currentVideoPath,
+        '-i', voPath,
+        '-map', '0:v',
+        '-map', '1:a',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-shortest',
+        finalOutPath,
+      ], { cwd: wsPath });
+    } else if (bgmPath) {
+      await execFileAsync(ffmpegBin, [
+        '-y',
+        '-i', currentVideoPath,
+        '-stream_loop', '-1',
+        '-i', bgmPath,
+        '-filter:a', `volume=${bgmVol}`,
+        '-map', '0:v',
+        '-map', '1:a',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-shortest',
+        finalOutPath,
+      ], { cwd: wsPath });
+    } else {
+      await execFileAsync(ffmpegBin, [
+        '-y',
+        '-i', currentVideoPath,
+        '-f', 'lavfi',
+        '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+        '-map', '0:v',
+        '-map', '1:a',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-shortest',
+        finalOutPath,
+      ], { cwd: wsPath });
+    }
+
+    if (!fs.existsSync(finalOutPath) || fs.statSync(finalOutPath).size === 0) {
+      throw new Error('File output video akhir tidak terbuat');
+    }
+
+    const st = fs.statSync(finalOutPath);
+
+    proj.output_file = `renders/${finalName}`;
+    proj.stage = 'render';
+    writeWorkspaceProject(cleanWs, proj);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    job.status = 'done';
+    job.progress = 100;
+    job.step = 'Render selesai';
+    job.output_file = `renders/${finalName}`;
+    job.size = st.size;
+    job.error = null;
+  } catch (err) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    job.status = 'error';
+    job.error = err.message || 'Render gagal';
+    job.step = 'Gagal: ' + (err.message || 'Render error');
+  }
+}
+
 // ── Chat Stream Handler (Connected to ContentStudio Kitchen) ────────────────
 
 async function handleChat(req, res) {
@@ -1497,6 +1870,74 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menghapus workspace' });
     }
+  }
+
+  const wsRenderMatch = pathname.match(/^\/workspaces\/([^\/]+)\/render$/);
+  if (req.method === 'POST' && wsRenderMatch) {
+    const wsName = decodeURIComponent(wsRenderMatch[1]);
+    const cleanName = path.basename(wsName);
+    const wsPath = path.join(WORKSPACES_DIR, cleanName);
+    if (!fs.existsSync(wsPath)) {
+      return sendJson(res, 404, { status: 'error', error: `Workspace "${cleanName}" tidak ditemukan` });
+    }
+
+    let proj;
+    try {
+      proj = readWorkspaceProject(cleanName);
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal membaca project.json' });
+    }
+
+    if (!Array.isArray(proj.scenes) || proj.scenes.length === 0) {
+      return sendJson(res, 400, { status: 'error', error: 'Tambahkan minimal 1 adegan sebelum render' });
+    }
+
+    const existingJob = renderJobs.get(cleanName);
+    if (existingJob && existingJob.status === 'running') {
+      return sendJson(res, 200, { status: 'ok', job_id: existingJob.id, message: 'Render job already running' });
+    }
+
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+
+    const job = {
+      id: `render_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      workspace: cleanName,
+      status: 'running',
+      progress: 5,
+      step: 'Memulai pipeline render...',
+      output_file: null,
+      size: 0,
+      error: null,
+      created_at: new Date().toISOString(),
+    };
+    renderJobs.set(cleanName, job);
+
+    executeRenderPipeline(cleanName, proj, body, job).catch((err) => {
+      job.status = 'error';
+      job.error = err.message || 'Render error';
+      job.step = 'Gagal: ' + (err.message || 'Render error');
+    });
+
+    return sendJson(res, 200, { status: 'ok', job_id: job.id, message: 'Render job started' });
+  }
+
+  const wsRenderStatusMatch = pathname.match(/^\/workspaces\/([^\/]+)\/render\/status$/);
+  if (req.method === 'GET' && wsRenderStatusMatch) {
+    const wsName = decodeURIComponent(wsRenderStatusMatch[1]);
+    const cleanName = path.basename(wsName);
+    const job = renderJobs.get(cleanName);
+    if (!job) {
+      return sendJson(res, 200, {
+        status: 'idle',
+        progress: 0,
+        step: 'Belum ada proses render',
+        output_file: null,
+        size: 0,
+        error: null,
+      });
+    }
+    return sendJson(res, 200, job);
   }
 
   // ── Asset Library Endpoints ───────────────────────────────────────────────

@@ -995,6 +995,62 @@ object LinuxRuntimeManager {
         }
     }
 
+    fun getProject(workspace: String): Result<JSONObject> {
+        val res = getWorkspaceProject(workspace)
+        return if (res.optString("status") == "ok") {
+            val proj = res.optJSONObject("project") ?: JSONObject()
+            Result.success(proj)
+        } else {
+            Result.failure(Exception(res.optString("error", "Failed to read project")))
+        }
+    }
+
+    fun saveProject(workspace: String, project: JSONObject): Result<JSONObject> {
+        val res = updateWorkspaceProject(workspace, project.toString())
+        return if (res.optString("status") == "ok") {
+            val proj = res.optJSONObject("project") ?: JSONObject()
+            Result.success(proj)
+        } else {
+            Result.failure(Exception(res.optString("error", "Failed to save project")))
+        }
+    }
+
+    fun startRender(
+        workspace: String,
+        burnSubtitles: Boolean,
+        motion: Boolean,
+        resolution: String
+    ): Result<JSONObject> {
+        return try {
+            val body = JSONObject().apply {
+                put("burn_subtitles", burnSubtitles)
+                put("motion", motion)
+                put("resolution", resolution)
+            }.toString()
+            val res = httpRequest("POST", "/workspaces/$workspace/render", body)
+            if (res.optString("status") == "ok") {
+                Result.success(res)
+            } else {
+                Result.failure(Exception(res.optString("error", "Render request failed")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun getRenderStatus(workspace: String): Result<JSONObject> {
+        return try {
+            val res = httpRequest("GET", "/workspaces/$workspace/render/status")
+            if (res.has("status")) {
+                Result.success(res)
+            } else {
+                Result.failure(Exception("Invalid render status response"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     // ── Asset Library API ────────────────────────────────────────────────────
 
     fun listLibraryAssets(category: String? = null): JSONObject {
@@ -1355,6 +1411,38 @@ object LinuxRuntimeManager {
                 }
             } ?: error("Tidak dapat membuka file")
             destFile
+        }
+    }
+
+    fun importFileToWorkspaceAssets(context: Context, workspaceName: String, uri: Uri): Result<String> {
+        return runCatching {
+            val destDir = getWorkspaceAssetsDir(context, workspaceName)
+            var rawName = "asset_${System.currentTimeMillis()}"
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1 && cursor.moveToFirst()) {
+                    val name = cursor.getString(nameIndex)
+                    if (!name.isNullOrBlank()) rawName = name
+                }
+            }
+            val sanitized = rawName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            var finalFile = File(destDir, sanitized)
+            if (finalFile.exists()) {
+                val dotIdx = sanitized.lastIndexOf('.')
+                val base = if (dotIdx != -1) sanitized.substring(0, dotIdx) else sanitized
+                val ext = if (dotIdx != -1) sanitized.substring(dotIdx) else ""
+                var counter = 1
+                while (finalFile.exists()) {
+                    finalFile = File(destDir, "${base}_$counter$ext")
+                    counter++
+                }
+            }
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(finalFile).use { output ->
+                    input.copyTo(output)
+                }
+            } ?: error("Failed to open file input stream")
+            "assets/${finalFile.name}"
         }
     }
 
