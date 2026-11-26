@@ -350,8 +350,15 @@ fun ChatScreen(
     }
 
     LaunchedEffect(Unit) {
-        ChatController.refreshSessions()
+        ChatController.ensureInitialized()
         refreshWorkspacesList()
+    }
+
+    LaunchedEffect(copiedMsgId) {
+        if (copiedMsgId != null) {
+            kotlinx.coroutines.delay(1500)
+            copiedMsgId = null
+        }
     }
 
     LaunchedEffect(messages.size) {
@@ -554,9 +561,9 @@ fun ChatScreen(
                                 Box(
                                     modifier = Modifier
                                         .widthIn(max = 310.dp)
-                                        .clip(RoundedCornerShape(6.dp))
+                                        .clip(RoundedCornerShape(8.dp))
                                         .background(UserBubbleBg)
-                                        .border(1.dp, UserBubbleBorder, RoundedCornerShape(6.dp))
+                                        .border(1.dp, UserBubbleBorder, RoundedCornerShape(8.dp))
                                         .padding(horizontal = 13.dp, vertical = 10.dp)
                                 ) {
                                     Text(
@@ -570,7 +577,7 @@ fun ChatScreen(
                             }
                         } else {
                             // ASSISTANT MESSAGE CARD
-                            val isPureError = msg.text.trim().startsWith("Error:") || msg.text.trim().startsWith("[Error]")
+                            val isPureError = msg.text.trim().startsWith("Error:") || msg.text.trim().startsWith("ERR:")
 
                             if (isPureError) {
                                 Column(
@@ -624,13 +631,22 @@ fun ChatScreen(
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(SurfaceCard)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                        .padding(13.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        .padding(vertical = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    // Markdown parsed message
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Antigravity",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = BadgeGreenText
+                                        )
+                                    }
+
                                     MarkdownContent(
                                         content = msg.text.ifBlank { "..." },
                                         onCopyCode = { code ->
@@ -996,8 +1012,11 @@ fun ChatScreen(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
+                                    val dateStr = if (ses.updatedAt > 0) {
+                                        java.text.SimpleDateFormat("dd MMM, HH:mm", java.util.Locale.ENGLISH).format(java.util.Date(ses.updatedAt))
+                                    } else ""
                                     Text(
-                                        text = "${ses.messageCount} messages",
+                                        text = "${ses.messageCount} messages" + if (dateStr.isNotBlank()) " • $dateStr" else "",
                                         fontFamily = FontFamily.Default,
                                         fontSize = 11.sp,
                                         color = TextSecondary

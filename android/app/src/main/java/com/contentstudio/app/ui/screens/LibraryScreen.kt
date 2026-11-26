@@ -27,6 +27,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +74,7 @@ fun LibraryScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
     var selectedCategory by remember { mutableStateOf("all") }
     var searchQuery by remember { mutableStateOf("") }
     val assets = remember { mutableStateListOf<LibraryAssetItem>() }
@@ -142,18 +144,18 @@ fun LibraryScreen(
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         isBusy = true
-        actionStatus = "Mengimpor aset ke pustaka..."
+        actionStatus = "Importing asset to library..."
         scope.launch(Dispatchers.IO) {
-            val targetCategory = if (selectedCategory == "all") "other" else selectedCategory
-            val result = LinuxRuntimeManager.importFileToLibrary(context, uri, targetCategory)
+            val targetCategory = if (selectedCategory == "all") null else selectedCategory
+            val result = LinuxRuntimeManager.importToLibrary(context, uri, targetCategory)
             withContext(Dispatchers.Main) {
                 isBusy = false
                 if (result.isSuccess) {
                     val file = result.getOrThrow()
-                    actionStatus = "Aset berhasil ditambahkan: ${file.name}"
+                    actionStatus = "Asset imported: ${file.name}"
                     refreshAssets()
                 } else {
-                    actionStatus = "Gagal impor: ${result.exceptionOrNull()?.message}"
+                    actionStatus = "Import failed: ${result.exceptionOrNull()?.message}"
                 }
             }
         }
@@ -163,7 +165,7 @@ fun LibraryScreen(
         try {
             val targetFile = File(asset.path)
             if (!targetFile.exists()) {
-                actionStatus = "File fisik tidak ditemukan"
+                actionStatus = "File not found"
                 return
             }
             val uri = FileProvider.getUriForFile(
@@ -178,14 +180,35 @@ fun LibraryScreen(
             }
             context.startActivity(intent)
         } catch (e: Exception) {
-            actionStatus = "Gagal membuka file: ${e.message}"
+            actionStatus = "Failed to open file: ${e.message}"
+        }
+    }
+
+    fun copyAssetToActiveWorkspace(asset: LibraryAssetItem, targetWorkspace: String) {
+        isBusy = true
+        actionStatus = "Copying ${asset.name} to $targetWorkspace..."
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.copyLibraryAssetToWorkspace(
+                category = asset.category,
+                name = asset.name,
+                workspace = targetWorkspace
+            )
+            withContext(Dispatchers.Main) {
+                isBusy = false
+                if (res.optString("status") == "ok") {
+                    val rel = res.optString("rel_path", asset.name)
+                    actionStatus = "Copied to $targetWorkspace/$rel"
+                } else {
+                    actionStatus = "Failed to copy: ${res.optString("error", "Error")}"
+                }
+            }
         }
     }
 
     fun copyAssetToTargetWorkspace(targetWorkspace: String) {
         val asset = assetToUse ?: return
         isBusy = true
-        actionStatus = "Menyalin ${asset.name} ke $targetWorkspace..."
+        actionStatus = "Copying ${asset.name} to $targetWorkspace..."
         scope.launch(Dispatchers.IO) {
             val res = LinuxRuntimeManager.copyLibraryAssetToWorkspace(
                 category = asset.category,
@@ -197,9 +220,9 @@ fun LibraryScreen(
                 assetToUse = null
                 if (res.optString("status") == "ok") {
                     val rel = res.optString("rel_path", asset.name)
-                    actionStatus = "Aset disalin ke $targetWorkspace/$rel"
+                    actionStatus = "Copied to $targetWorkspace/$rel"
                 } else {
-                    actionStatus = "Gagal menyalin: ${res.optString("error", "Error")}"
+                    actionStatus = "Failed to copy: ${res.optString("error", "Error")}"
                 }
             }
         }
@@ -473,7 +496,13 @@ fun LibraryScreen(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(4.dp))
                                     .background(ActionSolidBg)
-                                    .clickable { assetToUse = asset }
+                                    .clickable {
+                                        if (activeWorkspace.isNotBlank()) {
+                                            copyAssetToActiveWorkspace(asset, activeWorkspace)
+                                        } else {
+                                            actionStatus = "No active project. Select a project in Studio first."
+                                        }
+                                    }
                                     .padding(horizontal = 8.dp, vertical = 6.dp)
                             ) {
                                 Text(

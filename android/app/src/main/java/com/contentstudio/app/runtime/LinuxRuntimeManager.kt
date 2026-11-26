@@ -42,6 +42,8 @@ data class ChannelProfile(
     val targetAudience: String = "",
     val aspectRatio: String = "9:16",
     val tone: String = "",
+    val visualRules: String = "",
+    val subtitleStyle: String = "",
     val styleNotes: String = "",
     val createdAt: Long = 0L,
 )
@@ -900,6 +902,8 @@ object LinuxRuntimeManager {
         targetAudience: String = "",
         aspectRatio: String = "9:16",
         tone: String = "",
+        visualRules: String = "",
+        subtitleStyle: String = "",
         styleNotes: String = ""
     ): JSONObject {
         return try {
@@ -909,7 +913,9 @@ object LinuxRuntimeManager {
                 put("target_audience", targetAudience)
                 put("aspect_ratio", aspectRatio)
                 put("tone", tone)
-                put("style_notes", styleNotes)
+                put("visual_rules", visualRules.ifBlank { styleNotes })
+                put("subtitle_style", subtitleStyle)
+                put("style_notes", styleNotes.ifBlank { visualRules })
             }.toString()
             httpRequest("POST", "/channels", body)
         } catch (e: Exception) {
@@ -927,6 +933,8 @@ object LinuxRuntimeManager {
         targetAudience: String = "",
         aspectRatio: String = "9:16",
         tone: String = "",
+        visualRules: String = "",
+        subtitleStyle: String = "",
         styleNotes: String = ""
     ): JSONObject {
         return try {
@@ -936,7 +944,9 @@ object LinuxRuntimeManager {
                 put("target_audience", targetAudience)
                 put("aspect_ratio", aspectRatio)
                 put("tone", tone)
-                put("style_notes", styleNotes)
+                put("visual_rules", visualRules.ifBlank { styleNotes })
+                put("subtitle_style", subtitleStyle)
+                put("style_notes", styleNotes.ifBlank { visualRules })
             }.toString()
             httpRequest("PUT", "/channels/$id", body)
         } catch (e: Exception) {
@@ -1038,29 +1048,63 @@ object LinuxRuntimeManager {
         return File(homeDir, "ContentStudio/library")
     }
 
-    fun importFileToLibrary(context: Context, uri: Uri, category: String): Result<File> {
+    fun detectCategory(mimeType: String?, fileName: String): String {
+        val mime = (mimeType ?: "").lowercase()
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return when {
+            mime.startsWith("video/") || ext in listOf("mp4", "mov", "mkv", "webm", "avi") -> "video"
+            mime.startsWith("audio/") || ext in listOf("mp3", "m4a", "wav", "aac", "ogg", "flac") -> "audio"
+            mime.startsWith("image/") || ext in listOf("png", "jpg", "jpeg", "webp", "gif") -> "image"
+            else -> "other"
+        }
+    }
+
+    fun importToLibrary(context: Context, uri: Uri, explicitCategory: String? = null): Result<File> {
         return runCatching {
-            var fileName = "import_${System.currentTimeMillis()}"
-            val returnCursor = context.contentResolver.query(uri, null, null, null, null)
-            returnCursor?.use { cursor ->
+            var rawName = "import_${System.currentTimeMillis()}"
+            val mimeType = context.contentResolver.getType(uri)
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                 if (nameIndex != -1 && cursor.moveToFirst()) {
                     val name = cursor.getString(nameIndex)
-                    if (!name.isNullOrBlank()) fileName = name
+                    if (!name.isNullOrBlank()) rawName = name
                 }
             }
-            val safeCat = category.lowercase().trim().ifBlank { "other" }
+
+            val sanitizedName = rawName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            val cat = if (!explicitCategory.isNullOrBlank() && explicitCategory != "all") {
+                explicitCategory.lowercase().trim()
+            } else {
+                detectCategory(mimeType, sanitizedName)
+            }
+
             val libDir = getLibraryDir()
-            val destDir = File(libDir, safeCat)
+            val destDir = File(libDir, cat)
             if (!destDir.exists()) destDir.mkdirs()
-            val destFile = File(destDir, fileName)
+
+            var finalFile = File(destDir, sanitizedName)
+            if (finalFile.exists()) {
+                val dotIdx = sanitizedName.lastIndexOf('.')
+                val base = if (dotIdx != -1) sanitizedName.substring(0, dotIdx) else sanitizedName
+                val ext = if (dotIdx != -1) sanitizedName.substring(dotIdx) else ""
+                var counter = 1
+                while (finalFile.exists()) {
+                    finalFile = File(destDir, "${base}_$counter$ext")
+                    counter++
+                }
+            }
+
             context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(destFile).use { output ->
+                FileOutputStream(finalFile).use { output ->
                     input.copyTo(output)
                 }
             } ?: error("Gagal membaca file dari input stream")
-            destFile
+            finalFile
         }
+    }
+
+    fun importFileToLibrary(context: Context, uri: Uri, category: String = "other"): Result<File> {
+        return importToLibrary(context, uri, category)
     }
 
     fun deleteWorkspace(name: String): JSONObject {
@@ -1338,11 +1382,13 @@ object LinuxRuntimeManager {
         sessionId: String,
         message: String,
         workspace: String? = null,
+        onConnectionCreated: ((HttpURLConnection) -> Unit)? = null,
         onStatus: (String) -> Unit,
         onDelta: (String) -> Unit,
         onDone: (String) -> Unit,
         onError: (String) -> Unit,
     ) {
+        var conn: HttpURLConnection? = null
         try {
             val body = JSONObject().apply {
                 put("session_id", sessionId)
@@ -1352,7 +1398,7 @@ object LinuxRuntimeManager {
                 }
             }.toString()
 
-            val conn = (URL("$BRIDGE_BASE_URL/chat").openConnection() as HttpURLConnection).apply {
+            val c = (URL("$BRIDGE_BASE_URL/chat").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 5000
                 readTimeout = 180000
@@ -1360,8 +1406,10 @@ object LinuxRuntimeManager {
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "text/event-stream")
             }
+            conn = c
+            onConnectionCreated?.invoke(c)
 
-            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(body) }
 
             val code = conn.responseCode
             if (code == 401) {

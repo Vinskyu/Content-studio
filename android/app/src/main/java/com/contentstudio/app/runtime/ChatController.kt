@@ -33,6 +33,15 @@ object ChatController {
     private val _liveStatus = MutableStateFlow("")
     val liveStatus: StateFlow<String> = _liveStatus.asStateFlow()
 
+    private var isInitialized = false
+    private var activeConnection: java.net.HttpURLConnection? = null
+
+    fun ensureInitialized() {
+        if (isInitialized) return
+        isInitialized = true
+        refreshSessions()
+    }
+
     fun clearError() {
         _errorMessage.value = null
     }
@@ -150,6 +159,10 @@ object ChatController {
     }
 
     fun stopStreaming() {
+        try {
+            activeConnection?.disconnect()
+        } catch (_: Exception) {}
+        activeConnection = null
         activeJob?.cancel()
         activeJob = null
         LinuxRuntimeManager.stopChat()
@@ -204,6 +217,9 @@ object ChatController {
                 sessionId = sid,
                 message = cleanPrompt,
                 workspace = workspace,
+                onConnectionCreated = { conn ->
+                    activeConnection = conn
+                },
                 onStatus = { st ->
                     _liveStatus.value = st
                 },
@@ -221,6 +237,7 @@ object ChatController {
                     }
                 },
                 onDone = { finalText ->
+                    activeConnection = null
                     val resolved = if (finalText.isNotBlank()) finalText else responseBuilder.toString()
                     val currentList = _messages.value.toMutableList()
                     val idx = currentList.indexOfLast { it.id == assistantId }
@@ -236,6 +253,7 @@ object ChatController {
                     refreshSessions()
                 },
                 onError = { err ->
+                    activeConnection = null
                     val textSoFar = responseBuilder.toString()
                     val currentList = _messages.value.toMutableList()
                     val idx = currentList.indexOfLast { it.id == assistantId }

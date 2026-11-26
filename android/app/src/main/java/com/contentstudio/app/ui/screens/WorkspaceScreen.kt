@@ -103,6 +103,8 @@ fun WorkspaceScreen(
     var channelAudienceInput by remember { mutableStateOf("") }
     var channelAspectInput by remember { mutableStateOf("9:16") }
     var channelToneInput by remember { mutableStateOf("") }
+    var channelVisualRulesInput by remember { mutableStateOf("") }
+    var channelSubtitleStyleInput by remember { mutableStateOf("") }
     var channelNotesInput by remember { mutableStateOf("") }
     var channelError by remember { mutableStateOf<String?>(null) }
 
@@ -133,6 +135,8 @@ fun WorkspaceScreen(
                         targetAudience = obj.optString("target_audience", ""),
                         aspectRatio = obj.optString("aspect_ratio", "9:16"),
                         tone = obj.optString("tone", ""),
+                        visualRules = obj.optString("visual_rules", ""),
+                        subtitleStyle = obj.optString("subtitle_style", ""),
                         styleNotes = obj.optString("style_notes", ""),
                         createdAt = obj.optLong("created_at", 0L),
                     )
@@ -388,6 +392,8 @@ fun WorkspaceScreen(
                             channelAudienceInput = ""
                             channelAspectInput = "9:16"
                             channelToneInput = ""
+                            channelVisualRulesInput = ""
+                            channelSubtitleStyleInput = ""
                             channelNotesInput = ""
                             channelError = null
                             showChannelDialog = true
@@ -531,6 +537,8 @@ fun WorkspaceScreen(
                                             channelAudienceInput = chan.targetAudience
                                             channelAspectInput = chan.aspectRatio
                                             channelToneInput = chan.tone
+                                            channelVisualRulesInput = chan.visualRules.ifBlank { chan.styleNotes }
+                                            channelSubtitleStyleInput = chan.subtitleStyle
                                             channelNotesInput = chan.styleNotes
                                             channelError = null
                                             showChannelDialog = true
@@ -673,6 +681,21 @@ fun WorkspaceScreen(
                                                 fontFamily = FontFamily.Default,
                                                 fontSize = 10.sp,
                                                 color = TextSecondary
+                                            )
+                                        }
+                                    } else if (ws.channelId.isNotBlank()) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(SurfaceCard)
+                                                .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
+                                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                                        ) {
+                                            Text(
+                                                text = "Unlinked",
+                                                fontFamily = FontFamily.Default,
+                                                fontSize = 10.sp,
+                                                color = TextMuted
                                             )
                                         }
                                     }
@@ -1294,19 +1317,19 @@ fun WorkspaceScreen(
                         )
                     }
 
-                    Text("Style Notes:", fontSize = 11.sp, color = TextSecondary)
+                    Text("Visual Rules:", fontSize = 11.sp, color = TextSecondary)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(60.dp)
+                            .height(65.dp)
                             .clip(RoundedCornerShape(4.dp))
                             .background(InputContainerBg)
                             .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
                             .padding(horizontal = 10.dp, vertical = 8.dp)
                     ) {
                         BasicTextField(
-                            value = channelNotesInput,
-                            onValueChange = { channelNotesInput = it },
+                            value = channelVisualRulesInput,
+                            onValueChange = { channelVisualRulesInput = it },
                             modifier = Modifier.fillMaxSize(),
                             textStyle = TextStyle(color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Default),
                             cursorBrush = SolidColor(TextPrimary)
@@ -1337,7 +1360,9 @@ fun WorkspaceScreen(
                                     targetAudience = channelAudienceInput,
                                     aspectRatio = channelAspectInput,
                                     tone = channelToneInput,
-                                    styleNotes = channelNotesInput
+                                    visualRules = channelVisualRulesInput,
+                                    subtitleStyle = channelSubtitleStyleInput,
+                                    styleNotes = channelVisualRulesInput
                                 )
                             } else {
                                 LinuxRuntimeManager.createChannel(
@@ -1346,7 +1371,9 @@ fun WorkspaceScreen(
                                     targetAudience = channelAudienceInput,
                                     aspectRatio = channelAspectInput,
                                     tone = channelToneInput,
-                                    styleNotes = channelNotesInput
+                                    visualRules = channelVisualRulesInput,
+                                    subtitleStyle = channelSubtitleStyleInput,
+                                    styleNotes = channelVisualRulesInput
                                 )
                             }
                             withContext(Dispatchers.Main) {

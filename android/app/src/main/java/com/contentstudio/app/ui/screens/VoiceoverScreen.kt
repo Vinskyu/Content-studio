@@ -152,6 +152,10 @@ fun VoiceoverScreen(
     var scriptPickerTarget by remember { mutableStateOf("tts") }
     val availableScripts = remember { mutableStateListOf<File>() }
 
+    // Dialog Ganti Proyek di Top Bar
+    var showProjectPicker by remember { mutableStateOf(false) }
+    val availableProjects = remember { mutableStateListOf<String>() }
+
     // Audio Playback & Actions
     var playingFile by remember { mutableStateOf<File?>(null) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
@@ -459,7 +463,7 @@ fun VoiceoverScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "AUDIO STUDIO",
+                    text = "Audio Studio",
                     fontFamily = FontFamily.Default,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
@@ -470,6 +474,24 @@ fun VoiceoverScreen(
                         .clip(RoundedCornerShape(4.dp))
                         .background(if (activeWorkspace.isNotBlank()) BadgeGreenBg else SurfaceCard)
                         .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                        .clickable {
+                            scope.launch(Dispatchers.IO) {
+                                val res = LinuxRuntimeManager.listWorkspaces()
+                                val arr = res.optJSONArray("workspaces")
+                                val list = mutableListOf<String>()
+                                if (arr != null) {
+                                    for (i in 0 until arr.length()) {
+                                        val nm = arr.getJSONObject(i).optString("name", "")
+                                        if (nm.isNotBlank()) list.add(nm)
+                                    }
+                                }
+                                withContext(Dispatchers.Main) {
+                                    availableProjects.clear()
+                                    availableProjects.addAll(list)
+                                    showProjectPicker = true
+                                }
+                            }
+                        }
                         .padding(horizontal = 7.dp, vertical = 3.dp)
                 ) {
                     Text(
@@ -626,7 +648,7 @@ fun VoiceoverScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "PILIHAN SUARA (MULTILINGUAL NEURAL)",
+                            text = "Voices (Multilingual Neural)",
                             fontFamily = FontFamily.Default,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -669,7 +691,7 @@ fun VoiceoverScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
-                                    text = "KECEPATAN (RATE)",
+                                    text = "Speech Rate",
                                     fontFamily = FontFamily.Default,
                                     fontSize = 10.sp,
                                     color = TextMuted
@@ -700,7 +722,7 @@ fun VoiceoverScreen(
 
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
-                                    text = "NADA (PITCH)",
+                                    text = "Pitch",
                                     fontFamily = FontFamily.Default,
                                     fontSize = 10.sp,
                                     color = TextMuted
@@ -737,7 +759,7 @@ fun VoiceoverScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "TEKS NASKAH",
+                                text = "Script Text",
                                 fontFamily = FontFamily.Default,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
@@ -955,7 +977,7 @@ fun VoiceoverScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "Kecepatan Gulir:",
+                                    text = "Scroll Speed:",
                                     fontFamily = FontFamily.Default,
                                     fontSize = 10.sp,
                                     color = TextMuted
@@ -1089,7 +1111,7 @@ fun VoiceoverScreen(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Text(text = "MIC LEVEL", fontSize = 9.sp, fontFamily = FontFamily.Monospace, color = TextMuted)
+                                        Text(text = "Mic Level", fontSize = 9.sp, fontFamily = FontFamily.Monospace, color = TextMuted)
                                         Text(text = "$currentAmplitude", fontSize = 9.sp, fontFamily = FontFamily.Monospace, color = if (isPeak) ProgressBarError else TextMuted)
                                     }
                                 }
@@ -1111,7 +1133,7 @@ fun VoiceoverScreen(
                                         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 9.dp)
                                     ) {
                                         Text(
-                                            text = "BATAL",
+                                            text = "Cancel",
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold
@@ -1138,7 +1160,7 @@ fun VoiceoverScreen(
                                         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 9.dp)
                                     ) {
                                         Text(
-                                            text = if (isRecording) "STOP REKAM" else "MULAI REKAM",
+                                            text = if (isRecording) "Stop Recording" else "Start Recording",
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold
@@ -1160,7 +1182,7 @@ fun VoiceoverScreen(
                                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp)
                                 ) {
                                     Text(
-                                        text = "IMPORT AUDIO",
+                                        text = "Import Audio",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
@@ -1175,7 +1197,7 @@ fun VoiceoverScreen(
             // DAFTAR AUDIO (TTS & REKAMAN)
             item {
                 Text(
-                    text = "DAFTAR AUDIO (${recordings.size})",
+                    text = "Audio Files (${recordings.size})",
                     fontFamily = FontFamily.Default,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -1245,7 +1267,7 @@ fun VoiceoverScreen(
                                             .padding(horizontal = 5.dp, vertical = 2.dp)
                                     ) {
                                         Text(
-                                            text = "MASTER",
+                                            text = "Master",
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
@@ -1273,7 +1295,7 @@ fun VoiceoverScreen(
                                     .padding(horizontal = 8.dp, vertical = 5.dp)
                             ) {
                                 Text(
-                                    text = if (isPlaying) "STOP" else "PUTAR",
+                                    text = if (isPlaying) "Stop" else "Play",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
@@ -1289,7 +1311,7 @@ fun VoiceoverScreen(
                                     .clickable {
                                         if (!isMastering) {
                                             isMastering = true
-                                            statusMessage = "Mastering audio dengan FFmpeg..."
+                                            statusMessage = "Mastering audio with FFmpeg..."
                                             scope.launch(Dispatchers.IO) {
                                                 val res = LinuxRuntimeManager.masterAudio(activeWorkspace, item.name)
                                                 withContext(Dispatchers.Main) {
@@ -1297,10 +1319,10 @@ fun VoiceoverScreen(
                                                     if (res.optString("status") == "ok") {
                                                         val f = res.optJSONObject("file")
                                                         val masterName = f?.optString("name", "") ?: ""
-                                                        statusMessage = "Mastering selesai: $masterName"
+                                                        statusMessage = "Mastering completed: $masterName"
                                                         refreshRecordings()
                                                     } else {
-                                                        errorMessage = "Gagal mastering: ${res.optString("error", "Error")}"
+                                                        errorMessage = "Mastering failed: ${res.optString("error", "Error")}"
                                                     }
                                                 }
                                             }
@@ -1309,7 +1331,7 @@ fun VoiceoverScreen(
                                     .padding(horizontal = 8.dp, vertical = 5.dp)
                             ) {
                                 Text(
-                                    text = "MASTER",
+                                    text = "Master",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
@@ -1328,13 +1350,13 @@ fun VoiceoverScreen(
                                         }
                                         val name = item.name
                                         item.file.delete()
-                                        statusMessage = "File $name telah dihapus"
+                                        statusMessage = "File $name deleted"
                                         refreshRecordings()
                                     }
                                     .padding(horizontal = 8.dp, vertical = 5.dp)
                             ) {
                                 Text(
-                                    text = "HAPUS",
+                                    text = "Delete",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
@@ -1348,7 +1370,7 @@ fun VoiceoverScreen(
         }
     }
 
-    // DIALOG MUAT NASKAH
+    // SCRIPT PICKER DIALOG
     if (showScriptPicker) {
         AlertDialog(
             onDismissRequest = { showScriptPicker = false },
@@ -1356,7 +1378,7 @@ fun VoiceoverScreen(
             shape = RoundedCornerShape(6.dp),
             title = {
                 Text(
-                    text = "PILIH NASKAH",
+                    text = "Select Script",
                     fontFamily = FontFamily.Default,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
@@ -1366,7 +1388,7 @@ fun VoiceoverScreen(
             text = {
                 if (availableScripts.isEmpty()) {
                     Text(
-                        text = "Tidak ada file naskah di folder scripts/ workspace.",
+                        text = "No script files in workspace scripts/ directory.",
                         fontFamily = FontFamily.Default,
                         fontSize = 12.sp,
                         color = TextSecondary
@@ -1412,7 +1434,93 @@ fun VoiceoverScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "BATAL",
+                        text = "Cancel",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // PROJECT PICKER DIALOG
+    if (showProjectPicker) {
+        AlertDialog(
+            onDismissRequest = { showProjectPicker = false },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "Switch Project",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                if (availableProjects.isEmpty()) {
+                    Text(
+                        text = "No projects found.",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        availableProjects.forEach { projName ->
+                            val isSelected = (projName == activeWorkspace)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (isSelected) ActionSolidBg else CardHighlight)
+                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                    .clickable {
+                                        scope.launch(Dispatchers.IO) {
+                                            LinuxRuntimeManager.setActiveWorkspace(projName)
+                                            withContext(Dispatchers.Main) {
+                                                activeWorkspace = projName
+                                                showProjectPicker = false
+                                                refreshScripts()
+                                                refreshRecordings()
+                                            }
+                                        }
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = projName,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) ActionSolidText else TextPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                Button(
+                    onClick = { showProjectPicker = false },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Cancel",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
