@@ -436,8 +436,8 @@ fun VoiceoverScreen(
         } else {
             withContext(Dispatchers.IO) {
                 val projRes = LinuxRuntimeManager.getWorkspaceProject(activeWorkspace)
-                val projObj = projRes.getOrNull()
-                val chanId = projObj?.optString("channel_id", "")?.takeIf { it.isNotBlank() }
+                val projObj = projRes.optJSONObject("project") ?: projRes
+                val chanId = projObj.optString("channel_id", "").takeIf { it.isNotBlank() }
                 if (chanId != null) {
                     val chRes = LinuxRuntimeManager.listChannels()
                     val arr = chRes.optJSONArray("channels")
@@ -462,7 +462,7 @@ fun VoiceoverScreen(
                             val vpPitch = foundVp.optString("pitch", "")
                             val vpPreset = foundVp.optString("master_preset", "")
 
-                            val vIdx = ttsVoices.indexOfFirst { it.id.equals(vpVoice, ignoreCase = true) }
+                            val vIdx = ttsVoices.indexOfFirst { it.voiceId.equals(vpVoice, ignoreCase = true) }
                             if (vIdx >= 0) selectedVoiceIndex = vIdx
 
                             val rIdx = rates.indexOfFirst { it == vpRate }
@@ -791,7 +791,7 @@ fun VoiceoverScreen(
                                     onClick = {
                                         val chanId = activeChannelId ?: return@StudioSmallButton
                                         val profile = VoiceProfile(
-                                            voice = ttsVoices[selectedVoiceIndex].id,
+                                            voice = ttsVoices[selectedVoiceIndex].voiceId,
                                             rate = rates[selectedRateIndex],
                                             pitch = pitches[selectedPitchIndex],
                                             masterPreset = masterPresetKeys[masterPresetIndex]
