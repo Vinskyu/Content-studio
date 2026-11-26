@@ -1,7 +1,12 @@
 package com.contentstudio.app.runtime
 
+import android.content.ContentValues
 import android.content.Context
+import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -63,6 +68,13 @@ object LinuxRuntimeManager {
     private var setupInProgress = false
     private var proxyProcess: Process? = null
     private var bridgeProcess: Process? = null
+    private var appContext: Context? = null
+
+    fun setApplicationContext(context: Context) {
+        if (appContext == null) {
+            appContext = context.applicationContext
+        }
+    }
 
     private val _setupStage = MutableStateFlow(1)
     val setupStage: StateFlow<Int> = _setupStage.asStateFlow()
@@ -272,6 +284,7 @@ object LinuxRuntimeManager {
     }
 
     fun startSetup(context: Context, forceRetry: Boolean = false) {
+        setApplicationContext(context)
         if (setupInProgress) return
         if (_isReady.value && !forceRetry) return
 
@@ -361,6 +374,34 @@ object LinuxRuntimeManager {
 
                 ensureNodeAndNpmWrappers(paths)
                 patchShebangs(File(prefix, "bin"), prefix)
+
+                // Pastikan binary ffmpeg tersedia untuk engine rendering video & VO
+                val ffmpegBin = File(prefix, "bin/ffmpeg")
+                if (!ffmpegBin.exists()) {
+                    appendLog("[2/4] Memeriksa ffmpeg: belum terpasang. Mengunduh ffmpeg...")
+                    try {
+                        val installFfmpegCmd = """
+                            cd "$prefix/tmp" &&
+                            apt-get update --allow-insecure-repositories 2>&1 || true;
+                            apt-get install -y --no-install-recommends ffmpeg 2>&1 || apt-get download ffmpeg 2>&1 || true;
+                            for deb in "$prefix/var/cache/apt/archives/"*ffmpeg*.deb "$prefix/tmp/"*ffmpeg*.deb; do
+                                [ -f "${'$'}deb" ] && dpkg-deb -x "${'$'}deb" "$prefix/" 2>&1 || true
+                            done;
+                            chmod 755 "$prefix/bin/ffmpeg" 2>/dev/null || true;
+                            rm -f "$prefix/tmp/"*.deb 2>/dev/null || true
+                        """.trimIndent()
+                        runInPrefix(context, installFfmpegCmd)
+                        if (ffmpegBin.exists()) {
+                            appendLog("[2/4] ffmpeg berhasil dipasang di $prefix/bin/ffmpeg")
+                        } else {
+                            appendLog("[2/4] Peringatan: ffmpeg belum terpasang, proses setup tetap dilanjutkan.")
+                        }
+                    } catch (e: Exception) {
+                        appendLog("[2/4] Peringatan saat memasang ffmpeg: ${e.message}")
+                    }
+                } else {
+                    appendLog("[2/4] ffmpeg ($prefix/bin/ffmpeg) terverifikasi dan siap.")
+                }
 
                 // TAHAP 3: Unduh Antigravity CLI (ARM64)
                 _setupStage.value = 3
@@ -810,9 +851,144 @@ object LinuxRuntimeManager {
         }
     }
 
+    fun getWorkspaceDir(workspaceName: String): File {
+        val homeDir = appContext?.let { BootstrapInstaller.getPaths(it).homeDir }
+            ?: (System.getenv("HOME") ?: "/data/user/0/com.agy/files")
+        return File(homeDir, "ContentStudio/workspaces/$workspaceName")
+    }
+
     fun getWorkspaceDir(context: Context, workspaceName: String): File {
+        setApplicationContext(context)
         val paths = BootstrapInstaller.getPaths(context)
         return File(paths.homeDir, "ContentStudio/workspaces/$workspaceName")
+    }
+
+    fun getWorkspaceFile(workspaceName: String, relPath: String): File {
+        return File(getWorkspaceDir(workspaceName), relPath)
+    }
+
+    fun getWorkspaceFile(context: Context, workspaceName: String, relPath: String): File {
+        return File(getWorkspaceDir(context, workspaceName), relPath)
+    }
+
+    fun readWorkspaceTextFile(workspace: String, relPath: String): Result<String> {
+        return runCatching {
+            val wsDir = getWorkspaceDir(workspace).canonicalFile
+            val targetFile = File(wsDir, relPath).canonicalFile
+            if (!targetFile.path.startsWith(wsDir.path)) {
+                error("Akses file di luar workspace dilarang")
+            }
+            if (!targetFile.exists() || !targetFile.isFile) {
+                error("File tidak ditemukan")
+            }
+            targetFile.readText(Charsets.UTF_8)
+        }
+    }
+
+    fun readWorkspaceTextFile(context: Context, workspace: String, relPath: String): Result<String> {
+        setApplicationContext(context)
+        return readWorkspaceTextFile(workspace, relPath)
+    }
+
+    fun deleteWorkspaceFile(workspace: String, relPath: String): Boolean {
+        return try {
+            val wsDir = getWorkspaceDir(workspace).canonicalFile
+            val targetFile = File(wsDir, relPath).canonicalFile
+            if (!targetFile.path.startsWith(wsDir.path)) {
+                return false
+            }
+            if (targetFile.exists() && targetFile.isFile) {
+                targetFile.delete()
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun deleteWorkspaceFile(context: Context, workspace: String, relPath: String): Boolean {
+        setApplicationContext(context)
+        return deleteWorkspaceFile(workspace, relPath)
+    }
+
+    fun getMimeType(fileName: String): String {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "mp4" -> "video/mp4"
+            "m4a" -> "audio/mp4"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "aac" -> "audio/aac"
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "txt" -> "text/plain"
+            "md" -> "text/markdown"
+            "json" -> "application/json"
+            "srt" -> "application/x-subrip"
+            "py" -> "text/x-python"
+            else -> "application/octet-stream"
+        }
+    }
+
+    fun exportFileToDownloads(context: Context, sourceFile: File): Result<String> {
+        setApplicationContext(context)
+        return runCatching {
+            if (!sourceFile.exists() || !sourceFile.isFile) {
+                error("File sumber tidak ditemukan")
+            }
+            val fileName = sourceFile.name
+            val mimeType = getMimeType(fileName)
+            val subDir = "ContentStudio"
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/$subDir")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: error("Gagal membuat entri di MediaStore Downloads")
+
+                try {
+                    resolver.openOutputStream(uri)?.use { out ->
+                        sourceFile.inputStream().use { input ->
+                            input.copyTo(out)
+                        }
+                    } ?: error("Gagal membuka output stream")
+
+                    values.clear()
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                } catch (e: Exception) {
+                    resolver.delete(uri, null, null)
+                    throw e
+                }
+                "Download/$subDir/$fileName"
+            } else {
+                @Suppress("DEPRECATION")
+                val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val targetDir = File(downloadDir, subDir)
+                if (!targetDir.exists()) targetDir.mkdirs()
+                val destFile = File(targetDir, fileName)
+                sourceFile.inputStream().use { input ->
+                    FileOutputStream(destFile).use { out ->
+                        input.copyTo(out)
+                    }
+                }
+                try {
+                    MediaScannerConnection.scanFile(
+                        context,
+                        arrayOf(destFile.absolutePath),
+                        arrayOf(mimeType),
+                        null
+                    )
+                } catch (_: Exception) {}
+                "Download/$subDir/$fileName"
+            }
+        }
     }
 
     fun getWorkspaceAudioDir(context: Context, workspaceName: String): File {

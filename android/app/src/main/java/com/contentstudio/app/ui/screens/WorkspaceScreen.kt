@@ -15,11 +15,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,7 +41,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +78,7 @@ fun WorkspaceScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
 
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
@@ -83,6 +90,44 @@ fun WorkspaceScreen(
     var createError by remember { mutableStateOf<String?>(null) }
     var actionStatus by remember { mutableStateOf<String?>(null) }
     var isBusy by remember { mutableStateOf(false) }
+
+    var previewTitle by remember { mutableStateOf("") }
+    var previewContent by remember { mutableStateOf("") }
+    var showPreviewDialog by remember { mutableStateOf(false) }
+    var copiedPreview by remember { mutableStateOf(false) }
+    var fileToDelete by remember { mutableStateOf<WorkspaceFileItem?>(null) }
+
+    fun isTextFile(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in listOf("md", "txt", "json", "srt", "py", "sh", "lrc")
+    }
+
+    fun previewTextFile(file: WorkspaceFileItem) {
+        val res = LinuxRuntimeManager.readWorkspaceTextFile(context, activeWorkspace, file.relPath)
+        if (res.isSuccess) {
+            previewTitle = file.name
+            previewContent = res.getOrThrow()
+            copiedPreview = false
+            showPreviewDialog = true
+        } else {
+            actionStatus = "Gagal membaca file: ${res.exceptionOrNull()?.message}"
+        }
+    }
+
+    fun exportFile(file: WorkspaceFileItem) {
+        actionStatus = "Mengekspor ${file.name} ke folder Download..."
+        scope.launch(Dispatchers.IO) {
+            val src = LinuxRuntimeManager.getWorkspaceFile(context, activeWorkspace, file.relPath)
+            val exportRes = LinuxRuntimeManager.exportFileToDownloads(context, src)
+            withContext(Dispatchers.Main) {
+                if (exportRes.isSuccess) {
+                    actionStatus = "Tersimpan di ${exportRes.getOrThrow()}"
+                } else {
+                    actionStatus = "Gagal menyimpan: ${exportRes.exceptionOrNull()?.message}"
+                }
+            }
+        }
+    }
 
     fun refreshWorkspaces(autoSelectFirst: Boolean = false) {
         scope.launch(Dispatchers.IO) {
@@ -437,6 +482,7 @@ fun WorkspaceScreen(
                         val sizeKb = (file.size / 1024.0)
                         val sizeStr = if (sizeKb >= 1024) String.format(Locale.US, "%.1f MB", sizeKb / 1024.0) else String.format(Locale.US, "%.0f KB", sizeKb)
 
+                        val isText = isTextFile(file.name)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -447,14 +493,40 @@ fun WorkspaceScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = file.name,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
-                                )
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        if (isText) previewTextFile(file)
+                                    }
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = file.name,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = TextPrimary
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(categoryBadgeBg)
+                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = file.category.uppercase(),
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = categoryBadgeText
+                                        )
+                                    }
+                                }
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = "${file.relPath} • $sizeStr",
@@ -464,20 +536,62 @@ fun WorkspaceScreen(
                                 )
                             }
 
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(categoryBadgeBg)
-                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = file.category.uppercase(),
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = categoryBadgeText
-                                )
+                                if (isText) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(CardHighlight)
+                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                            .clickable { previewTextFile(file) }
+                                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    ) {
+                                        Text(
+                                            text = "BACA",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable { exportFile(file) }
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "SIMPAN",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(CardHighlight)
+                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable { fileToDelete = file }
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "HAPUS",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ErrorCardText
+                                    )
+                                }
                             }
                         }
                     }
@@ -610,6 +724,159 @@ fun WorkspaceScreen(
                         contentColor = TextPrimary
                     ),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "BATAL",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // DIALOG PREVIEW NASKAH / FILE TEKS
+    if (showPreviewDialog) {
+        AlertDialog(
+            onDismissRequest = { showPreviewDialog = false },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = previewTitle,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 380.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(InputContainerBg)
+                        .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
+                        .padding(12.dp)
+                ) {
+                    val scrollState = rememberScrollState()
+                    SelectionContainer {
+                        Text(
+                            text = previewContent.ifBlank { "(File kosong)" },
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = TextPrimary,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.verticalScroll(scrollState)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(previewContent))
+                        copiedPreview = true
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ActionSolidBg,
+                        contentColor = ActionSolidText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = if (copiedPreview) "TERSALIN" else "SALIN",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { showPreviewDialog = false },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "TUTUP",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        )
+    }
+
+    // DIALOG KONFIRMASI HAPUS FILE
+    if (fileToDelete != null) {
+        val target = fileToDelete!!
+        AlertDialog(
+            onDismissRequest = { fileToDelete = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(6.dp),
+            title = {
+                Text(
+                    text = "HAPUS FILE",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ErrorCardText
+                )
+            },
+            text = {
+                Text(
+                    text = "Hapus file \"${target.name}\" secara permanen dari proyek?",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = TextPrimary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val deleted = LinuxRuntimeManager.deleteWorkspaceFile(context, activeWorkspace, target.relPath)
+                        fileToDelete = null
+                        if (deleted) {
+                            actionStatus = "File '${target.name}' telah dihapus"
+                            loadWorkspaceFiles(activeWorkspace)
+                            refreshWorkspaces()
+                        } else {
+                            actionStatus = "Gagal menghapus file '${target.name}'"
+                        }
+                    },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ErrorCardBg,
+                        contentColor = ErrorCardText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "HAPUS",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { fileToDelete = null },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardHighlight,
+                        contentColor = TextPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
                         text = "BATAL",

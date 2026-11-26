@@ -543,7 +543,9 @@ fun VoiceoverScreen(
                                             if (playingFile == item.file) {
                                                 stopPlayback()
                                             }
+                                            val name = item.name
                                             item.file.delete()
+                                            statusMessage = "Rekaman $name telah dihapus"
                                             refreshRecordings()
                                         }
                                         .padding(horizontal = 8.dp, vertical = 6.dp)
@@ -552,7 +554,8 @@ fun VoiceoverScreen(
                                         text = "HAPUS",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
-                                        color = TextSecondary
+                                        fontWeight = FontWeight.Bold,
+                                        color = ErrorCardText
                                     )
                                 }
                             }
