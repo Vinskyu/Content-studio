@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.contentstudio.app.runtime.ChatMessageItem
 import com.contentstudio.app.runtime.ChatSessionSummary
+import com.contentstudio.app.runtime.WorkspaceSummary
 import com.contentstudio.app.runtime.LinuxRuntimeManager
 import com.contentstudio.app.ui.theme.ActionSolidBg
 import com.contentstudio.app.ui.theme.ActionSolidText
@@ -93,13 +94,16 @@ fun ChatScreen(
     val listState = rememberLazyListState()
 
     val activeSessionId by LinuxRuntimeManager.activeSessionId.collectAsState()
+    val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
     val messages = remember { mutableStateListOf<ChatMessageItem>() }
     val sessions = remember { mutableStateListOf<ChatSessionSummary>() }
+    val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
 
     var inputText by remember { mutableStateOf("") }
     var isStreaming by remember { mutableStateOf(false) }
     var liveStatus by remember { mutableStateOf("") }
     var showHistorySheet by remember { mutableStateOf(false) }
+    var showWorkspaceSheet by remember { mutableStateOf(false) }
     var copiedMsgId by remember { mutableStateOf<String?>(null) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "loading_line")
@@ -161,6 +165,29 @@ fun ChatScreen(
         }
     }
 
+    fun refreshWorkspacesList() {
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.listWorkspaces()
+            val arr = res.optJSONArray("workspaces") ?: return@launch
+            val list = mutableListOf<WorkspaceSummary>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    WorkspaceSummary(
+                        name = obj.optString("name"),
+                        path = obj.optString("path"),
+                        filesCount = obj.optInt("files_count", 0),
+                        updatedAt = obj.optLong("updated_at", 0L)
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                workspaces.clear()
+                workspaces.addAll(list)
+            }
+        }
+    }
+
     fun startNewSession() {
         if (isStreaming) return
         scope.launch(Dispatchers.IO) {
@@ -198,6 +225,7 @@ fun ChatScreen(
             LinuxRuntimeManager.sendChatStream(
                 sessionId = sid,
                 message = cleanPrompt,
+                workspace = activeWorkspace.ifBlank { null },
                 onStatus = { st ->
                     scope.launch(Dispatchers.Main) { liveStatus = st }
                 },
@@ -244,6 +272,7 @@ fun ChatScreen(
             loadSessionMessages(activeSessionId)
         }
         refreshSessionsList()
+        refreshWorkspacesList()
     }
 
     LaunchedEffect(messages.size) {
@@ -291,6 +320,26 @@ fun ChatScreen(
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = BadgeGreenText
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (activeWorkspace.isNotBlank()) CardHighlight else SurfaceCard)
+                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                        .clickable {
+                            refreshWorkspacesList()
+                            showWorkspaceSheet = true
+                        }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = if (activeWorkspace.isNotBlank()) "[WS: $activeWorkspace]" else "[PILIH WS]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (activeWorkspace.isNotBlank()) TextPrimary else TextSecondary
                     )
                 }
             }
@@ -800,11 +849,93 @@ fun ChatScreen(
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+        }
+
+        if (showWorkspaceSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showWorkspaceSheet = false },
+                containerColor = SurfaceCard,
+                tonalElevation = 0.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "PILIH WORKSPACE AKTIF",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (workspaces.isEmpty()) {
+                        Text(
+                            text = "Belum ada workspace. Buat workspace baru di tab PROYEK.",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.heightIn(max = 350.dp)
+                        ) {
+                            items(workspaces) { ws ->
+                                val isSelected = ws.name == activeWorkspace
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(if (isSelected) CardHighlight else SurfaceCard)
+                                        .border(1.dp, if (isSelected) TextPrimary else BorderSubtle, RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                            showWorkspaceSheet = false
+                                        }
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = ws.name,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = TextPrimary
+                                        )
+                                        Text(
+                                            text = "${ws.filesCount} file",
+                                            fontFamily = FontFamily.Default,
+                                            fontSize = 11.sp,
+                                            color = TextSecondary
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Text(
+                                            text = "[AKTIF]",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = BadgeGreenText
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
             }
         }
     }
-}
 
 /**
  * Kompatibilitas dengan MainActivity lama yang mengimpor AgentScreen

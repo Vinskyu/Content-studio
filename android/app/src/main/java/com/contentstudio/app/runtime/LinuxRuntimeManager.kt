@@ -1,6 +1,7 @@
 package com.contentstudio.app.runtime
 
 import android.content.Context
+import android.net.Uri
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -20,12 +21,28 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.zip.ZipInputStream
 
 data class ChatSessionSummary(
     val id: String,
     val title: String,
     val updatedAt: Long,
     val messageCount: Int,
+)
+
+data class WorkspaceSummary(
+    val name: String,
+    val path: String,
+    val filesCount: Int,
+    val updatedAt: Long,
+)
+
+data class WorkspaceFileItem(
+    val name: String,
+    val relPath: String,
+    val size: Long,
+    val category: String,
+    val updatedAt: Long,
 )
 
 data class ChatMessageItem(
@@ -67,6 +84,9 @@ object LinuxRuntimeManager {
 
     private val _activeSessionId = MutableStateFlow("")
     val activeSessionId: StateFlow<String> = _activeSessionId.asStateFlow()
+
+    private val _activeWorkspace = MutableStateFlow("")
+    val activeWorkspace: StateFlow<String> = _activeWorkspace.asStateFlow()
 
     private fun appendLog(line: String) {
         val clean = line.trimEnd()
@@ -273,10 +293,18 @@ object LinuxRuntimeManager {
                     appendLog("[1/4] $msg")
                 }
 
-                // Salin aset JS (bionic-compat.js, proxy.js, studio-bridge.js) ke $HOME/
+                // Salin aset JS dan helper PTY (bionic-compat.js, proxy.js, studio-bridge.js, pty-bridge.py) ke $HOME/
                 copyAssetToHome(context, "bionic-compat.js", "$home/bionic-compat.js")
                 copyAssetToHome(context, "proxy.js", "$home/proxy.js")
                 copyAssetToHome(context, "studio-bridge.js", "$home/studio-bridge.js")
+                try {
+                    copyAssetToHome(context, "pty-bridge.py", "$home/pty-bridge.py")
+                    File("$home/pty-bridge.py").setExecutable(true)
+                } catch (_: Exception) {}
+
+                // Ekstrak dapur produksi ContentStudio (AGENTS.md, .agents/skills/, engine/) ke $HOME/ContentStudio/
+                extractStudioCore(context, "$home/ContentStudio")
+                File("$home/ContentStudio/workspaces").mkdirs()
 
                 // TAHAP 2: Pasang & verifikasi libc++ terbaru + Node.js + npm-cli.js + Python + CA-Certificates
                 _setupStage.value = 2
@@ -434,6 +462,42 @@ object LinuxRuntimeManager {
             FileOutputStream(destFile).use { output ->
                 input.copyTo(output)
             }
+        }
+    }
+
+    private fun extractStudioCore(context: Context, targetDir: String) {
+        val dest = File(targetDir)
+        dest.mkdirs()
+        File(dest, "workspaces").mkdirs()
+
+        try {
+            val assetList = context.assets.list("") ?: emptyArray()
+            if (assetList.contains("studio-core.zip")) {
+                context.assets.open("studio-core.zip").use { input ->
+                    ZipInputStream(input).use { zis ->
+                        var entry = zis.nextEntry
+                        while (entry != null) {
+                            val outFile = File(dest, entry.name)
+                            if (entry.isDirectory) {
+                                outFile.mkdirs()
+                            } else {
+                                outFile.parentFile?.mkdirs()
+                                FileOutputStream(outFile).use { output ->
+                                    zis.copyTo(output)
+                                }
+                                if (entry.name.endsWith(".py") || entry.name.endsWith(".sh")) {
+                                    outFile.setExecutable(true)
+                                }
+                            }
+                            zis.closeEntry()
+                            entry = zis.nextEntry
+                        }
+                    }
+                }
+                appendLog("[1/4] Dapur produksi studio-core berhasil disiapkan di $targetDir")
+            }
+        } catch (e: Exception) {
+            appendLog("[1/4] Peringatan ekstrak studio-core.zip: ${e.message}")
         }
     }
 
@@ -690,9 +754,89 @@ object LinuxRuntimeManager {
         }
     }
 
+    fun setActiveWorkspace(name: String) {
+        _activeWorkspace.value = name
+    }
+
+    fun listWorkspaces(): JSONObject {
+        return try {
+            httpRequest("GET", "/workspaces")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal memuat workspace")
+            }
+        }
+    }
+
+    fun createWorkspace(name: String): JSONObject {
+        return try {
+            val body = JSONObject().apply { put("name", name) }.toString()
+            val res = httpRequest("POST", "/workspaces", body)
+            if (res.optString("status") == "ok") {
+                _activeWorkspace.value = name
+            }
+            res
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal membuat workspace")
+            }
+        }
+    }
+
+    fun getWorkspaceFiles(name: String): JSONObject {
+        return try {
+            httpRequest("GET", "/workspaces/$name/files")
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal memuat file workspace")
+            }
+        }
+    }
+
+    fun getWorkspaceDir(context: Context, workspaceName: String): File {
+        val paths = BootstrapInstaller.getPaths(context)
+        return File(paths.homeDir, "ContentStudio/workspaces/$workspaceName")
+    }
+
+    fun getWorkspaceAudioDir(context: Context, workspaceName: String): File {
+        val dir = File(getWorkspaceDir(context, workspaceName), "audio")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getWorkspaceAssetsDir(context: Context, workspaceName: String): File {
+        val dir = File(getWorkspaceDir(context, workspaceName), "assets")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun importAssetToWorkspace(context: Context, workspaceName: String, uri: Uri): Result<File> {
+        return runCatching {
+            val destDir = getWorkspaceAssetsDir(context, workspaceName)
+            var fileName = "asset_${System.currentTimeMillis()}"
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1 && cursor.moveToFirst()) {
+                    fileName = cursor.getString(nameIndex)
+                }
+            }
+            val destFile = File(destDir, fileName)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            } ?: error("Tidak dapat membuka file")
+            destFile
+        }
+    }
+
     fun sendChatStream(
         sessionId: String,
         message: String,
+        workspace: String? = null,
         onStatus: (String) -> Unit,
         onDelta: (String) -> Unit,
         onDone: (String) -> Unit,
@@ -702,6 +846,9 @@ object LinuxRuntimeManager {
             val body = JSONObject().apply {
                 put("session_id", sessionId)
                 put("message", message)
+                if (!workspace.isNullOrBlank()) {
+                    put("workspace", workspace)
+                }
             }.toString()
 
             val conn = (URL("$BRIDGE_BASE_URL/chat").openConnection() as HttpURLConnection).apply {

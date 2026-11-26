@@ -81,3 +81,12 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
+
+tasks.register<Exec>("syncStudioCore") {
+    workingDir(file("${rootProject.projectDir}/.."))
+    commandLine("sh", "scripts/sync-studio-core.sh")
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn("syncStudioCore")
+}

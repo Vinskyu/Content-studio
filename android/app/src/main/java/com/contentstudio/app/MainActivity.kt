@@ -19,6 +19,7 @@ import com.contentstudio.app.runtime.LinuxRuntimeManager
 import com.contentstudio.app.runtime.StudioForegroundService
 import com.contentstudio.app.ui.screens.AgentScreen
 import com.contentstudio.app.ui.screens.AuthScreen
+import com.contentstudio.app.ui.screens.MainStudioScreen
 import com.contentstudio.app.ui.screens.SetupScreen
 import com.contentstudio.app.ui.theme.BgDark
 import com.contentstudio.app.ui.theme.ContentStudioTheme
@@ -49,7 +50,7 @@ class MainActivity : ComponentActivity() {
                     when {
                         !isReady -> SetupScreen()
                         !isLoggedIn -> AuthScreen()
-                        else -> AgentScreen()
+                        else -> MainStudioScreen()
                     }
                 }
             }

@@ -6,35 +6,55 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const PORT = 18950;
+const PORT = parseInt(process.env.PORT || '18950', 10);
 const HOST = '127.0.0.1';
 
 const HOME_DIR = process.env.HOME || '/tmp';
 const PREFIX_DIR = process.env.PREFIX || '/usr';
+
+const CONTENT_STUDIO_DIR = path.join(HOME_DIR, 'ContentStudio');
+const WORKSPACES_DIR = path.join(CONTENT_STUDIO_DIR, 'workspaces');
 const SESSIONS_DIR = path.join(HOME_DIR, '.contentstudio', 'sessions');
 const STATE_FILE = path.join(HOME_DIR, '.contentstudio', 'state.json');
 
 const ANTIGRAVITY_BIN = path.join(PREFIX_DIR, 'bin', 'antigravity');
 const AUTH_MARKER_FILE = path.join(HOME_DIR, '.antigravity_auth_ok');
+const PTY_BRIDGE_PATH = path.join(HOME_DIR, 'pty-bridge.py');
+const PTY_BRIDGE_FALLBACK = path.join(__dirname, 'pty-bridge.py');
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+fs.mkdirSync(WORKSPACES_DIR, { recursive: true });
 
 let activeChatProc = null;
 let activeAuthProc = null;
 let lastAuthError = null;
 
-function getAntigravityEnv() {
-  return {
+function getAntigravityEnv(isAuthMode = false) {
+  const env = {
     ...process.env,
     HOME: HOME_DIR,
     XDG_CONFIG_HOME: path.join(HOME_DIR, '.config'),
     XDG_DATA_HOME: path.join(HOME_DIR, '.local', 'share'),
     SSL_CERT_FILE: path.join(PREFIX_DIR, 'etc', 'tls', 'cert.pem'),
-    TERM: 'dumb',
-    NO_COLOR: '1',
+    TERM: isAuthMode ? 'xterm-256color' : 'dumb',
+    NO_COLOR: isAuthMode ? '0' : '1',
     FORCE_COLOR: '0',
-    ANTIGRAVITY_SAFECLIS_SOURCE: '1',
   };
+
+  // Jangan pasang ANTIGRAVITY_SAFECLIS_SOURCE saat auth mode
+  if (isAuthMode) {
+    delete env.ANTIGRAVITY_SAFECLIS_SOURCE;
+  } else {
+    env.ANTIGRAVITY_SAFECLIS_SOURCE = '1';
+  }
+
+  return env;
+}
+
+function resolvePtyBridge() {
+  if (fs.existsSync(PTY_BRIDGE_PATH)) return PTY_BRIDGE_PATH;
+  if (fs.existsSync(PTY_BRIDGE_FALLBACK)) return PTY_BRIDGE_FALLBACK;
+  return null;
 }
 
 function stripAnsi(str) {
@@ -66,7 +86,7 @@ function readState() {
       return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     }
   } catch (_) {}
-  return { active_session_id: '' };
+  return { active_session_id: '', active_workspace: '' };
 }
 
 function writeState(state) {
@@ -86,6 +106,7 @@ function listSessions() {
       sessions.push({
         id: data.id,
         title: data.title || 'Sesi Baru',
+        workspace: data.workspace || '',
         created_at: data.created_at || 0,
         updated_at: data.updated_at || 0,
         message_count: Array.isArray(data.messages) ? data.messages.length : 0,
@@ -114,12 +135,13 @@ function saveSession(session) {
   fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
 }
 
-function createSession(title) {
+function createSession(title, workspace = '') {
   const id = `ses_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
   const now = Date.now();
   const session = {
     id,
     title: title || 'Sesi Baru',
+    workspace: workspace || '',
     created_at: now,
     updated_at: now,
     messages: [],
@@ -127,15 +149,24 @@ function createSession(title) {
   saveSession(session);
   const st = readState();
   st.active_session_id = id;
+  if (workspace) {
+    st.active_workspace = workspace;
+  }
   writeState(st);
   return session;
 }
 
-function ensureActiveSession() {
+function ensureActiveSession(workspace = '') {
   const st = readState();
   if (st.active_session_id) {
     const existing = loadSession(st.active_session_id);
-    if (existing) return existing;
+    if (existing) {
+      if (workspace && !existing.workspace) {
+        existing.workspace = workspace;
+        saveSession(existing);
+      }
+      return existing;
+    }
   }
   const all = listSessions();
   if (all.length > 0) {
@@ -146,7 +177,7 @@ function ensureActiveSession() {
       return first;
     }
   }
-  return createSession('Sesi Baru');
+  return createSession('Sesi Baru', workspace);
 }
 
 function sendJson(res, statusCode, data) {
@@ -179,6 +210,150 @@ function readJsonBody(req) {
   });
 }
 
+// ── Workspace & File Management ─────────────────────────────────────────────
+
+function countFilesRecursive(dir) {
+  let count = 0;
+  let latestMtime = 0;
+  if (!fs.existsSync(dir)) return { count, latestMtime };
+
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        const sub = countFilesRecursive(full);
+        count += sub.count;
+        if (sub.latestMtime > latestMtime) latestMtime = sub.latestMtime;
+      } else if (ent.isFile()) {
+        count++;
+        try {
+          const st = fs.statSync(full);
+          if (st.mtimeMs > latestMtime) latestMtime = st.mtimeMs;
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
+  return { count, latestMtime };
+}
+
+function listWorkspaces() {
+  fs.mkdirSync(WORKSPACES_DIR, { recursive: true });
+  const entries = fs.readdirSync(WORKSPACES_DIR, { withFileTypes: true });
+  const list = [];
+
+  for (const ent of entries) {
+    if (!ent.isDirectory()) continue;
+    const wsName = ent.name;
+    const wsPath = path.join(WORKSPACES_DIR, wsName);
+    const { count, latestMtime } = countFilesRecursive(wsPath);
+
+    let dirMtime = 0;
+    try {
+      dirMtime = fs.statSync(wsPath).mtimeMs;
+    } catch (_) {}
+
+    list.push({
+      name: wsName,
+      path: wsPath,
+      files_count: count,
+      updated_at: Math.max(dirMtime, latestMtime),
+    });
+  }
+
+  list.sort((a, b) => b.updated_at - a.updated_at);
+  return list;
+}
+
+function createWorkspace(rawName) {
+  const cleanName = String(rawName || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  if (!cleanName) {
+    throw new Error('Nama workspace tidak valid');
+  }
+
+  const wsPath = path.join(WORKSPACES_DIR, cleanName);
+  const subdirs = ['scripts', 'assets', 'audio', 'output'];
+
+  fs.mkdirSync(wsPath, { recursive: true });
+  for (const sub of subdirs) {
+    fs.mkdirSync(path.join(wsPath, sub), { recursive: true });
+  }
+
+  return {
+    name: cleanName,
+    path: wsPath,
+    subdirs,
+  };
+}
+
+function scanWorkspaceFiles(wsName) {
+  const cleanName = path.basename(String(wsName || ''));
+  const wsPath = path.join(WORKSPACES_DIR, cleanName);
+
+  if (!cleanName || !fs.existsSync(wsPath) || !fs.statSync(wsPath).isDirectory()) {
+    return null;
+  }
+
+  const result = [];
+
+  function walk(currentDir) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+
+    for (const ent of entries) {
+      if (ent.name.startsWith('.')) continue;
+      const full = path.join(currentDir, ent.name);
+      const rel = path.relative(wsPath, full);
+
+      if (ent.isDirectory()) {
+        walk(full);
+      } else if (ent.isFile()) {
+        let size = 0;
+        let mtime = 0;
+        try {
+          const st = fs.statSync(full);
+          size = st.size;
+          mtime = st.mtimeMs;
+        } catch (_) {}
+
+        let category = 'other';
+        const lowerRel = rel.toLowerCase();
+        if (lowerRel.startsWith('scripts/') || lowerRel.endsWith('.py') || lowerRel.endsWith('.sh') || lowerRel.endsWith('.json')) {
+          category = 'scripts';
+        } else if (lowerRel.startsWith('audio/') || lowerRel.endsWith('.m4a') || lowerRel.endsWith('.mp3') || lowerRel.endsWith('.wav') || lowerRel.endsWith('.aac')) {
+          category = 'audio';
+        } else if (lowerRel.startsWith('output/')) {
+          category = 'output';
+        } else if (lowerRel.startsWith('assets/') || lowerRel.endsWith('.mp4') || lowerRel.endsWith('.jpg') || lowerRel.endsWith('.jpeg') || lowerRel.endsWith('.png') || lowerRel.endsWith('.webp')) {
+          category = 'assets';
+        }
+
+        result.push({
+          name: ent.name,
+          rel_path: rel,
+          size,
+          category,
+          updated_at: mtime,
+        });
+      }
+    }
+  }
+
+  walk(wsPath);
+  result.sort((a, b) => b.updated_at - a.updated_at);
+  return result;
+}
+
+// ── Auth Handlers ───────────────────────────────────────────────────────────
+
 function handleAuthStart(res) {
   if (activeAuthProc) {
     try { activeAuthProc.kill('SIGTERM'); } catch (_) {}
@@ -192,18 +367,30 @@ function handleAuthStart(res) {
     return sendJson(res, 500, { status: 'error', error: lastAuthError });
   }
 
-  let responded = false;
-  let combinedOutput = '';
+  const ptyHelper = resolvePtyBridge();
+  let proc;
+  const authEnv = getAntigravityEnv(true);
 
-  const proc = spawn(ANTIGRAVITY_BIN, ['-p', 'ping'], {
-    env: getAntigravityEnv(),
-    cwd: HOME_DIR,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  if (ptyHelper && fs.existsSync(ptyHelper)) {
+    proc = spawn('python3', [ptyHelper, ANTIGRAVITY_BIN, '-p', 'ping'], {
+      env: authEnv,
+      cwd: HOME_DIR,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } else {
+    proc = spawn(ANTIGRAVITY_BIN, ['-p', 'ping'], {
+      env: authEnv,
+      cwd: HOME_DIR,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  }
 
   activeAuthProc = proc;
 
-  const urlRegex = /(https:\/\/accounts\.google\.com\/o\/oauth2\/[^\s'"]+)/;
+  let responded = false;
+  let combinedOutput = '';
+
+  const urlRegex = /(https:\/\/accounts\.google\.com\/o\/oauth2\/auth[^\s'"]+)/;
 
   function checkForAuthUrl(chunk) {
     if (responded) return;
@@ -267,7 +454,7 @@ function handleAuthStart(res) {
     lastAuthError = err.message;
     if (!responded) {
       responded = true;
-      sendJson(res, 500, { status: 'error', error: `Gagal menjalankan Antigravity: ${err.message}` });
+      sendJson(res, 500, { status: 'error', error: `Gagal menjalankan Antigravity PTY: ${err.message}` });
     }
   });
 }
@@ -363,6 +550,8 @@ async function handleAuthCode(req, res) {
   });
 }
 
+// ── Chat Stream Handler (Connected to ContentStudio Kitchen) ────────────────
+
 async function handleChat(req, res) {
   let body;
   try {
@@ -380,13 +569,19 @@ async function handleChat(req, res) {
     return sendJson(res, 500, { status: 'error', error: `Binary Antigravity tidak ditemukan di ${ANTIGRAVITY_BIN}` });
   }
 
+  const reqWs = body.workspace ? path.basename(String(body.workspace).trim()) : '';
   let session = body.session_id ? loadSession(body.session_id) : null;
   if (!session) {
-    session = ensureActiveSession();
+    session = ensureActiveSession(reqWs);
+  } else if (reqWs && session.workspace !== reqWs) {
+    session.workspace = reqWs;
   }
 
   const st = readState();
   st.active_session_id = session.id;
+  if (reqWs) {
+    st.active_workspace = reqWs;
+  }
   writeState(st);
 
   session.messages.push({
@@ -414,13 +609,28 @@ async function handleChat(req, res) {
 
   emit({ type: 'status', text: 'Menjalankan Antigravity...' });
 
+  // Susun instruksi dengan konteks dapur produksi dan workspace
+  const activeWorkspace = session.workspace || st.active_workspace || '';
+  let wsContextPrefix = '';
+  let wsPath = '';
+
+  if (activeWorkspace) {
+    wsPath = path.join(WORKSPACES_DIR, activeWorkspace);
+    if (fs.existsSync(wsPath)) {
+      wsContextPrefix = `[Konteks Workspace: "${activeWorkspace}" | Path: "${wsPath}"]\n` +
+        `Anda beroperasi di workspace ini. Simpan file script ke "${wsPath}/scripts", aset ke "${wsPath}/assets", audio ke "${wsPath}/audio", dan render ke "${wsPath}/output".\n\n`;
+    }
+  }
+
   const recentHistory = session.messages.slice(-8, -1);
   let promptToSend = userMsg;
   if (recentHistory.length > 0) {
     const historyLines = recentHistory.map((m) =>
       `${m.role === 'user' ? 'USER' : 'ASSISTANT'}: ${m.content}`
     );
-    promptToSend = `Konteks percakapan sebelumnya:\n${historyLines.join('\n')}\n\nInstruksi terbaru USER:\n${userMsg}`;
+    promptToSend = `${wsContextPrefix}Konteks percakapan sebelumnya:\n${historyLines.join('\n')}\n\nInstruksi terbaru USER:\n${userMsg}`;
+  } else if (wsContextPrefix) {
+    promptToSend = `${wsContextPrefix}${userMsg}`;
   }
 
   if (activeChatProc) {
@@ -428,9 +638,18 @@ async function handleChat(req, res) {
     activeChatProc = null;
   }
 
-  const proc = spawn(ANTIGRAVITY_BIN, ['-p', promptToSend], {
-    env: getAntigravityEnv(),
-    cwd: HOME_DIR,
+  // Parameter antigravity: cwd ke $HOME/ContentStudio agar membaca AGENTS.md, .agents/skills, dan engine/
+  const workingDir = fs.existsSync(CONTENT_STUDIO_DIR) ? CONTENT_STUDIO_DIR : HOME_DIR;
+  const cliArgs = [];
+
+  if (wsPath && fs.existsSync(wsPath)) {
+    cliArgs.push('--add-dir', wsPath);
+  }
+  cliArgs.push('-p', promptToSend);
+
+  const proc = spawn(ANTIGRAVITY_BIN, cliArgs, {
+    env: getAntigravityEnv(false),
+    cwd: workingDir,
   });
   activeChatProc = proc;
 
@@ -511,11 +730,14 @@ async function handleChat(req, res) {
   });
 }
 
+// ── HTTP Router ─────────────────────────────────────────────────────────────
+
 const server = http.createServer(async (req, res) => {
   const urlObj = new URL(req.url, `http://${HOST}:${PORT}`);
   const pathname = urlObj.pathname;
 
   if (req.method === 'GET' && pathname === '/health') {
+    const st = readState();
     const active = ensureActiveSession();
     const authenticated = fs.existsSync(AUTH_MARKER_FILE);
     return sendJson(res, 200, {
@@ -525,11 +747,14 @@ const server = http.createServer(async (req, res) => {
       logged_in: authenticated,
       auth_in_progress: Boolean(activeAuthProc),
       active_session_id: active.id,
+      active_workspace: st.active_workspace || '',
       last_auth_error: lastAuthError,
       antigravity_installed: fs.existsSync(ANTIGRAVITY_BIN),
+      pty_bridge_available: Boolean(resolvePtyBridge()),
     });
   }
 
+  // ── Auth Endpoints ────────────────────────────────────────────────────────
   if (req.method === 'POST' && pathname === '/auth/start') {
     return handleAuthStart(res);
   }
@@ -538,12 +763,49 @@ const server = http.createServer(async (req, res) => {
     return handleAuthCode(req, res);
   }
 
+  // ── Workspace Endpoints ───────────────────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/workspaces') {
+    const workspaces = listWorkspaces();
+    const st = readState();
+    return sendJson(res, 200, {
+      status: 'ok',
+      active_workspace: st.active_workspace || '',
+      workspaces,
+    });
+  }
+
+  if (req.method === 'POST' && pathname === '/workspaces') {
+    let body = {};
+    try { body = await readJsonBody(req); } catch (_) {}
+    try {
+      const created = createWorkspace(body.name);
+      const st = readState();
+      st.active_workspace = created.name;
+      writeState(st);
+      return sendJson(res, 200, { status: 'ok', workspace: created });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal membuat workspace' });
+    }
+  }
+
+  const wsFilesMatch = pathname.match(/^\/workspaces\/([^\/]+)\/files$/);
+  if (req.method === 'GET' && wsFilesMatch) {
+    const wsName = decodeURIComponent(wsFilesMatch[1]);
+    const files = scanWorkspaceFiles(wsName);
+    if (!files) {
+      return sendJson(res, 404, { status: 'error', error: `Workspace "${wsName}" tidak ditemukan` });
+    }
+    return sendJson(res, 200, { status: 'ok', workspace: wsName, files });
+  }
+
+  // ── Sessions Endpoints ────────────────────────────────────────────────────
   if (req.method === 'GET' && pathname === '/sessions') {
     const st = readState();
     const sessions = listSessions();
     return sendJson(res, 200, {
       status: 'ok',
       active_session_id: st.active_session_id || (sessions[0] ? sessions[0].id : ''),
+      active_workspace: st.active_workspace || '',
       sessions,
     });
   }
@@ -554,6 +816,7 @@ const server = http.createServer(async (req, res) => {
     if (!ses) return sendJson(res, 404, { status: 'error', error: 'Sesi tidak ditemukan' });
     const st = readState();
     st.active_session_id = ses.id;
+    if (ses.workspace) st.active_workspace = ses.workspace;
     writeState(st);
     return sendJson(res, 200, { status: 'ok', session: ses });
   }
@@ -566,11 +829,12 @@ const server = http.createServer(async (req, res) => {
       if (existing) {
         const st = readState();
         st.active_session_id = existing.id;
+        if (existing.workspace) st.active_workspace = existing.workspace;
         writeState(st);
         return sendJson(res, 200, { status: 'ok', session: existing });
       }
     }
-    const created = createSession(body.title || 'Sesi Baru');
+    const created = createSession(body.title || 'Sesi Baru', body.workspace || '');
     return sendJson(res, 200, { status: 'ok', session: created });
   }
 
@@ -588,6 +852,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { status: 'ok', deleted: id });
   }
 
+  // ── Chat Endpoints ────────────────────────────────────────────────────────
   if (req.method === 'POST' && pathname === '/chat/stop') {
     if (activeChatProc) {
       try { activeChatProc.kill('SIGTERM'); } catch (_) {}
@@ -612,4 +877,7 @@ if (require.main === module) {
 module.exports = {
   stripAnsi,
   cleanStderr,
+  listWorkspaces,
+  createWorkspace,
+  scanWorkspaceFiles,
 };
