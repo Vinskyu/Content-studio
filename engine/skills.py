@@ -86,7 +86,7 @@ Pedoman berburu dan mengumpulkan bahan media untuk konten:
 
 ## 1. TIPE MEDIA & STRATEGI PENCARIAN
 - **Klip Gameplay / B-Roll (`media_type="clip"`):**
-  * Gunakan query spesifik topik (misal: "Honor of Kings gameplay rank", "highlight sepak bola").
+  * Gunakan query spesifik topik (misal: "cinematic nature b-roll", "highlight sepak bola").
   * Unduh potongan durasi 5-8 detik max 1080p.
 - **Meme Reaksi (`media_type="meme"`):**
   * Cari klip humor pendek (misal: "patrick bingung", "monyet ketawa", "cat vibing").
@@ -112,7 +112,7 @@ def ensure_default_skills() -> None:
             with open(skill_file, "w", encoding="utf-8") as f:
                 f.write(data["content"].strip() + "\n")
 
-    # Juga cek jika ada skill warisan di .agents/skills/ (seperti hok_insights-director)
+    # Sinkronisasi skill tambahan dari .agents/skills/ jika ada
     legacy_dir = os.path.join(get_root_dir(), ".agents", "skills")
     if os.path.exists(legacy_dir):
         for item in os.listdir(legacy_dir):

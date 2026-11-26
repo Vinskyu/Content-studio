@@ -63,7 +63,7 @@ def load_session() -> Dict[str, Any]:
     """Membaca status sesi global (active_workspace, last_plan_path, last_output_video)."""
     p = os.path.join(get_cache_dir(), GLOBAL_SESSION_FILE)
     default_state = {
-        "active_workspace": "hok_insights",
+        "active_workspace": "default",
         "last_plan_path": None,
         "last_output_video": None
     }
@@ -201,7 +201,7 @@ CORE_TOOLS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Path relatif direktori yang ingin dilihat (contoh: 'inbox', 'workspaces/hok_insights', 'assets'). Default '.'."}
+                    "path": {"type": "string", "description": "Path relatif direktori yang ingin dilihat (contoh: 'inbox', 'workspaces', 'assets'). Default '.'."}
                 }
             }
         }
@@ -210,7 +210,7 @@ CORE_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Membaca isi file teks di ContentStudio (niche.md, style.md, plan.json, dsb).",
+            "description": "Membaca isi file teks di ContentStudio (project.json, plan.json, dsb).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -253,16 +253,14 @@ CORE_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "create_workspace",
-            "description": "Membuat akun/workspace baru beserta file niche.md, style.md, dan laws.md.",
+            "description": "Membuat akun/workspace baru beserta direktori proyek dan konfigurasinya.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Nama unik workspace (hanya huruf, angka, underscore)."},
-                    "niche": {"type": "string", "description": "Deskripsi niche/topik utama konten."},
-                    "style": {"type": "string", "description": "Pedoman gaya visual, font, dan warna."},
-                    "laws": {"type": "string", "description": "Hukum wajib dan larangan keras akun."}
+                    "aspect_ratio": {"type": "string", "description": "Rasio aspek default ('9:16', '16:9', dsb). Default '9:16'."}
                 },
-                "required": ["name", "niche"]
+                "required": ["name"]
             }
         }
     },
@@ -316,7 +314,7 @@ CORE_TOOLS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Kata kunci pencarian media (contoh: 'Honor of Kings gameplay rank', 'patrick bingung meme', 'whoosh sound')."},
+                    "query": {"type": "string", "description": "Kata kunci pencarian media (contoh: 'cinematic drone nature', 'reaction meme', 'whoosh sound')."},
                     "media_type": {"type": "string", "description": "Tipe media yang dicari: 'clip' (video footage 1080p), 'meme' (video reaksi pendek), atau 'sfx' (audio efek suara). Default 'clip'."},
                     "duration": {"type": "number", "description": "Durasi potongan detik yang diinginkan (default 6.0 detik)."}
                 },
@@ -425,15 +423,20 @@ def execute_local_tool(name: str, args: Dict[str, Any], session: Dict[str, Any])
             return "[ERR] Nama workspace tidak valid."
         ws_dir = os.path.join(get_workspaces_dir(), ws_name)
         os.makedirs(os.path.join(ws_dir, "projects"), exist_ok=True)
-        os.makedirs(os.path.join(ws_dir, "references"), exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "scripts"), exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "assets"), exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "audio"), exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "renders"), exist_ok=True)
 
-        niche = args.get("niche", f"# NICHE: {ws_name}\nTopik konten otomatis.")
-        style = args.get("style", "# STYLE GUIDE\n- Rasio: 9:16 Full HD 1080p (1080x1920)\n- Framing: blur_fill.")
-        laws = args.get("laws", "# LAWS & RULES\n1. Wajib resolusi 1080p.\n2. Bebas black bars.")
-
-        for f_name, c_text in [("niche.md", niche), ("style.md", style), ("laws.md", laws)]:
-            with open(os.path.join(ws_dir, f_name), "w", encoding="utf-8") as f:
-                f.write(c_text.strip() + "\n")
+        aspect = args.get("aspect_ratio", "9:16")
+        proj_file = os.path.join(ws_dir, "project.json")
+        if not os.path.exists(proj_file):
+            with open(proj_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "name": ws_name,
+                    "aspect_ratio": aspect,
+                    "scenes": []
+                }, f, indent=2)
 
         session["active_workspace"] = ws_name
         save_session(session)
@@ -474,7 +477,7 @@ def execute_local_tool(name: str, args: Dict[str, Any], session: Dict[str, Any])
         q = args.get("query", "")
         m_type = args.get("media_type", "clip")
         dur = float(args.get("duration", 6.0))
-        ws = session.get("active_workspace", "hok_insights")
+        ws = session.get("active_workspace", "default")
         target_dir = os.path.join(get_workspaces_dir(), ws, "inbox") if m_type == "clip" else None
         res = hunt_media(query=q, media_type=m_type, duration=dur, out_dir=target_dir)
         if res.get("status") == "ok":
@@ -543,7 +546,7 @@ def execute_autonomous_agent(
     - Proaktif & Self-Correction (Auto-Hunt, Auto-Plan, Auto-Validation)
     """
     sess = session or load_session()
-    active_ws = sess.get("active_workspace", "hok_insights")
+    active_ws = sess.get("active_workspace", "default")
     history = load_chat_history(active_ws)
 
     # 1. Kumpulkan seluruh tools aktif (Core Tools + Remote MCP Tools)
@@ -714,7 +717,7 @@ def handle_slash_command(cmd_text: str, session: Dict[str, Any], event_callback:
     if cmd in {"/use", "/switch"}:
         if not args:
             return {
-                "status": "ok", "mode": "cli", "active_workspace": session.get("active_workspace", "hok_insights"),
+                "status": "ok", "mode": "cli", "active_workspace": session.get("active_workspace", "default"),
                 "reply": f"Workspace aktif saat ini: '{session.get('active_workspace')}'.\nGunakan '/use <nama_workspace>' untuk berpindah.",
                 "steps": [], "action_cards": []
             }
@@ -722,7 +725,7 @@ def handle_slash_command(cmd_text: str, session: Dict[str, Any], event_callback:
         ws_path = os.path.join(get_workspaces_dir(), target_ws)
         if not os.path.exists(ws_path):
             return {
-                "status": "error", "mode": "cli", "active_workspace": session.get("active_workspace", "hok_insights"),
+                "status": "error", "mode": "cli", "active_workspace": session.get("active_workspace", "default"),
                 "reply": f"[ERR] Workspace '{target_ws}' tidak ditemukan di {ws_path}",
                 "steps": [], "action_cards": []
             }
@@ -750,7 +753,7 @@ def handle_slash_command(cmd_text: str, session: Dict[str, Any], event_callback:
         }
 
     elif cmd == "/clear":
-        active_ws = session.get("active_workspace", "hok_insights")
+        active_ws = session.get("active_workspace", "default")
         clear_chat_history(active_ws)
         return {
             "status": "ok", "mode": "cli", "active_workspace": active_ws,
@@ -772,7 +775,7 @@ Kesiapan Provider AI:
 {chr(10).join(prov_lines)}
 """
         return {
-            "status": "ok", "mode": "cli", "active_workspace": session.get("active_workspace", "hok_insights"),
+            "status": "ok", "mode": "cli", "active_workspace": session.get("active_workspace", "default"),
             "reply": msg,
             "steps": [], "action_cards": []
         }

@@ -155,6 +155,9 @@ object LinuxRuntimeManager {
     private val _activeWorkspace = MutableStateFlow("")
     val activeWorkspace: StateFlow<String> = _activeWorkspace.asStateFlow()
 
+    private val _isServerRunning = MutableStateFlow(false)
+    val isServerRunning: StateFlow<Boolean> = _isServerRunning.asStateFlow()
+
     private fun appendLog(line: String) {
         val clean = line.trimEnd()
         if (clean.isEmpty()) return
@@ -784,9 +787,85 @@ object LinuxRuntimeManager {
             if (ws.isNotBlank() && _activeWorkspace.value.isBlank()) {
                 _activeWorkspace.value = ws
             }
+            _isServerRunning.value = (res.optString("status") == "ok")
             res
         } catch (_: Exception) {
+            _isServerRunning.value = false
             null
+        }
+    }
+
+    fun shutdownServerCleanly() {
+        try {
+            bridgeProcess?.let { proc ->
+                if (isProcessAlive(proc)) {
+                    proc.destroy()
+                    Thread.sleep(250)
+                    if (isProcessAlive(proc)) {
+                        proc.destroyForcibly()
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        bridgeProcess = null
+
+        try {
+            proxyProcess?.let { proc ->
+                if (isProcessAlive(proc)) {
+                    proc.destroy()
+                    Thread.sleep(250)
+                    if (isProcessAlive(proc)) {
+                        proc.destroyForcibly()
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        proxyProcess = null
+
+        _isServerRunning.value = false
+        appendLog("[runtime] Bridge server dihentikan dengan aman.")
+    }
+
+    fun ensureServerRunning(context: Context? = null): Boolean {
+        val ctx = context ?: appContext ?: return false
+        setApplicationContext(ctx)
+
+        // 1. Cek apakah bridge sudah hidup dan merespons /health
+        val currentHealth = refreshHealth()
+        if (currentHealth != null && currentHealth.optString("status") == "ok") {
+            _isServerRunning.value = true
+            return true
+        }
+
+        // 2. Jika belum hidup atau mati, pastikan proses lama dibersihkan
+        shutdownServerCleanly()
+
+        val paths = BootstrapInstaller.getPaths(ctx)
+        startBackgroundNodeServers(ctx, paths)
+
+        // 3. Polling health hingga 15 kali (~4.5 detik)
+        for (i in 1..15) {
+            Thread.sleep(300)
+            val h = refreshHealth()
+            if (h != null && h.optString("status") == "ok") {
+                _isServerRunning.value = true
+                return true
+            }
+        }
+        return false
+    }
+
+    fun restartServer(context: Context? = null) {
+        scope.launch {
+            shutdownServerCleanly()
+            delay(500)
+            ensureServerRunning(context)
+        }
+    }
+
+    fun stopServer() {
+        scope.launch {
+            shutdownServerCleanly()
         }
     }
 

@@ -35,6 +35,16 @@ for (const cat of LIBRARY_CATEGORIES) {
   fs.mkdirSync(path.join(LIBRARY_DIR, cat), { recursive: true });
 }
 
+// Cleanup legacy sample skills from user storage if present
+try {
+  const legacyDir = path.join(CONTENT_STUDIO_DIR, '.agents', 'skills', 'hok_insights-director');
+  if (fs.existsSync(legacyDir)) {
+    fs.rmSync(legacyDir, { recursive: true, force: true });
+  }
+} catch (e) {
+  // Silent catch
+}
+
 let activeChatProc = null;
 let activeAuthProc = null;
 const renderJobs = new Map();

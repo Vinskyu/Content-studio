@@ -14,16 +14,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -32,28 +39,29 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// ── Flat Matte Dark Color Palette ───────────────────────────────────────────
-val StudioBg = Color(0xFF0A0A0C)
-val StudioSurface = Color(0xFF131317)
-val StudioSurfaceElevated = Color(0xFF1B1B21)
-val StudioBorder = Color(0xFF222228)
+// ── Flat Matte Dark Color Palette (V3) ───────────────────────────────────────
+val StudioBg = Color(0xFF0B0C0E)
+val StudioSurface = Color(0xFF14161A)
+val StudioSurfaceElevated = Color(0xFF1D2026)
+val StudioBorder = Color(0xFF262A33)
 
-val StudioPrimary = Color(0xFFF4F4F5)
-val StudioPrimaryText = Color(0xFF0A0A0C)
+val StudioPrimary = Color(0xFFF2F4F8)
+val StudioPrimaryText = Color(0xFF0B0C0E)
 
-val StudioSecondary = Color(0xFF202027)
-val StudioSecondaryText = Color(0xFFE4E4E7)
+val StudioSecondary = Color(0xFF1D2026)
+val StudioSecondaryText = Color(0xFFF2F4F8)
 
 val StudioDangerBg = Color(0xFF2A1417)
 val StudioDangerText = Color(0xFFF87171)
 
-val StudioAccent = Color(0xFF38BDF8)
+val StudioAccent = Color(0xFF5E81AC)
+val StudioAccentLight = Color(0xFFE6E9EF)
 val StudioBadgeGreenBg = Color(0xFF102619)
 val StudioBadgeGreenText = Color(0xFF4ADE80)
 
-val TextPrimary = Color(0xFFF4F4F5)
-val TextSecondary = Color(0xFFA1A1AA)
-val TextMuted = Color(0xFF71717A)
+val TextPrimary = Color(0xFFF2F4F8)
+val TextSecondary = Color(0xFF8A919E)
+val TextMuted = Color(0xFF8A919E)
 
 // ── Standard UI Components ──────────────────────────────────────────────────
 
@@ -150,6 +158,7 @@ fun StudioCard(
         .clip(RoundedCornerShape(10.dp))
         .background(StudioSurface)
         .border(0.5.dp, StudioBorder, RoundedCornerShape(10.dp))
+        .animateContentSize()
 
     val finalModifier = if (onClick != null) {
         baseModifier.clickable { onClick() }
@@ -171,9 +180,17 @@ fun StudioPrimaryButton(
     enabled: Boolean = true,
     height: Dp = 40.dp
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1.0f,
+        label = "primaryBtnScale"
+    )
+
     Button(
         onClick = onClick,
         enabled = enabled,
+        interactionSource = interactionSource,
         shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = StudioPrimary,
@@ -182,7 +199,12 @@ fun StudioPrimaryButton(
             disabledContentColor = TextMuted
         ),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-        modifier = modifier.height(height)
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .height(height)
     ) {
         Text(
             text = text,
@@ -204,9 +226,17 @@ fun StudioSecondaryButton(
     enabled: Boolean = true,
     height: Dp = 40.dp
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1.0f,
+        label = "secBtnScale"
+    )
+
     Button(
         onClick = onClick,
         enabled = enabled,
+        interactionSource = interactionSource,
         shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = StudioSecondary,
@@ -215,7 +245,12 @@ fun StudioSecondaryButton(
             disabledContentColor = TextMuted
         ),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-        modifier = modifier.height(height)
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .height(height)
     ) {
         Text(
             text = text,
@@ -237,9 +272,17 @@ fun StudioDangerButton(
     enabled: Boolean = true,
     height: Dp = 40.dp
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1.0f,
+        label = "dangerBtnScale"
+    )
+
     Button(
         onClick = onClick,
         enabled = enabled,
+        interactionSource = interactionSource,
         shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = StudioDangerBg,
@@ -248,7 +291,12 @@ fun StudioDangerButton(
             disabledContentColor = TextMuted
         ),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-        modifier = modifier.height(height)
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .height(height)
     ) {
         Text(
             text = text,
@@ -271,6 +319,13 @@ fun StudioSmallButton(
     isDanger: Boolean = false,
     enabled: Boolean = true
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1.0f,
+        label = "smallBtnScale"
+    )
+
     val bg = when {
         isPrimary -> StudioPrimary
         isDanger -> StudioDangerBg
@@ -284,10 +339,18 @@ fun StudioSmallButton(
 
     Box(
         modifier = modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(RoundedCornerShape(6.dp))
             .background(if (enabled) bg else StudioSurface)
             .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
-            .clickable(enabled = enabled) { onClick() }
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null
+            ) { onClick() }
             .padding(horizontal = 9.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center
     ) {

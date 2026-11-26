@@ -5,7 +5,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -95,14 +99,19 @@ fun SetupScreen(
             File(paths.prefixDir, "bin/antigravity").exists()
     }
 
-    val progressAnim = remember { Animatable(0f) }
+    val progressAnim = remember { Animatable(0.05f) }
     val clampedStage = stage.coerceIn(1, 4)
-    val targetProgress = (clampedStage / 4f).coerceIn(0f, 1f)
 
-    LaunchedEffect(targetProgress) {
+    LaunchedEffect(clampedStage) {
+        val startVal = ((clampedStage - 1) * 0.25f).coerceAtLeast(0.05f)
+        val targetVal = if (clampedStage == 4) 1.0f else (clampedStage * 0.25f - 0.03f)
+        progressAnim.snapTo(startVal)
         progressAnim.animateTo(
-            targetValue = targetProgress,
-            animationSpec = tween(durationMillis = 700, easing = FastOutSlowInEasing)
+            targetValue = targetVal,
+            animationSpec = tween(
+                durationMillis = if (clampedStage == 4) 800 else 3200,
+                easing = FastOutSlowInEasing
+            )
         )
     }
 
@@ -265,13 +274,19 @@ fun SetupScreen(
                 }
             }
 
-            Text(
-                text = if (isAlreadyInstalled && setupError == null) "Menyalakan layanan lokal..." else message,
-                fontFamily = FontFamily.Default,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = TextPrimary
-            )
+            AnimatedContent(
+                targetState = if (isAlreadyInstalled && setupError == null) "Menyalakan layanan lokal..." else message,
+                transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(200)) },
+                label = "setupMsgAnim"
+            ) { currentMsg ->
+                Text(
+                    text = currentMsg,
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = TextPrimary
+                )
+            }
 
             if (setupError != null) {
                 Column(

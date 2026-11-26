@@ -165,18 +165,12 @@ def list_workspaces() -> str:
             skill_ready = os.path.exists(skill_file)
 
             niche_title = "-"
-            niche_file = os.path.join(ws_path, "niche.md")
-            if os.path.exists(niche_file):
+            proj_file = os.path.join(ws_path, "project.json")
+            if os.path.exists(proj_file):
                 try:
-                    with open(niche_file, "r", encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith("#"):
-                                niche_title = line[:60]
-                                break
-                            elif line.startswith("#"):
-                                niche_title = line.lstrip("#").strip()[:60]
-                                break
+                    with open(proj_file, "r", encoding="utf-8") as f:
+                        p_data = json.load(f)
+                        niche_title = p_data.get("name", ws)
                 except Exception:
                     pass
 
@@ -208,8 +202,8 @@ def switch_workspace(name: str) -> str:
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
-def create_workspace(name: str, niche: str, style: str = "", laws: str = "", skill: str = "") -> str:
-    """Membuat akun/workspace baru beserta file konstitusinya."""
+def create_workspace(name: str, niche: str = "", style: str = "", laws: str = "", skill: str = "") -> str:
+    """Membuat akun/workspace baru beserta direktori proyek dan project.json."""
     try:
         clean_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", name.strip().lower())
         if not clean_name:
@@ -217,19 +211,19 @@ def create_workspace(name: str, niche: str, style: str = "", laws: str = "", ski
 
         ws_dir = os.path.join(get_workspaces_dir(), clean_name)
         os.makedirs(os.path.join(ws_dir, "projects"), exist_ok=True)
-        os.makedirs(os.path.join(ws_dir, "references"), exist_ok=True)
-        os.makedirs(os.path.join(ws_dir, "inbox"), exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "scripts"), exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "assets"), exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "audio"), exist_ok=True)
+        os.makedirs(os.path.join(ws_dir, "renders"), exist_ok=True)
 
-        niche_text = niche.strip() if niche else f"# NICHE: {clean_name}\nTopik konten otomatis."
-        style_text = style.strip() if style else "# STYLE GUIDE\n- Rasio: 9:16 Full HD 1080p (1080x1920)\n- Framing: blur_fill."
-        laws_text = laws.strip() if laws else "# LAWS & RULES\n1. Wajib resolusi 1080p.\n2. Bebas black bars."
-
-        with open(os.path.join(ws_dir, "niche.md"), "w", encoding="utf-8") as f:
-            f.write(niche_text + "\n")
-        with open(os.path.join(ws_dir, "style.md"), "w", encoding="utf-8") as f:
-            f.write(style_text + "\n")
-        with open(os.path.join(ws_dir, "laws.md"), "w", encoding="utf-8") as f:
-            f.write(laws_text + "\n")
+        proj_file = os.path.join(ws_dir, "project.json")
+        if not os.path.exists(proj_file):
+            with open(proj_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "name": clean_name,
+                    "aspect_ratio": "9:16",
+                    "scenes": []
+                }, f, indent=2)
 
         if skill:
             s_folder = os.path.join(get_skills_dir(), f"{clean_name}-director")
@@ -268,7 +262,7 @@ def delete_workspace(name: str) -> str:
         session = load_session()
         if session.get("active_workspace") == clean_name:
             avail = [d for d in os.listdir(get_workspaces_dir()) if os.path.isdir(os.path.join(get_workspaces_dir(), d)) and not d.startswith(".")]
-            session["active_workspace"] = avail[0] if avail else "hok_insights"
+            session["active_workspace"] = avail[0] if avail else "default"
             save_session(session)
 
         return json.dumps({"status": "ok", "message": f"Workspace '{clean_name}' berhasil dihapus."}, ensure_ascii=False)
@@ -276,7 +270,7 @@ def delete_workspace(name: str) -> str:
         return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
 def read_workspace_file(workspace: str, rel_path: str) -> str:
-    """Membaca isi file konstitusi workspace (niche.md, style.md, laws.md, SKILL.md)."""
+    """Membaca isi file konfigurasi workspace (project.json, SKILL.md)."""
     try:
         clean_ws = workspace.strip().lower()
         ws_dir = os.path.join(get_workspaces_dir(), clean_ws)
@@ -540,7 +534,7 @@ def get_session_state() -> str:
 
         res = {
             "status": "ok",
-            "active_workspace": session.get("active_workspace", "hok_insights"),
+            "active_workspace": session.get("active_workspace", "default"),
             "last_plan_path": session.get("last_plan_path"),
             "last_output_video": session.get("last_output_video"),
             "storage": storage,

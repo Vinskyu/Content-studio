@@ -184,18 +184,12 @@ def get_workspaces_list() -> List[Dict[str, Any]]:
         skill_ready = os.path.exists(skill_file)
 
         niche_title = "-"
-        niche_file = os.path.join(ws_path, "niche.md")
-        if os.path.exists(niche_file):
+        proj_file = os.path.join(ws_path, "project.json")
+        if os.path.exists(proj_file):
             try:
-                with open(niche_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            niche_title = line[:50]
-                            break
-                        elif line.startswith("#"):
-                            niche_title = line.lstrip("#").strip()[:50]
-                            break
+                with open(proj_file, "r", encoding="utf-8") as f:
+                    p_data = json.load(f)
+                    niche_title = p_data.get("name", ws)
             except Exception:
                 pass
 
@@ -479,11 +473,14 @@ def create_plan_pipeline(req_dict: Dict[str, Any],
         with open(skill_file, "r", encoding="utf-8") as f:
             skill_dna_content = f.read()
 
-    style_file = os.path.join(ws_dir, "style.md")
     style_content = ""
-    if os.path.exists(style_file):
-        with open(style_file, "r", encoding="utf-8") as f:
-            style_content = f.read()
+    proj_file = os.path.join(ws_dir, "project.json")
+    if os.path.exists(proj_file):
+        try:
+            with open(proj_file, "r", encoding="utf-8") as f:
+                style_content = f.read()
+        except Exception:
+            pass
 
     # 2. INSPEKSI MEDIA
     emit_event("inspect", 15, f"Menginspeksi {len(media_paths)} file media sumber...", json_events, on_event=on_event)
@@ -552,7 +549,7 @@ ATURAN STRUKTUR PLAN.JSON UNTUK ENGINE/BUILD.PY:
    "aspect": "9:16"
    "fps": 30
    "quality": "balanced"
-   "audio_strategy": "viral_sync"
+   "audio_strategy": "balanced"
    "out_dir": "{DEFAULT_OUT_BASE}/{workspace}/{project}"
    "filename": "output.mp4"
    "dual_audio": true (jika ada VO dan BGM)
@@ -715,7 +712,7 @@ def main():
 
     # 2. plan
     p_plan = subparsers.add_parser("plan", help="Susun rencana video 1080p secara mandiri berbasis AI")
-    p_plan.add_argument("--workspace", required=True, help="Nama workspace target (misal: hok_insights)")
+    p_plan.add_argument("--workspace", required=True, help="Nama workspace target (misal: my_channel)")
     p_plan.add_argument("--project", required=True, help="Nama proyek baru")
     p_plan.add_argument("--topic", required=True, help="Judul atau ide konten video")
     p_plan.add_argument("--media", nargs="+", required=True, help="Daftar file media sumber (video/gambar)")

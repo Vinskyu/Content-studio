@@ -25,11 +25,10 @@ Skill ini membedah batch video referensi dari akun/channel panutan secara ilmiah
 
 1. Terima input dari pengguna:
    - **URL Sumber:** 1 URL channel/playlist YouTube Shorts/Reels/TikTok (atau daftar 5–8 URL video individu).
-   - **Nama Akun / Workspace Target:** Misal `lirik_vibes`, `fakta_gelap`, `stoik_id`.
-2. Siapkan direktori kerja terisolasi secara mutlak (patuhi Pasal 1 & 2 `AGENTS.md`):
+   - **Nama Akun / Workspace Target:** Misal `project_01`, `channel_focus`.
+2. Siapkan direktori kerja terisolasi secara mutlak:
    ```bash
-   mkdir -p workspaces/<akun>/references/batch/
-   mkdir -p .agents/skills/<akun>-director/
+   mkdir -p workspaces/<nama>/references/batch/
    ```
 3. Pastikan tidak ada interaksi atau pembacaan lintas workspace.
 
@@ -122,10 +121,10 @@ for ref_i in ref_01 ref_02 ref_03 ...
    - Contoh: Jika 6 dari 7 video menggunakan font sans tebal dengan animasi `pop_punch` di zona bawah dan transisi *hard cut* rata-rata 2.1 detik, maka parameter tersebut **dikunci sebagai DNA Tetap**.
    - Pola yang bervariasi mengikuti subjek (warna objek, kata benda khusus, topik) dikelompokkan ke dalam **Slot Variabel**.
 3. Tulis laporan analitis komprehensif ke `workspaces/<akun>/references/blueprint.md`.
-4. Perbarui file workspace:
-   - `workspaces/<akun>/niche.md`: Definisi audiens, pilar konten, dan batasan topik.
-   - `workspaces/<akun>/laws.md`: Larangan gaya, aturan audio (`viral_sync` / `clean_monetize`), dan batas aman konten.
-   - `workspaces/<akun>/style.md`: Parameter visual, font, animasi teks `.ass`, palet warna, dan ritme pacing.
+4. Perbarui profil DNA channel di `channels.json` dan `workspaces/<akun>/project.json`:
+   - Pola ritme dan pacing (durasi rata-rata scene, beat role).
+   - Parameter visual (font, animasi subtitle .ass, palet visual).
+   - Blueprint struktur adegan standar.
 
 ---
 
@@ -141,7 +140,7 @@ description: Sutradara otomatis produksi konten untuk workspace <akun>. Mengunci
 
 # <AKUN> CONTENT DIRECTOR
 
-## 1. BATASAN NICHE & HUKUM GAYA
+## 1. BATASAN AUDIENS & KARAKTER KONTEN
 - Audiens & Nada: ...
 - Larangan Keras: ...
 
@@ -156,7 +155,7 @@ description: Sutradara otomatis produksi konten untuk workspace <akun>. Mengunci
 - Animasi Teks: "<cinematic_fade | slide_up | karaoke_word | pop_punch | clean_minimal>"
 - Visual Polish: dim: ..., vignette: ..., color_preset: "..."
 - Pacing Target: avg shot ... detik
-- Audio Strategy: dual_audio: <true|false>, audio_mode: <viral_sync|clean_monetize>
+- Audio Strategy: dual_audio: <true|false>, bgm_volume: 0.15
 
 ## 4. CHECKLIST KONTRAK SEBELUM RENDER (AGENTS.MD)
 - [ ] 2-Pass Inspect telah dijalankan (probe, signals, energy, sheet).

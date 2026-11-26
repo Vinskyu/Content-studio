@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
         } else {
             startService(intent)
         }
+        startService(Intent(this, com.contentstudio.app.runtime.RuntimeLifecycleService::class.java))
     }
 
     private fun requestNotificationPermissionIfNeeded() {
