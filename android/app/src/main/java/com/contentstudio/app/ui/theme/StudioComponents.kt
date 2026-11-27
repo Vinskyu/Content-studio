@@ -27,6 +27,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -53,15 +68,70 @@ val StudioSecondaryText = Color(0xFFF2F4F8)
 
 val StudioDangerBg = Color(0xFF2A1417)
 val StudioDangerText = Color(0xFFF87171)
+val StudioDangerRed = Color(0xFFD96B6B)
 
 val StudioAccent = Color(0xFF5E81AC)
 val StudioAccentLight = Color(0xFFE6E9EF)
+val StudioSage = Color(0xFF67C28C)
 val StudioBadgeGreenBg = Color(0xFF102619)
 val StudioBadgeGreenText = Color(0xFF4ADE80)
 
 val TextPrimary = Color(0xFFF2F4F8)
 val TextSecondary = Color(0xFF8A919E)
 val TextMuted = Color(0xFF8A919E)
+
+// ── Smooth Organic Animation Helpers ────────────────────────────────────────
+
+fun studioLobbyTransition(): ContentTransform {
+    return (slideInHorizontally(
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
+        initialOffsetX = { it / 5 }
+    ) + fadeIn(tween(240, easing = FastOutSlowInEasing))) togetherWith (
+        slideOutHorizontally(
+            animationSpec = tween(180, easing = FastOutSlowInEasing),
+            targetOffsetX = { -it / 5 }
+        ) + fadeOut(tween(180))
+    )
+}
+
+fun studioLobbyBackTransition(): ContentTransform {
+    return (slideInHorizontally(
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
+        initialOffsetX = { -it / 5 }
+    ) + fadeIn(tween(240, easing = FastOutSlowInEasing))) togetherWith (
+        slideOutHorizontally(
+            animationSpec = tween(180, easing = FastOutSlowInEasing),
+            targetOffsetX = { it / 5 }
+        ) + fadeOut(tween(180))
+    )
+}
+
+fun studioPipelineTransition(isForward: Boolean): ContentTransform {
+    return if (isForward) {
+        (slideInHorizontally(
+            animationSpec = tween(220, easing = FastOutSlowInEasing),
+            initialOffsetX = { it / 4 }
+        ) + fadeIn(tween(220, easing = FastOutSlowInEasing))) togetherWith (
+            slideOutHorizontally(
+                animationSpec = tween(180, easing = FastOutSlowInEasing),
+                targetOffsetX = { -it / 4 }
+            ) + fadeOut(tween(180))
+        )
+    } else {
+        (slideInHorizontally(
+            animationSpec = tween(220, easing = FastOutSlowInEasing),
+            initialOffsetX = { -it / 4 }
+        ) + fadeIn(tween(220, easing = FastOutSlowInEasing))) togetherWith (
+            slideOutHorizontally(
+                animationSpec = tween(180, easing = FastOutSlowInEasing),
+                targetOffsetX = { it / 4 }
+            ) + fadeOut(tween(180))
+        )
+    }
+}
+
+val StudioExpandEnter = fadeIn(tween(180)) + expandVertically(spring(dampingRatio = 0.85f, stiffness = 420f))
+val StudioShrinkExit = fadeOut(tween(140)) + shrinkVertically()
 
 // ── Standard UI Components ──────────────────────────────────────────────────
 
@@ -94,19 +164,18 @@ fun StudioTopBar(
                 if (onBack != null) {
                     Box(
                         modifier = Modifier
+                            .size(36.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(StudioSecondary)
-                            .clickable { onBack() }
-                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                            .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                            .clickable { onBack() },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "Back",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = StudioSecondaryText,
-                            maxLines = 1,
-                            softWrap = false
+                        Icon(
+                            imageVector = Icons.Outlined.ArrowBack,
+                            contentDescription = "Back",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -153,15 +222,29 @@ fun StudioCard(
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && onClick != null) 0.98f else 1.0f,
+        label = "cardScale"
+    )
+
     val baseModifier = modifier
         .fillMaxWidth()
-        .clip(RoundedCornerShape(10.dp))
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .clip(RoundedCornerShape(6.dp))
         .background(StudioSurface)
-        .border(0.5.dp, StudioBorder, RoundedCornerShape(10.dp))
+        .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
         .animateContentSize()
 
     val finalModifier = if (onClick != null) {
-        baseModifier.clickable { onClick() }
+        baseModifier.clickable(
+            interactionSource = interactionSource,
+            indication = null
+        ) { onClick() }
     } else {
         baseModifier
     }
@@ -183,7 +266,7 @@ fun StudioPrimaryButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1.0f,
+        targetValue = if (isPressed) 0.96f else 1.0f,
         label = "primaryBtnScale"
     )
 
@@ -191,7 +274,7 @@ fun StudioPrimaryButton(
         onClick = onClick,
         enabled = enabled,
         interactionSource = interactionSource,
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(6.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = StudioPrimary,
             contentColor = StudioPrimaryText,
@@ -229,7 +312,7 @@ fun StudioSecondaryButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1.0f,
+        targetValue = if (isPressed) 0.96f else 1.0f,
         label = "secBtnScale"
     )
 
@@ -237,7 +320,7 @@ fun StudioSecondaryButton(
         onClick = onClick,
         enabled = enabled,
         interactionSource = interactionSource,
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(6.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = StudioSecondary,
             contentColor = StudioSecondaryText,
@@ -275,7 +358,7 @@ fun StudioDangerButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1.0f,
+        targetValue = if (isPressed) 0.96f else 1.0f,
         label = "dangerBtnScale"
     )
 
@@ -283,7 +366,7 @@ fun StudioDangerButton(
         onClick = onClick,
         enabled = enabled,
         interactionSource = interactionSource,
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(6.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = StudioDangerBg,
             contentColor = StudioDangerText,
@@ -322,7 +405,7 @@ fun StudioSmallButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1.0f,
+        targetValue = if (isPressed) 0.96f else 1.0f,
         label = "smallBtnScale"
     )
 

@@ -34,10 +34,16 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Send
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -427,17 +433,28 @@ fun ChatScreen(
                         .background(CardHighlight)
                         .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
                         .clickable { ChatController.startNewSession(activeWorkspace) }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
                 ) {
-                    Text(
-                        text = "New",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        softWrap = false,
-                        maxLines = 1
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Add,
+                            contentDescription = null,
+                            tint = TextPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "New",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary,
+                            softWrap = false,
+                            maxLines = 1
+                        )
+                    }
                 }
 
                 Box(
@@ -449,17 +466,28 @@ fun ChatScreen(
                             ChatController.refreshSessions()
                             showHistorySheet = true
                         }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
                 ) {
-                    Text(
-                        text = "History",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        softWrap = false,
-                        maxLines = 1
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.History,
+                            contentDescription = null,
+                            tint = TextPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "History",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary,
+                            softWrap = false,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
         }
@@ -827,13 +855,24 @@ fun ChatScreen(
                         .clickable { ChatController.stopStreaming() }
                         .padding(horizontal = 12.dp, vertical = 9.dp)
                 ) {
-                    Text(
-                        text = "Stop",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = ErrorCardText
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Stop,
+                            contentDescription = "Stop",
+                            tint = ErrorCardText,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Stop",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ErrorCardText
+                        )
+                    }
                 }
             } else {
                 val canSend = inputText.isNotBlank()
@@ -849,13 +888,24 @@ fun ChatScreen(
                         }
                         .padding(horizontal = 14.dp, vertical = 9.dp)
                 ) {
-                    Text(
-                        text = "Send",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (canSend) ActionSolidText else TextMuted
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Send,
+                            contentDescription = "Send",
+                            tint = if (canSend) ActionSolidText else TextMuted,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Send",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (canSend) ActionSolidText else TextMuted
+                        )
+                    }
                 }
             }
         }

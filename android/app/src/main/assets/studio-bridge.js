@@ -2385,6 +2385,97 @@ async function handleChat(req, res) {
   });
 }
 
+function listStudioSkills() {
+  const skills = [];
+  const searchDirs = [
+    path.join(CONTENT_STUDIO_DIR, '.agents', 'skills'),
+    path.join(HOME_DIR, '.gemini', 'antigravity-app', 'builtin', 'skills'),
+  ];
+  const seenIds = new Set();
+
+  for (const sDir of searchDirs) {
+    if (!fs.existsSync(sDir)) continue;
+    try {
+      const entries = fs.readdirSync(sDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const skillName = entry.name;
+        if (seenIds.has(skillName)) continue;
+        const skillMd = path.join(sDir, skillName, 'SKILL.md');
+        let title = skillName;
+        let desc = 'Antigravity specialized agent skill';
+        if (fs.existsSync(skillMd)) {
+          try {
+            const raw = fs.readFileSync(skillMd, 'utf8');
+            const nameMatch = raw.match(/^name:\s*(.+)$/m);
+            const descMatch = raw.match(/^description:\s*(.+)$/m);
+            if (nameMatch) title = nameMatch[1].trim();
+            if (descMatch) desc = descMatch[1].trim();
+          } catch (_) {}
+        }
+        seenIds.add(skillName);
+        skills.push({
+          id: skillName,
+          name: title,
+          description: desc,
+          path: path.relative(CONTENT_STUDIO_DIR, path.join(sDir, skillName)) || skillName,
+          enabled: true,
+        });
+      }
+    } catch (_) {}
+  }
+  return skills;
+}
+
+function listMcpServers() {
+  const mcpList = [];
+  const possibleConfigs = [
+    path.join(HOME_DIR, '.gemini', 'config', 'mcp_config.json'),
+    path.join(HOME_DIR, '.config', 'antigravity', 'mcp_config.json'),
+  ];
+
+  for (const cfgPath of possibleConfigs) {
+    if (!fs.existsSync(cfgPath)) continue;
+    try {
+      const raw = fs.readFileSync(cfgPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const servers = parsed.mcpServers || {};
+      for (const [id, srv] of Object.entries(servers)) {
+        mcpList.push({
+          id,
+          name: id,
+          type: srv.serverUrl ? 'Remote' : 'Local CLI',
+          target: srv.serverUrl || (srv.command ? `${srv.command} ${(srv.args || []).join(' ')}` : ''),
+          status: 'Configured',
+        });
+      }
+      if (mcpList.length > 0) break;
+    } catch (_) {}
+  }
+
+  if (mcpList.length === 0) {
+    const mcpFolder = path.join(HOME_DIR, '.gemini', 'antigravity-app', 'mcp');
+    if (fs.existsSync(mcpFolder)) {
+      try {
+        const dirs = fs.readdirSync(mcpFolder, { withFileTypes: true });
+        for (const d of dirs) {
+          if (d.isDirectory()) {
+            mcpList.push({
+              id: d.name,
+              name: d.name,
+              type: 'Tool Server',
+              target: path.join(mcpFolder, d.name),
+              status: 'Ready',
+            });
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  return mcpList;
+}
+
 // ── HTTP Router ─────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -2804,13 +2895,15 @@ const server = http.createServer(async (req, res) => {
     return handleChat(req, res);
   }
 
-  // ── Audio Studio Endpoints ───────────────────────────────────────────────
-  if (req.method === 'POST' && pathname === '/tts') {
-    return handleTts(req, res);
+  // ── Extensions: Skills & MCP Endpoints ────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/extensions/skills') {
+    const skills = listStudioSkills();
+    return sendJson(res, 200, { status: 'ok', skills });
   }
 
-  if (req.method === 'POST' && pathname === '/audio/master') {
-    return handleAudioMaster(req, res);
+  if (req.method === 'GET' && pathname === '/extensions/mcp') {
+    const mcp = listMcpServers();
+    return sendJson(res, 200, { status: 'ok', mcp });
   }
 
   return sendJson(res, 404, { status: 'error', error: 'Endpoint tidak ditemukan' });
@@ -2851,4 +2944,6 @@ module.exports = {
   promoteWorkspaceDna,
   syncVoDuration,
   generatePublishKit,
+  listStudioSkills,
+  listMcpServers,
 };

@@ -85,6 +85,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Send
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.runtime.collectAsState
+import com.contentstudio.app.ui.theme.StudioPrimaryText
+import com.contentstudio.app.ui.theme.studioPipelineTransition
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -99,6 +121,7 @@ data class SceneItem(
     var beatRole: String = "Beat",
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProjectBoardScreen(
     workspaceName: String,
@@ -111,8 +134,14 @@ fun ProjectBoardScreen(
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
 
-    var selectedBoardTab by remember { mutableIntStateOf(0) } // 0: Script, 1: Scenes, 2: Audio, 3: Render
-    val boardTabs = listOf("Script", "Scenes", "Audio", "Render")
+    var selectedBoardTab by remember { mutableIntStateOf(0) } // 0: Script, 1: Voice, 2: Visual, 3: Export
+    val boardTabs = listOf(
+        "Script" to Icons.Outlined.Description,
+        "Voice" to Icons.Outlined.GraphicEq,
+        "Visual" to Icons.Outlined.PhotoLibrary,
+        "Export" to Icons.Outlined.Movie
+    )
+    var showAskAgentSheet by remember { mutableStateOf(false) }
 
     // Project state
     var aspectRatio by remember { mutableStateOf("9:16") }
@@ -383,7 +412,7 @@ fun ProjectBoardScreen(
         scenesList.clear()
         scenesList.addAll(generatedScenes)
         saveProjectData {
-            selectedBoardTab = 1 // Switch to Scenes tab
+            selectedBoardTab = 2 // Switch to Visual tab
             statusMessage = "Generated ${generatedScenes.size} scenes from script"
         }
     }
@@ -472,11 +501,14 @@ fun ProjectBoardScreen(
         }
     }
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(StudioBg)
     ) {
+        Column(
+            modifier = Modifier.fillMaxSize()
+        ) {
         // TOP BAR
         StudioTopBar(
             title = workspaceName,
@@ -563,22 +595,18 @@ fun ProjectBoardScreen(
             }
         }
 
-        // 4 SEGMENTED PRODUCTION TABS
-        Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-            StudioSegmentedControl(
-                options = boardTabs,
-                selectedIndex = selectedBoardTab,
-                onSelect = { selectedBoardTab = it }
-            )
-        }
-
-        // TAB CONTENT
-        Box(
+        // 4 PIPELINE PRODUCTION STAGES
+        AnimatedContent(
+            targetState = selectedBoardTab,
+            transitionSpec = {
+                studioPipelineTransition(targetState > initialState)
+            },
+            label = "pipelineContentTransition",
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-        ) {
-            when (selectedBoardTab) {
+        ) { tabIndex ->
+            when (tabIndex) {
                 0 -> {
                     // TAB 1: SCRIPT
                     val words = scriptText.split(Regex("\\s+")).filter { it.isNotBlank() }.size
@@ -649,7 +677,259 @@ fun ProjectBoardScreen(
                 }
 
                 1 -> {
-                    // TAB 2: SCENES (STORYBOARD)
+                    // TAB 2: VOICE
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // VOICEOVER TRACK
+                        StudioCard {
+                            StudioSectionHeader(
+                                title = "Voiceover Track",
+                                action = {
+                                    if (onNavigateToVoice != null) {
+                                        StudioSmallButton(
+                                            text = "Open Voice Studio",
+                                            onClick = onNavigateToVoice
+                                        )
+                                    }
+                                }
+                            )
+                            Text(
+                                text = "Pilih rekaman suara atau hasil TTS dari folder audio/ proyek.",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 12.sp,
+                                color = TextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(StudioSurfaceElevated)
+                                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "TRACK VO",
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextMuted
+                                    )
+                                    Text(
+                                        text = voFile ?: "No VO attached",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 12.sp,
+                                        color = if (voFile != null) StudioBadgeGreenText else TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (voFile != null) {
+                                        val targetFile = LinuxRuntimeManager.getWorkspaceFile(workspaceName, "audio/$voFile")
+                                        val isPlaying = playingAudioPath == targetFile.absolutePath
+                                        StudioSmallButton(
+                                            text = if (isPlaying) "Stop" else "Play",
+                                            onClick = { playAudio(targetFile) }
+                                        )
+                                    }
+                                    StudioSmallButton(
+                                        text = "Select",
+                                        onClick = { activeAudioPickingType = "vo" }
+                                    )
+                                    if (voFile != null) {
+                                        StudioSmallButton(
+                                            text = "Clear",
+                                            isDanger = true,
+                                            onClick = {
+                                                voFile = null
+                                                saveProjectData()
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (voFile != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                StudioSmallButton(
+                                    text = "Match VO Duration to Scenes",
+                                    onClick = {
+                                        scope.launch(Dispatchers.IO) {
+                                            val res = LinuxRuntimeManager.syncVoDuration(workspaceName)
+                                            withContext(Dispatchers.Main) {
+                                                res.onSuccess {
+                                                    statusMessage = "Scene duration synchronized with VO audio"
+                                                    loadProject()
+                                                }.onFailure { err ->
+                                                    errorMessage = err.message ?: "Sync VO failed"
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+
+                        // BACKGROUND MUSIC (BGM)
+                        StudioCard {
+                            StudioSectionHeader(title = "Background Music (BGM)")
+                            Text(
+                                text = "Pilih musik latar dari folder audio/ atau pustaka aset.",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 12.sp,
+                                color = TextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(StudioSurfaceElevated)
+                                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "TRACK BGM",
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextMuted
+                                    )
+                                    Text(
+                                        text = bgmFile ?: "No BGM attached",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 12.sp,
+                                        color = if (bgmFile != null) StudioAccent else TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (bgmFile != null) {
+                                        val targetFile = LinuxRuntimeManager.getWorkspaceFile(workspaceName, "audio/$bgmFile")
+                                        val isPlaying = playingAudioPath == targetFile.absolutePath
+                                        StudioSmallButton(
+                                            text = if (isPlaying) "Stop" else "Play",
+                                            onClick = { playAudio(targetFile) }
+                                        )
+                                    }
+                                    StudioSmallButton(
+                                        text = "Select",
+                                        onClick = { activeAudioPickingType = "bgm" }
+                                    )
+                                    if (bgmFile != null) {
+                                        StudioSmallButton(
+                                            text = "Clear",
+                                            isDanger = true,
+                                            onClick = {
+                                                bgmFile = null
+                                                saveProjectData()
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // Volume presets
+                            Text(
+                                text = "VOLUME BGM: ${Math.round(bgmVolume * 100)}%",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextMuted
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                listOf(0.10f to "10%", 0.18f to "18%", 0.25f to "25%", 0.35f to "35%").forEach { (vol, label) ->
+                                    val isSelected = Math.abs(bgmVolume - vol) < 0.02f
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (isSelected) StudioPrimary else StudioSurfaceElevated)
+                                            .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                                            .clickable {
+                                                bgmVolume = vol
+                                                saveProjectData()
+                                            }
+                                            .padding(vertical = 8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) StudioBg else TextPrimary
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // Auto-Ducking toggle
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Auto-Ducking",
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = TextPrimary
+                                    )
+                                    Text(
+                                        text = "Turunkan volume BGM secara otomatis saat ada suara VO.",
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+                                Switch(
+                                    checked = autoDuck,
+                                    onCheckedChange = {
+                                        autoDuck = it
+                                        saveProjectData()
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = StudioPrimary,
+                                        checkedTrackColor = StudioAccent,
+                                        uncheckedThumbColor = TextMuted,
+                                        uncheckedTrackColor = StudioSurfaceElevated
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                2 -> {
+                    // TAB 3: VISUAL
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -1033,260 +1313,8 @@ fun ProjectBoardScreen(
                     }
                 }
 
-                2 -> {
-                    // TAB 3: AUDIO
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        // VOICEOVER TRACK
-                        StudioCard {
-                            StudioSectionHeader(
-                                title = "Voiceover Track",
-                                action = {
-                                    if (onNavigateToVoice != null) {
-                                        StudioSmallButton(
-                                            text = "Open Voice Studio",
-                                            onClick = onNavigateToVoice
-                                        )
-                                    }
-                                }
-                            )
-                            Text(
-                                text = "Pilih rekaman suara atau hasil TTS dari folder audio/ proyek.",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 12.sp,
-                                color = TextSecondary
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(StudioSurfaceElevated)
-                                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "TRACK VO",
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextMuted
-                                    )
-                                    Text(
-                                        text = voFile ?: "No VO attached",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 12.sp,
-                                        color = if (voFile != null) StudioBadgeGreenText else TextSecondary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    if (voFile != null) {
-                                        val targetFile = LinuxRuntimeManager.getWorkspaceFile(workspaceName, "audio/$voFile")
-                                        val isPlaying = playingAudioPath == targetFile.absolutePath
-                                        StudioSmallButton(
-                                            text = if (isPlaying) "Stop" else "Play",
-                                            onClick = { playAudio(targetFile) }
-                                        )
-                                    }
-                                    StudioSmallButton(
-                                        text = "Select",
-                                        onClick = { activeAudioPickingType = "vo" }
-                                    )
-                                    if (voFile != null) {
-                                        StudioSmallButton(
-                                            text = "Clear",
-                                            isDanger = true,
-                                            onClick = {
-                                                voFile = null
-                                                saveProjectData()
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-
-                            if (voFile != null) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                StudioSmallButton(
-                                    text = "Match VO Duration to Scenes",
-                                    onClick = {
-                                        scope.launch(Dispatchers.IO) {
-                                            val res = LinuxRuntimeManager.syncVoDuration(workspaceName)
-                                            withContext(Dispatchers.Main) {
-                                                res.onSuccess {
-                                                    statusMessage = "Scene duration synchronized with VO audio"
-                                                    loadProject()
-                                                }.onFailure { err ->
-                                                    errorMessage = err.message ?: "Sync VO failed"
-                                                }
-                                            }
-                                        }
-                                    }
-                                )
-                            }
-                        }
-
-                        // BACKGROUND MUSIC (BGM)
-                        StudioCard {
-                            StudioSectionHeader(title = "Background Music (BGM)")
-                            Text(
-                                text = "Pilih musik latar dari folder audio/ atau pustaka aset.",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 12.sp,
-                                color = TextSecondary
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(StudioSurfaceElevated)
-                                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "TRACK BGM",
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextMuted
-                                    )
-                                    Text(
-                                        text = bgmFile ?: "No BGM attached",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 12.sp,
-                                        color = if (bgmFile != null) StudioAccent else TextSecondary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    if (bgmFile != null) {
-                                        val targetFile = LinuxRuntimeManager.getWorkspaceFile(workspaceName, "audio/$bgmFile")
-                                        val isPlaying = playingAudioPath == targetFile.absolutePath
-                                        StudioSmallButton(
-                                            text = if (isPlaying) "Stop" else "Play",
-                                            onClick = { playAudio(targetFile) }
-                                        )
-                                    }
-                                    StudioSmallButton(
-                                        text = "Select",
-                                        onClick = { activeAudioPickingType = "bgm" }
-                                    )
-                                    if (bgmFile != null) {
-                                        StudioSmallButton(
-                                            text = "Clear",
-                                            isDanger = true,
-                                            onClick = {
-                                                bgmFile = null
-                                                saveProjectData()
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            // Volume presets
-                            Text(
-                                text = "VOLUME BGM: ${Math.round(bgmVolume * 100)}%",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextMuted
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                listOf(0.10f to "10%", 0.18f to "18%", 0.25f to "25%", 0.35f to "35%").forEach { (vol, label) ->
-                                    val isSelected = Math.abs(bgmVolume - vol) < 0.02f
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(if (isSelected) StudioPrimary else StudioSurfaceElevated)
-                                            .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
-                                            .clickable {
-                                                bgmVolume = vol
-                                                saveProjectData()
-                                            }
-                                            .padding(vertical = 8.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isSelected) StudioBg else TextPrimary
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            // Auto-Ducking toggle
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Auto-Ducking",
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TextPrimary
-                                    )
-                                    Text(
-                                        text = "Turunkan volume BGM secara otomatis saat ada suara VO.",
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 11.sp,
-                                        color = TextSecondary
-                                    )
-                                }
-                                Switch(
-                                    checked = autoDuck,
-                                    onCheckedChange = {
-                                        autoDuck = it
-                                        saveProjectData()
-                                    },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = StudioPrimary,
-                                        checkedTrackColor = StudioAccent,
-                                        uncheckedThumbColor = TextMuted,
-                                        uncheckedTrackColor = StudioSurfaceElevated
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-
                 3 -> {
-                    // TAB 4: RENDER
+                    // TAB 4: EXPORT
                     val visualsCount = scenesList.count { it.visual.isNotBlank() }
                     val totalScenes = scenesList.size
                     val totalDuration = scenesList.sumOf { it.duration.toDouble() }
@@ -1740,7 +1768,342 @@ fun ProjectBoardScreen(
                 }
             }
         }
+
+        // BOTTOM PIPELINE BAR (56.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .background(StudioSurface)
+                .border(1.dp, StudioBorder, RoundedCornerShape(0.dp))
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                boardTabs.forEachIndexed { index, (label, icon) ->
+                    val isSelected = selectedBoardTab == index
+                    val iconColor by animateColorAsState(
+                        targetValue = if (isSelected) TextPrimary else TextMuted,
+                        animationSpec = tween(180),
+                        label = "tabIconColor"
+                    )
+                    val textColor by animateColorAsState(
+                        targetValue = if (isSelected) TextPrimary else TextMuted,
+                        animationSpec = tween(180),
+                        label = "tabTextColor"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clickable { selectedBoardTab = index },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .fillMaxWidth(0.5f)
+                                    .height(2.dp)
+                                    .background(StudioPrimary, RoundedCornerShape(1.dp))
+                            )
+                        }
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = label,
+                                tint = iconColor,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = label,
+                                fontFamily = FontFamily.Default,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = textColor,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    } // Closes Column
+
+    // CO-PILOT ASK AGENT FLOATING BUTTON
+    Box(
+        modifier = Modifier
+            .align(Alignment.BottomEnd)
+            .padding(end = 16.dp, bottom = 70.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(StudioSurfaceElevated)
+            .border(1.dp, StudioBorder, RoundedCornerShape(20.dp))
+            .clickable { showAskAgentSheet = true }
+            .padding(horizontal = 14.dp, vertical = 9.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.AutoAwesome,
+                contentDescription = "Ask Agent",
+                tint = TextPrimary,
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                text = "Ask Agent",
+                fontFamily = FontFamily.Default,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+        }
     }
+
+    // CO-PILOT ASK AGENT MODAL BOTTOM SHEET
+    if (showAskAgentSheet) {
+        val currentStageName = when (selectedBoardTab) {
+            0 -> "Script"
+            1 -> "Voice"
+            2 -> "Visual"
+            3 -> "Export"
+            else -> "Script"
+        }
+        val agentMessages by ChatController.messages.collectAsState()
+        val isStreaming by ChatController.isStreaming.collectAsState()
+        val liveStatus by ChatController.liveStatus.collectAsState()
+        var coPilotInput by remember { mutableStateOf("") }
+        val sheetListState = rememberLazyListState()
+
+        LaunchedEffect(agentMessages.size) {
+            if (agentMessages.isNotEmpty()) {
+                sheetListState.animateScrollToItem(agentMessages.size - 1)
+            }
+        }
+
+        ModalBottomSheet(
+            onDismissRequest = { showAskAgentSheet = false },
+            containerColor = StudioSurface,
+            dragHandle = {
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 8.dp)
+                        .size(width = 32.dp, height = 4.dp)
+                        .background(StudioBorder, RoundedCornerShape(2.dp))
+                )
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.75f)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.AutoAwesome,
+                            contentDescription = null,
+                            tint = StudioAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "Co-Pilot",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(StudioSurfaceElevated)
+                                .border(0.5.dp, StudioBorder, RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "$workspaceName • $currentStageName",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = StudioAccent
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { showAskAgentSheet = false },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Messages List
+                LazyColumn(
+                    state = sheetListState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (agentMessages.isEmpty()) {
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Ask anything about this project and stage",
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 12.sp,
+                                    color = TextSecondary
+                                )
+                                val suggestions = when (selectedBoardTab) {
+                                    0 -> listOf("Perbaiki hook naskah agar lebih memikat", "Potong naskah menjadi adegan singkat", "Periksa durasi kata dan tempo")
+                                    1 -> listOf("Rekomendasikan karakter suara TTS yang cocok", "Sinkronkan durasi adegan dengan voiceover", "Berapa rasio volume BGM yang ideal?")
+                                    2 -> listOf("Buat visual prompt cinematik untuk adegan ini", "Terapkan pola ritme cepat", "Tinjau variasi framing adegan")
+                                    else -> listOf("Bantu render dengan resolusi 1080p", "Buat teks publish kit deskripsi dan tag", "Periksa safe-zone subtitle")
+                                }
+                                suggestions.forEach { promptSuggestion ->
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(StudioSurfaceElevated)
+                                            .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                                            .clickable {
+                                                val contextualPrompt = "[Project: $workspaceName, Stage: $currentStageName]\n$promptSuggestion"
+                                                ChatController.sendMessage(contextualPrompt, workspaceName)
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = promptSuggestion,
+                                            fontFamily = FontFamily.Default,
+                                            fontSize = 11.sp,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        items(agentMessages) { msg ->
+                            val isUser = msg.isUser
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.88f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (isUser) StudioSurfaceElevated else StudioBg)
+                                        .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                                        .padding(10.dp)
+                                    ) {
+                                        Text(
+                                            text = msg.text,
+                                            fontFamily = FontFamily.Default,
+                                            fontSize = 12.sp,
+                                            color = TextPrimary
+                                        )
+                                    }
+                            }
+                        }
+                    }
+                }
+
+                if (isStreaming) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(StudioAccent)
+                        )
+                        Text(
+                            text = if (liveStatus.isNotBlank()) liveStatus else "Agent is thinking...",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 11.sp,
+                            color = StudioAccent
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Input Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StudioTextField(
+                        value = coPilotInput,
+                        onValueChange = { coPilotInput = it },
+                        placeholder = "Tanya agen tentang tahap $currentStageName...",
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (coPilotInput.isNotBlank() && !isStreaming) StudioPrimary else StudioSecondary)
+                            .clickable(enabled = coPilotInput.isNotBlank() && !isStreaming) {
+                                val promptToSend = "[Project: $workspaceName, Stage: $currentStageName]\n" + coPilotInput.trim()
+                                ChatController.sendMessage(promptToSend, workspaceName)
+                                coPilotInput = ""
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Send,
+                            contentDescription = "Send",
+                            tint = if (coPilotInput.isNotBlank() && !isStreaming) StudioPrimaryText else TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+} // Closes outer Box
 
     // ── MODAL: RAW FILES MANAGER ─────────────────────────────────────────────
     if (showFilesModal) {

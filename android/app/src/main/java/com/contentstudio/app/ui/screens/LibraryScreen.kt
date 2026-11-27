@@ -20,9 +20,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +58,7 @@ import com.contentstudio.app.ui.theme.BgDark
 import com.contentstudio.app.ui.theme.BorderSubtle
 import com.contentstudio.app.ui.theme.CardHighlight
 import com.contentstudio.app.ui.theme.ErrorCardText
+import com.contentstudio.app.ui.theme.StudioDangerRed
 import com.contentstudio.app.ui.theme.SurfaceCard
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
@@ -433,18 +437,18 @@ fun LibraryScreen(
 
                             Box(
                                 modifier = Modifier
+                                    .size(28.dp)
                                     .clip(RoundedCornerShape(4.dp))
                                     .background(CardHighlight)
                                     .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .clickable { assetToDelete = asset }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .clickable { assetToDelete = asset },
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = "Delete",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = ErrorCardText
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = "Delete",
+                                    tint = StudioDangerRed,
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         }

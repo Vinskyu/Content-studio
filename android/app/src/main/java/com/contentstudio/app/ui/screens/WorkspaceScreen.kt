@@ -77,13 +77,24 @@ import com.contentstudio.app.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material3.Icon
+import com.contentstudio.app.ui.theme.StudioBadge
+import com.contentstudio.app.ui.theme.StudioDangerRed
+import com.contentstudio.app.ui.theme.StudioSage
 import java.util.Locale
 
 @Composable
 fun WorkspaceScreen(
     modifier: Modifier = Modifier,
     onNavigateToVoice: (() -> Unit)? = null,
-    onNavigateToAgent: (() -> Unit)? = null
+    onNavigateToAgent: (() -> Unit)? = null,
+    onOpenProject: ((String) -> Unit)? = null,
+    onOpenQuickVoice: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -456,25 +467,71 @@ fun WorkspaceScreen(
             // ACTION BUTTON
             when (activeTab) {
                 "projects" -> {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(ActionSolidBg)
-                            .clickable {
-                                newProjectName = ""
-                                selectedChannelForProject = ""
-                                projectCreateError = null
-                                showCreateProjectDialog = true
-                            }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "+ New Project",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = ActionSolidText
-                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(ActionSolidBg)
+                                .clickable {
+                                    newProjectName = ""
+                                    selectedChannelForProject = ""
+                                    projectCreateError = null
+                                    showCreateProjectDialog = true
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Add,
+                                    contentDescription = null,
+                                    tint = ActionSolidText,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "New Project",
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ActionSolidText
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(CardHighlight)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                                .clickable {
+                                    onOpenQuickVoice?.invoke() ?: onNavigateToVoice?.invoke()
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.GraphicEq,
+                                    contentDescription = null,
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Quick Voice",
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                            }
+                        }
                     }
                 }
                 "channels" -> {
@@ -488,15 +545,26 @@ fun WorkspaceScreen(
                                 channelError = null
                                 showChannelDialog = true
                             }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Text(
-                            text = "+ New Channel",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = ActionSolidText
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Add,
+                                contentDescription = null,
+                                tint = ActionSolidText,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "New Channel",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ActionSolidText
+                            )
+                        }
                     }
                 }
                 else -> {
@@ -510,15 +578,26 @@ fun WorkspaceScreen(
                                 patternCreateError = null
                                 showCreatePatternDialog = true
                             }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Text(
-                            text = "+ New Pattern",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = ActionSolidText
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Add,
+                                contentDescription = null,
+                                tint = ActionSolidText,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "New Pattern",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ActionSolidText
+                            )
+                        }
                     }
                 }
             }
@@ -848,7 +927,15 @@ fun WorkspaceScreen(
                     items(workspaces) { ws ->
                         val isActive = ws.name == activeWorkspace
                         val matchedChannel = channels.find { it.id == ws.channelId }
-                        Row(
+                        val stageIdx = when (ws.stage.lowercase(Locale.US)) {
+                            "voice", "audio" -> 1
+                            "visual", "scenes" -> 2
+                            "export", "render", "done" -> 3
+                            else -> 0
+                        }
+                        val stageNames = listOf("Script", "Voice", "Visual", "Export")
+
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(6.dp))
@@ -856,16 +943,22 @@ fun WorkspaceScreen(
                                 .border(1.dp, if (isActive) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
                                 .clickable {
                                     LinuxRuntimeManager.setActiveWorkspace(ws.name)
-                                    selectedProjectForBoard = ws.name
+                                    onOpenProject?.invoke(ws.name) ?: run {
+                                        selectedProjectForBoard = ws.name
+                                    }
                                 }
-                                .padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(14.dp)
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                            // Row 1: Title + Active Badge + Aspect Ratio + Delete Icon
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f, fill = false)
                                 ) {
                                     Text(
                                         text = ws.name,
@@ -893,58 +986,68 @@ fun WorkspaceScreen(
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(4.dp))
                                 Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    if (matchedChannel != null) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(3.dp))
-                                                .background(SurfaceCard)
-                                                .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
-                                                .padding(horizontal = 5.dp, vertical = 1.dp)
-                                        ) {
-                                            Text(
-                                                text = matchedChannel.name,
-                                                fontFamily = FontFamily.Default,
-                                                fontSize = 10.sp,
-                                                color = TextSecondary
-                                            )
-                                        }
-                                    } else if (ws.channelId.isNotBlank()) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(3.dp))
-                                                .background(SurfaceCard)
-                                                .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
-                                                .padding(horizontal = 5.dp, vertical = 1.dp)
-                                        ) {
-                                            Text(
-                                                text = "Unlinked",
-                                                fontFamily = FontFamily.Default,
-                                                fontSize = 10.sp,
-                                                color = TextMuted
-                                            )
-                                        }
-                                    }
-
+                                    StudioBadge(text = ws.aspectRatio, isAccent = true)
                                     Box(
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(3.dp))
-                                            .background(SurfaceCard)
-                                            .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
-                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                            .size(28.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .clickable { workspaceToDelete = ws },
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        Text(
-                                            text = ws.aspectRatio,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
-                                            color = TextSecondary
+                                        Icon(
+                                            imageVector = Icons.Outlined.Delete,
+                                            contentDescription = "Delete",
+                                            tint = StudioDangerRed,
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
+                                }
+                            }
 
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Row 2: 4 Progress Dots (Script, Voice, Visual, Export)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                stageNames.forEachIndexed { idx, stageName ->
+                                    val isDoneOrActive = idx <= stageIdx
+                                    val dotColor = if (isDoneOrActive) StudioSage else TextMuted
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(dotColor)
+                                        )
+                                        Text(
+                                            text = stageName,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isDoneOrActive) FontWeight.Medium else FontWeight.Normal,
+                                            color = if (isDoneOrActive) TextPrimary else TextMuted
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Row 3: Meta info (Channel, files count)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (matchedChannel != null) {
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(3.dp))
@@ -953,61 +1056,35 @@ fun WorkspaceScreen(
                                             .padding(horizontal = 5.dp, vertical = 1.dp)
                                     ) {
                                         Text(
-                                            text = ws.stage.replaceFirstChar { it.uppercase() },
+                                            text = matchedChannel.name,
                                             fontFamily = FontFamily.Default,
                                             fontSize = 10.sp,
                                             color = TextSecondary
                                         )
                                     }
-
-                                    Text(
-                                        text = "${ws.filesCount} files",
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 11.sp,
-                                        color = TextMuted
-                                    )
-                                }
-                            }
-
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(ActionSolidBg)
-                                        .clickable {
-                                            LinuxRuntimeManager.setActiveWorkspace(ws.name)
-                                            selectedProjectForBoard = ws.name
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = "Board",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = ActionSolidText
-                                    )
+                                } else if (ws.channelId.isNotBlank()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(3.dp))
+                                            .background(SurfaceCard)
+                                            .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
+                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = "Unlinked",
+                                            fontFamily = FontFamily.Default,
+                                            fontSize = 10.sp,
+                                            color = TextMuted
+                                        )
+                                    }
                                 }
 
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable { workspaceToDelete = ws }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = "Delete",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = ErrorCardText
-                                    )
-                                }
+                                Text(
+                                    text = "${ws.filesCount} files",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = TextMuted
+                                )
                             }
                         }
                     }

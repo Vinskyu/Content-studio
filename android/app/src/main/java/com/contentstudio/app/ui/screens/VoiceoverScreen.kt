@@ -104,13 +104,21 @@ data class TtsVoiceOption(
 
 @Composable
 fun VoiceoverScreen(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    targetWorkspace: String? = null,
+    onBack: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
 
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
+
+    LaunchedEffect(targetWorkspace) {
+        if (!targetWorkspace.isNullOrBlank() && targetWorkspace != "quick_voice") {
+            LinuxRuntimeManager.setActiveWorkspace(targetWorkspace)
+        }
+    }
     val recordings = remember { mutableStateListOf<AudioRecordingItem>() }
 
     // Mode Switcher: 0 = TTS AI, 1 = REKAM MIC
@@ -515,6 +523,7 @@ fun VoiceoverScreen(
         StudioTopBar(
             title = "Audio Studio",
             subtitle = if (activeWorkspace.isNotBlank()) "Project: $activeWorkspace" else null,
+            onBack = onBack,
             actions = {
                 StudioSmallButton(
                     text = if (activeWorkspace.isNotBlank()) activeWorkspace else "Switch Project",

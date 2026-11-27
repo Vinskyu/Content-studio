@@ -112,6 +112,22 @@ data class ChatMessageItem(
     val isStreaming: Boolean = false,
 )
 
+data class ExtensionSkillItem(
+    val id: String,
+    val name: String,
+    val description: String,
+    val path: String,
+    val enabled: Boolean = true,
+)
+
+data class ExtensionMcpItem(
+    val id: String,
+    val name: String,
+    val type: String,
+    val target: String,
+    val status: String,
+)
+
 object LinuxRuntimeManager {
 
     private const val TAG = "LinuxRuntimeManager"
@@ -1205,6 +1221,54 @@ object LinuxRuntimeManager {
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    // ── Extensions API (Skills & MCP) ────────────────────────────────────────
+
+    fun listExtensionSkills(): List<ExtensionSkillItem> {
+        return try {
+            val res = httpRequest("GET", "/extensions/skills")
+            val arr = res.optJSONArray("skills") ?: return emptyList()
+            val list = mutableListOf<ExtensionSkillItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    ExtensionSkillItem(
+                        id = obj.optString("id"),
+                        name = obj.optString("name"),
+                        description = obj.optString("description"),
+                        path = obj.optString("path"),
+                        enabled = obj.optBoolean("enabled", true)
+                    )
+                )
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun listExtensionMcp(): List<ExtensionMcpItem> {
+        return try {
+            val res = httpRequest("GET", "/extensions/mcp")
+            val arr = res.optJSONArray("mcp") ?: return emptyList()
+            val list = mutableListOf<ExtensionMcpItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    ExtensionMcpItem(
+                        id = obj.optString("id"),
+                        name = obj.optString("name"),
+                        type = obj.optString("type"),
+                        target = obj.optString("target"),
+                        status = obj.optString("status")
+                    )
+                )
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 
