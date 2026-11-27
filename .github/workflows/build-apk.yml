@@ -37,23 +37,144 @@ jobs:
       - name: Download Termux ARM64 Bootstrap
         run: bash android/scripts/download-bootstrap.sh aarch64
 
+      - name: Cache Static ARM64 FFmpeg & FFprobe
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ffmpeg-arm64-bin
+          key: ffmpeg-arm64-static-v1
+
       - name: Download & Install Static ARM64 FFmpeg & FFprobe
         run: |
-          mkdir -p /tmp/ffmpeg-arm64
-          cd /tmp/ffmpeg-arm64
-          curl -fSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" -o ffmpeg.tar.xz
-          tar -xf ffmpeg.tar.xz --strip-components=1
-
           TARGET_JNI_DIR="${{ github.workspace }}/android/app/src/main/jniLibs/arm64-v8a"
           mkdir -p "$TARGET_JNI_DIR"
-          cp ffmpeg "$TARGET_JNI_DIR/libffmpeg.so"
-          cp ffprobe "$TARGET_JNI_DIR/libffprobe.so"
+          CACHE_DIR="/tmp/ffmpeg-arm64-bin"
+          mkdir -p "$CACHE_DIR"
+
+          # 1. Gunakan cache jika binary valid (>1MB) sudah tersedia
+          USE_CACHE=0
+          if [ -f "$CACHE_DIR/ffmpeg" ] && [ -f "$CACHE_DIR/ffprobe" ]; then
+            FFMPEG_CACHE_SIZE=$(stat -c%s "$CACHE_DIR/ffmpeg" 2>/dev/null || stat -f%z "$CACHE_DIR/ffmpeg" 2>/dev/null || echo 0)
+            FFPROBE_CACHE_SIZE=$(stat -c%s "$CACHE_DIR/ffprobe" 2>/dev/null || stat -f%z "$CACHE_DIR/ffprobe" 2>/dev/null || echo 0)
+            if [ "$FFMPEG_CACHE_SIZE" -gt 1048576 ] && [ "$FFPROBE_CACHE_SIZE" -gt 1048576 ]; then
+              echo "[INFO] Cache hit: binary ffmpeg ($FFMPEG_CACHE_SIZE bytes) & ffprobe ($FFPROBE_CACHE_SIZE bytes) valid."
+              USE_CACHE=1
+            else
+              echo "[WARN] Cache invalid atau korup, membersihkan cache..."
+              rm -rf "$CACHE_DIR"/*
+            fi
+          fi
+
+          # 2. Jika belum ada di cache, unduh dengan sistem multi-mirror fallback
+          if [ "$USE_CACHE" -ne 1 ]; then
+            WORK_DIR="/tmp/ffmpeg-download-work"
+            rm -rf "$WORK_DIR"
+            mkdir -p "$WORK_DIR"
+            cd "$WORK_DIR"
+
+            SUCCESS=0
+
+            # Mirror 1: John Van Sickle Release
+            echo "[INFO] Mencoba Mirror 1: John Van Sickle Releases..."
+            if curl -fsSL --retry 3 --retry-delay 5 -A "Mozilla/5.0" "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" -o ffmpeg.tar.xz; then
+              if tar -tf ffmpeg.tar.xz >/dev/null 2>&1; then
+                echo "[INFO] Mirror 1 valid. Mengekstrak arsip..."
+                tar -xf ffmpeg.tar.xz --strip-components=1
+                if [ -f ffmpeg ] && [ -f ffprobe ]; then
+                  SUCCESS=1
+                fi
+              else
+                echo "[WARN] Mirror 1 bukan arsip tar.xz valid."
+              fi
+            else
+              echo "[WARN] Mirror 1 gagal diunduh."
+            fi
+
+            # Mirror 2: John Van Sickle Git Builds
+            if [ "$SUCCESS" -ne 1 ]; then
+              echo "[INFO] Mencoba Mirror 2: John Van Sickle Git Builds..."
+              rm -rf "$WORK_DIR"/*
+              if curl -fsSL --retry 3 --retry-delay 5 -A "Mozilla/5.0" "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-arm64-static.tar.xz" -o ffmpeg.tar.xz; then
+                if tar -tf ffmpeg.tar.xz >/dev/null 2>&1; then
+                  echo "[INFO] Mirror 2 valid. Mengekstrak arsip..."
+                  tar -xf ffmpeg.tar.xz --strip-components=1
+                  if [ -f ffmpeg ] && [ -f ffprobe ]; then
+                    SUCCESS=1
+                  fi
+                else
+                  echo "[WARN] Mirror 2 bukan arsip tar.xz valid."
+                fi
+              else
+                echo "[WARN] Mirror 2 gagal diunduh."
+              fi
+            fi
+
+            # Mirror 3: GitHub Releases (eugeneware/ffmpeg-static linux-arm64)
+            if [ "$SUCCESS" -ne 1 ]; then
+              echo "[INFO] Mencoba Mirror 3: GitHub Releases (ffmpeg-static / ffprobe-static linux-arm64)..."
+              rm -rf "$WORK_DIR"/*
+              curl -fsSL --retry 3 --retry-delay 5 -A "Mozilla/5.0" "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-arm64.gz" -o ffmpeg.gz || true
+              curl -fsSL --retry 3 --retry-delay 5 -A "Mozilla/5.0" "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-linux-arm64.gz" -o ffprobe.gz || true
+
+              if [ -f ffmpeg.gz ] && [ -f ffprobe.gz ]; then
+                gzip -d -f ffmpeg.gz
+                gzip -d -f ffprobe.gz
+                if [ -f ffmpeg ] && [ -f ffprobe ]; then
+                  SUCCESS=1
+                fi
+              fi
+            fi
+
+            # Fallback 4: GitHub raw static binaries
+            if [ "$SUCCESS" -ne 1 ]; then
+              echo "[INFO] Mencoba Fallback 4: Direct raw static binaries..."
+              rm -rf "$WORK_DIR"/*
+              curl -fsSL --retry 3 --retry-delay 5 -A "Mozilla/5.0" "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-arm64" -o ffmpeg || true
+              curl -fsSL --retry 3 --retry-delay 5 -A "Mozilla/5.0" "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-linux-arm64" -o ffprobe || true
+              if [ -f ffmpeg ] && [ -f ffprobe ]; then
+                SUCCESS=1
+              fi
+            fi
+
+            if [ "$SUCCESS" -ne 1 ] || [ ! -f ffmpeg ] || [ ! -f ffprobe ]; then
+              echo "[ERR] Seluruh mirror FFmpeg ARM64 gagal diunduh!"
+              exit 1
+            fi
+
+            chmod +x ffmpeg ffprobe
+            cp -f ffmpeg "$CACHE_DIR/ffmpeg"
+            cp -f ffprobe "$CACHE_DIR/ffprobe"
+            chmod +x "$CACHE_DIR/ffmpeg" "$CACHE_DIR/ffprobe"
+          fi
+
+          # 3. Salin binary ke jniLibs Android (libffmpeg.so & libffprobe.so)
+          cp -f "$CACHE_DIR/ffmpeg" "$TARGET_JNI_DIR/libffmpeg.so"
+          cp -f "$CACHE_DIR/ffprobe" "$TARGET_JNI_DIR/libffprobe.so"
           chmod +x "$TARGET_JNI_DIR/libffmpeg.so" "$TARGET_JNI_DIR/libffprobe.so"
 
-          if [ ! -s "$TARGET_JNI_DIR/libffmpeg.so" ] || [ ! -s "$TARGET_JNI_DIR/libffprobe.so" ]; then
-            echo "[ERR] libffmpeg.so atau libffprobe.so tidak ditemukan atau kosong!"
+          # 4. Validasi keberadaan & ukuran file > 1MB (1048576 bytes)
+          if [ ! -f "$TARGET_JNI_DIR/libffmpeg.so" ] || [ ! -f "$TARGET_JNI_DIR/libffprobe.so" ]; then
+            echo "[ERR] libffmpeg.so atau libffprobe.so tidak ditemukan di $TARGET_JNI_DIR!"
             exit 1
           fi
+
+          FINAL_FFMPEG_SIZE=$(stat -c%s "$TARGET_JNI_DIR/libffmpeg.so" 2>/dev/null || stat -f%z "$TARGET_JNI_DIR/libffmpeg.so" 2>/dev/null || echo 0)
+          FINAL_FFPROBE_SIZE=$(stat -c%s "$TARGET_JNI_DIR/libffprobe.so" 2>/dev/null || stat -f%z "$TARGET_JNI_DIR/libffprobe.so" 2>/dev/null || echo 0)
+
+          echo "[INFO] libffmpeg.so size: $FINAL_FFMPEG_SIZE bytes"
+          echo "[INFO] libffprobe.so size: $FINAL_FFPROBE_SIZE bytes"
+
+          if [ "$FINAL_FFMPEG_SIZE" -le 1048576 ]; then
+            echo "[ERR] libffmpeg.so ($FINAL_FFMPEG_SIZE bytes) <= 1MB (kemungkinan file error HTML)!"
+            exit 1
+          fi
+
+          if [ "$FINAL_FFPROBE_SIZE" -le 1048576 ]; then
+            echo "[ERR] libffprobe.so ($FINAL_FFPROBE_SIZE bytes) <= 1MB (kemungkinan file error HTML)!"
+            exit 1
+          fi
+
+          echo "[SUCCESS] FFmpeg dan FFprobe ARM64 statis berhasil disiapkan dan divalidasi (>1MB)."
 
       - name: Build Android Debug APK
         working-directory: android
