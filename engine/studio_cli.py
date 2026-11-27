@@ -580,6 +580,91 @@ def cmd_publish_set(project: str, title: str, description: str, tags: str) -> Di
     emit_ui_sync("project", clean_p)
     return {"status": "ok", "project": clean_p, "publish_kit": pj["publish_kit"]}
 
+# ─── MEMORY (CROSS-SESSION PROJECT & GLOBAL) ───────────────────────────────────
+
+def get_project_memory_path(project: str) -> str:
+    clean_p = os.path.basename(project.strip())
+    return os.path.join(get_workspace_dir(clean_p), "memory.json")
+
+def get_global_memory_path() -> str:
+    return os.path.join(get_cache_dir(), "user_preferences.json")
+
+def cmd_memory_list(project: Optional[str] = None) -> Dict[str, Any]:
+    emit_step(f"Membaca memori lintas-sesi ({project or 'global'})...")
+    global_items = read_json_file(get_global_memory_path(), [])
+    if not isinstance(global_items, list):
+        global_items = []
+
+    project_items = []
+    if project:
+        p_path = get_project_memory_path(project)
+        p_items = read_json_file(p_path, [])
+        if isinstance(p_items, list):
+            project_items = p_items
+
+    return {
+        "status": "ok",
+        "project": project,
+        "projectMemory": project_items,
+        "globalMemory": global_items
+    }
+
+def cmd_memory_add(note: str, project: Optional[str] = None, category: str = "decision") -> Dict[str, Any]:
+    valid_categories = {"decision", "style", "rejected", "fact"}
+    cat = category.lower() if category.lower() in valid_categories else "decision"
+    clean_note = note.strip()
+    mem_id = f"mem_{int(datetime.now().timestamp() * 1000)}"
+    entry = {
+        "id": mem_id,
+        "note": clean_note,
+        "category": cat,
+        "createdAt": datetime.utcnow().isoformat() + "Z"
+    }
+
+    if project:
+        clean_p = os.path.basename(project.strip())
+        emit_step(f"Menyimpan catatan memori ke proyek '{clean_p}' [{cat}]...")
+        p_path = get_project_memory_path(clean_p)
+        items = read_json_file(p_path, [])
+        if not isinstance(items, list):
+            items = []
+        items.append(entry)
+        write_json_file(p_path, items)
+        emit_ui_sync("memory", clean_p)
+        return {"status": "ok", "scope": "project", "project": clean_p, "entry": entry}
+    else:
+        emit_step(f"Menyimpan catatan preferensi global [{cat}]...")
+        g_path = get_global_memory_path()
+        items = read_json_file(g_path, [])
+        if not isinstance(items, list):
+            items = []
+        items.append(entry)
+        write_json_file(g_path, items)
+        emit_ui_sync("memory", "global")
+        return {"status": "ok", "scope": "global", "entry": entry}
+
+def cmd_memory_remove(id: str, project: Optional[str] = None) -> Dict[str, Any]:
+    target_id = id.strip()
+    if project:
+        clean_p = os.path.basename(project.strip())
+        emit_step(f"Menghapus memori '{target_id}' dari proyek '{clean_p}'...")
+        p_path = get_project_memory_path(clean_p)
+        items = read_json_file(p_path, [])
+        if isinstance(items, list):
+            items = [m for m in items if m.get("id") != target_id]
+            write_json_file(p_path, items)
+        emit_ui_sync("memory", clean_p)
+        return {"status": "ok", "scope": "project", "project": clean_p, "removed_id": target_id}
+    else:
+        emit_step(f"Menghapus memori '{target_id}' dari preferensi global...")
+        g_path = get_global_memory_path()
+        items = read_json_file(g_path, [])
+        if isinstance(items, list):
+            items = [m for m in items if m.get("id") != target_id]
+            write_json_file(g_path, items)
+        emit_ui_sync("memory", "global")
+        return {"status": "ok", "scope": "global", "removed_id": target_id}
+
 # ─── MAIN CLI PARSER ──────────────────────────────────────────────────────────
 
 def main():
@@ -685,6 +770,19 @@ def main():
     p_pset.add_argument("--description", required=True)
     p_pset.add_argument("--tags", required=True)
 
+    # ── MEMORY ──
+    p_mem = subparsers.add_parser("memory", help="Cross-Session Project & Global Memory")
+    p_mem_sub = p_mem.add_subparsers(dest="action")
+    p_mlist = p_mem_sub.add_parser("list")
+    p_mlist.add_argument("--project", default=None)
+    p_madd = p_mem_sub.add_parser("add")
+    p_madd.add_argument("--project", default=None)
+    p_madd.add_argument("--note", required=True)
+    p_madd.add_argument("--category", default="decision", choices=["decision", "style", "rejected", "fact"])
+    p_mrem = p_mem_sub.add_parser("remove")
+    p_mrem.add_argument("--project", default=None)
+    p_mrem.add_argument("--id", required=True)
+
     args = parser.parse_args()
 
     if args.subcommand == "project":
@@ -747,6 +845,14 @@ def main():
     elif args.subcommand == "publish":
         if args.action == "set":
             print(json.dumps(cmd_publish_set(args.project, args.title, args.description, args.tags), indent=2))
+
+    elif args.subcommand == "memory":
+        if args.action == "list":
+            print(json.dumps(cmd_memory_list(args.project), indent=2))
+        elif args.action == "add":
+            print(json.dumps(cmd_memory_add(args.note, args.project, args.category), indent=2))
+        elif args.action == "remove":
+            print(json.dumps(cmd_memory_remove(args.id, args.project), indent=2))
 
     else:
         parser.print_help(sys.stderr)

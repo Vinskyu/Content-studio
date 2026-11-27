@@ -94,6 +94,68 @@ object ChatController {
         _pendingAttachments.value = emptyList()
     }
 
+    private val _projectMemories = MutableStateFlow<List<MemoryEntry>>(emptyList())
+    val projectMemories: StateFlow<List<MemoryEntry>> = _projectMemories.asStateFlow()
+
+    private val _globalMemories = MutableStateFlow<List<MemoryEntry>>(emptyList())
+    val globalMemories: StateFlow<List<MemoryEntry>> = _globalMemories.asStateFlow()
+
+    fun refreshMemories(projectName: String?) {
+        scope.launch {
+            val (pList, gList) = LinuxRuntimeManager.getMemories(projectName)
+            _projectMemories.value = pList
+            _globalMemories.value = gList
+        }
+    }
+
+    fun addMemory(projectName: String?, note: String, category: String = "decision") {
+        scope.launch {
+            val ok = LinuxRuntimeManager.addMemory(projectName, note, category)
+            if (ok) refreshMemories(projectName)
+        }
+    }
+
+    fun deleteMemory(projectName: String?, id: String) {
+        scope.launch {
+            val ok = LinuxRuntimeManager.deleteMemory(projectName, id)
+            if (ok) refreshMemories(projectName)
+        }
+    }
+
+    fun approveActionPlan(messageIndex: Int, projectName: String?) {
+        val currentList = _messages.value.toMutableList()
+        if (messageIndex in currentList.indices) {
+            val item = currentList[messageIndex]
+            val plan = item.actionPlan
+            if (plan != null && plan.status == "pending") {
+                currentList[messageIndex] = item.copy(actionPlan = plan.copy(status = "approved"))
+                _messages.value = currentList
+                sendMessage(plan.approvePrompt, projectName)
+            }
+        }
+    }
+
+    fun dismissActionPlan(messageIndex: Int) {
+        val currentList = _messages.value.toMutableList()
+        if (messageIndex in currentList.indices) {
+            val item = currentList[messageIndex]
+            val plan = item.actionPlan
+            if (plan != null && plan.status == "pending") {
+                currentList[messageIndex] = item.copy(actionPlan = plan.copy(status = "dismissed"))
+                _messages.value = currentList
+            }
+        }
+    }
+
+    fun togglePinMessage(messageIndex: Int) {
+        val currentList = _messages.value.toMutableList()
+        if (messageIndex in currentList.indices) {
+            val item = currentList[messageIndex]
+            currentList[messageIndex] = item.copy(isPinned = !item.isPinned)
+            _messages.value = currentList
+        }
+    }
+
     fun refreshMediaConfig() {
         scope.launch {
             val cfg = LinuxRuntimeManager.getMediaConfig()
@@ -411,6 +473,8 @@ object ChatController {
 
             val responseBuilder = StringBuilder()
             val sid = _activeSessionId.value
+            var receivedActionPlan: ActionPlanCardData? = null
+            var receivedSuggestions: List<String> = emptyList()
 
             LinuxRuntimeManager.sendChatStream(
                 sessionId = sid,
@@ -433,6 +497,12 @@ object ChatController {
                 onUiSync = { scope, target ->
                     _uiSyncEvents.tryEmit(Pair(scope, target))
                 },
+                onActionPlan = { plan ->
+                    receivedActionPlan = plan
+                },
+                onSuggestions = { sugs ->
+                    receivedSuggestions = sugs
+                },
                 onDelta = { delta ->
                     responseBuilder.append(delta)
                     val textSoFar = responseBuilder.toString()
@@ -452,6 +522,13 @@ object ChatController {
                     val durationMs = (System.currentTimeMillis() - startMs).coerceAtLeast(0L)
                     val recordedSteps = _thinkingSteps.value
                     val resolved = if (finalText.isNotBlank()) finalText else responseBuilder.toString()
+                    val effectiveSuggestions = if (receivedSuggestions.isNotEmpty()) {
+                        receivedSuggestions
+                    } else if (workspace.isNullOrBlank()) {
+                        listOf("Buat Project Baru", "Riset Ide Niche")
+                    } else {
+                        listOf("Pecah ke Scenes", "Cari Stok Media", "Generate Voiceover")
+                    }
                     val currentList = _messages.value.toMutableList()
                     val idx = currentList.indexOfLast { it.id == assistantId }
                     if (idx != -1) {
@@ -459,7 +536,9 @@ object ChatController {
                             text = resolved.ifBlank { "Selesai tanpa output teks." },
                             isStreaming = false,
                             processSteps = recordedSteps,
-                            processDurationMs = durationMs
+                            processDurationMs = durationMs,
+                            actionPlan = receivedActionPlan,
+                            suggestions = effectiveSuggestions
                         )
                         _messages.value = currentList
                     }

@@ -400,6 +400,37 @@ function createPattern(data) {
   return newPat;
 }
 
+// ── Cross-Session Project & Global Memory ────────────────────────────────────
+
+function getMemoryFilePath(project) {
+  if (project) {
+    const cleanP = path.basename(String(project).trim());
+    return path.join(WORKSPACES_DIR, cleanP, 'memory.json');
+  }
+  return path.join(CACHE_DIR, 'user_preferences.json');
+}
+
+function readMemory(project) {
+  const filePath = getMemoryFilePath(project);
+  try {
+    if (fs.existsSync(filePath)) {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (Array.isArray(data)) return data;
+    }
+  } catch (_) {}
+  return [];
+}
+
+function writeMemory(project, list) {
+  const filePath = getMemoryFilePath(project);
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const tmp = filePath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(list, null, 2), 'utf8');
+    fs.renameSync(tmp, filePath);
+  } catch (_) {}
+}
+
 function deletePattern(id) {
   const patterns = readPatterns();
   const filtered = patterns.filter((p) => p.id !== id);
@@ -2256,13 +2287,27 @@ async function handleChat(req, res) {
         }
       } catch (_) {}
 
+      let memInfo = '';
+      try {
+        const pMems = readMemory(activeWorkspace);
+        const gMems = readMemory('');
+        const combined = [
+          ...pMems.map((m) => `[Proyek:${m.category || 'decision'}] ${m.note}`),
+          ...gMems.map((m) => `[Global:${m.category || 'decision'}] ${m.note}`)
+        ];
+        if (combined.length > 0) {
+          memInfo = `[Project Cross-Session Memory & Rules:\n${combined.slice(-10).map((c) => `  * ${c}`).join('\n')}]\n`;
+        }
+      } catch (_) {}
+
       let rawPrefix = modeAndAttachmentPrefix +
         `[Konteks Workspace: "${activeWorkspace}" | Path: "${wsPath}"]\n` +
         chanInfo +
         projInfo +
+        memInfo +
         `Anda beroperasi di workspace ini. Anda dapat langsung menggunakan 'python3 engine/studio_cli.py' atau memodifikasi file "${wsPath}/project.json" atau "${wsPath}/scripts/main.txt". Simpan file script ke "${wsPath}/scripts", aset ke "${wsPath}/assets", audio ke "${wsPath}/audio", dan render ke "${wsPath}/renders".\n\n`;
-      if (rawPrefix.length > 2200) {
-        rawPrefix = rawPrefix.slice(0, 2190) + '...\n\n';
+      if (rawPrefix.length > 2500) {
+        rawPrefix = rawPrefix.slice(0, 2490) + '...\n\n';
       }
       wsContextPrefix = rawPrefix;
     }
@@ -2326,12 +2371,13 @@ async function handleChat(req, res) {
     const rawText = chunk.toString('utf8');
     let cleanText = stripAnsi(rawText);
 
-    if (cleanText.includes('[UI_SYNC]')) {
+    if (cleanText.includes('[UI_SYNC]') || cleanText.includes('[ACTION_PLAN]') || cleanText.includes('[SUGGESTIONS]')) {
       const pLines = cleanText.split(/\r?\n/);
       const kept = [];
       for (const pl of pLines) {
-        if (pl.trim().startsWith('[UI_SYNC]')) {
-          const payloadStr = pl.trim().replace(/^\[UI_SYNC\]\s*/, '').trim();
+        const trimmed = pl.trim();
+        if (trimmed.startsWith('[UI_SYNC]')) {
+          const payloadStr = trimmed.replace(/^\[UI_SYNC\]\s*/, '').trim();
           const sepIdx = payloadStr.indexOf(':');
           const scope = sepIdx !== -1 ? payloadStr.slice(0, sepIdx).trim() : 'all';
           const target = sepIdx !== -1 ? payloadStr.slice(sepIdx + 1).trim() : payloadStr;
@@ -2339,6 +2385,26 @@ async function handleChat(req, res) {
             res.write(`event: ui_sync\ndata: ${JSON.stringify({ scope, target })}\n\n`);
           }
           emit({ type: 'ui_sync', scope, target });
+        } else if (trimmed.startsWith('[ACTION_PLAN]')) {
+          const rawJson = trimmed.replace(/^\[ACTION_PLAN\]\s*/, '').trim();
+          try {
+            const planObj = JSON.parse(rawJson);
+            if (!res.writableEnded) {
+              res.write(`event: action_plan\ndata: ${JSON.stringify(planObj)}\n\n`);
+            }
+            emit({ type: 'action_plan', ...planObj });
+          } catch (_) {}
+        } else if (trimmed.startsWith('[SUGGESTIONS]')) {
+          const rawJson = trimmed.replace(/^\[SUGGESTIONS\]\s*/, '').trim();
+          try {
+            const sugArr = JSON.parse(rawJson);
+            if (Array.isArray(sugArr)) {
+              if (!res.writableEnded) {
+                res.write(`event: suggestions\ndata: ${JSON.stringify({ suggestions: sugArr })}\n\n`);
+              }
+              emit({ type: 'suggestions', suggestions: sugArr });
+            }
+          } catch (_) {}
         } else {
           kept.push(pl);
         }
@@ -2409,7 +2475,11 @@ async function handleChat(req, res) {
   proc.on('exit', (code) => {
     if (activeChatProc === proc) activeChatProc = null;
 
-    const cleanStdout = stripAnsi(fullOutput).trim();
+    const cleanStdout = stripAnsi(fullOutput)
+      .split(/\r?\n/)
+      .filter((l) => !l.trim().startsWith('[UI_SYNC]') && !l.trim().startsWith('[ACTION_PLAN]') && !l.trim().startsWith('[SUGGESTIONS]'))
+      .join('\n')
+      .trim();
     const cleanErr = cleanStderr(errOutput);
 
     // Cek jika proses meminta autentikasi (sesi berakhir)
@@ -3155,6 +3225,55 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ── Memory Endpoints (Cross-Session Project & Global) ─────────────────────
+  if (req.method === 'GET' && pathname === '/memory') {
+    const qProject = query.project ? path.basename(String(query.project).trim()) : '';
+    const globalMem = readMemory('');
+    const projectMem = qProject ? readMemory(qProject) : [];
+    return sendJson(res, 200, { status: 'ok', project: qProject, projectMemory: projectMem, globalMemory: globalMem });
+  }
+
+  if (req.method === 'POST' && pathname === '/memory') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (_) {
+      return sendJson(res, 400, { status: 'error', error: 'JSON tidak valid' });
+    }
+    const qProject = body.project ? path.basename(String(body.project).trim()) : '';
+    const note = String(body.note || '').trim();
+    if (!note) {
+      return sendJson(res, 400, { status: 'error', error: 'Catatan memori kosong' });
+    }
+    const cat = ['decision', 'style', 'rejected', 'fact'].includes(body.category) ? body.category : 'decision';
+    const entry = {
+      id: `mem_${Date.now()}`,
+      note,
+      category: cat,
+      createdAt: new Date().toISOString()
+    };
+    const items = readMemory(qProject);
+    items.push(entry);
+    writeMemory(qProject, items);
+    return sendJson(res, 200, { status: 'ok', project: qProject, entry });
+  }
+
+  if (req.method === 'DELETE' && pathname === '/memory') {
+    let body = {};
+    try {
+      body = await readJsonBody(req);
+    } catch (_) {}
+    const qProject = (body.project || query.project) ? path.basename(String(body.project || query.project).trim()) : '';
+    const memId = String(body.id || query.id || '').trim();
+    if (!memId) {
+      return sendJson(res, 400, { status: 'error', error: 'ID memori kosong' });
+    }
+    let items = readMemory(qProject);
+    items = items.filter((m) => m.id !== memId);
+    writeMemory(qProject, items);
+    return sendJson(res, 200, { status: 'ok', project: qProject, removed_id: memId });
+  }
+
   // ── Extensions: Skills & MCP Endpoints ────────────────────────────────────
   if (req.method === 'GET' && pathname === '/extensions/skills') {
     const skills = listStudioSkills();
@@ -3213,4 +3332,6 @@ module.exports = {
   searchMedia,
   downloadMedia,
   updateYtdlp,
+  readMemory,
+  writeMemory,
 };

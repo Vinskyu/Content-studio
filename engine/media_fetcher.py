@@ -13,6 +13,14 @@ All steps print to *stderr* with a `[STEP] …` prefix and flush immediately.
 
 import sys
 import os
+
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+if sys.path and sys.path[0] == _script_dir:
+    sys.path.pop(0)
+_root_dir = os.path.dirname(_script_dir)
+if _root_dir not in sys.path:
+    sys.path.append(_root_dir)
+
 import json
 import subprocess
 import shutil
@@ -20,7 +28,32 @@ import argparse
 import urllib.request
 import urllib.parse
 import time
+import re
 from pathlib import Path
+
+def _get_ffmpeg_bin() -> str:
+    cache_bin = _ensure_cache_bin() / "ffmpeg"
+    if cache_bin.exists():
+        return str(cache_bin)
+    which = shutil.which("ffmpeg")
+    if which:
+        return which
+    for p in ["/data/user/0/com.agy/files/usr/bin/ffmpeg", "/data/data/com.agy/files/usr/bin/ffmpeg", "/system/bin/ffmpeg"]:
+        if os.path.exists(p):
+            return p
+    return "ffmpeg"
+
+def _get_ffprobe_bin() -> str:
+    cache_bin = _ensure_cache_bin() / "ffprobe"
+    if cache_bin.exists():
+        return str(cache_bin)
+    which = shutil.which("ffprobe")
+    if which:
+        return which
+    for p in ["/data/user/0/com.agy/files/usr/bin/ffprobe", "/data/data/com.agy/files/usr/bin/ffprobe", "/system/bin/ffprobe"]:
+        if os.path.exists(p):
+            return p
+    return "ffprobe"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -234,6 +267,191 @@ def search(args):
     sys.stdout.flush()
 
 # ---------------------------------------------------------------------------
+# Media Auto-QA ("Mata" Agent)
+# ---------------------------------------------------------------------------
+
+def run_qa(file_path: str, expected_ratio: str = None) -> dict:
+    _log_step("Memeriksa kualitas media (QA)...")
+    p = Path(file_path)
+    if not p.exists():
+        return {
+            "ok": False,
+            "passed": False,
+            "width": 0,
+            "height": 0,
+            "durationSec": 0,
+            "orientation": "unknown",
+            "codec": "",
+            "hasAudio": False,
+            "issues": [f"File tidak ditemukan: {file_path}"],
+            "qaFrames": []
+        }
+
+    ffprobe = _get_ffprobe_bin()
+    ffmpeg = _get_ffmpeg_bin()
+
+    width = 0
+    height = 0
+    duration_sec = 0.0
+    codec = ""
+    has_audio = False
+    issues = []
+
+    # 1. Probe video stream
+    try:
+        cmd_v = [
+            ffprobe, "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,codec_name,duration",
+            "-of", "json",
+            str(p)
+        ]
+        res_v = subprocess.run(cmd_v, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        if res_v.returncode == 0 and res_v.stdout:
+            data_v = json.loads(res_v.stdout)
+            streams = data_v.get("streams", [])
+            if streams:
+                st = streams[0]
+                width = int(st.get("width", 0))
+                height = int(st.get("height", 0))
+                codec = st.get("codec_name", "")
+                if st.get("duration"):
+                    try:
+                        duration_sec = float(st.get("duration"))
+                    except Exception:
+                        pass
+    except Exception as e:
+        _log_step(f"Warning saat ffprobe video: {e}")
+
+    # 2. Probe format (duration & bitrate)
+    try:
+        cmd_f = [
+            ffprobe, "-v", "error",
+            "-show_entries", "format=duration,bit_rate",
+            "-of", "json",
+            str(p)
+        ]
+        res_f = subprocess.run(cmd_f, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        if res_f.returncode == 0 and res_f.stdout:
+            data_f = json.loads(res_f.stdout)
+            fmt = data_f.get("format", {})
+            if duration_sec <= 0 and fmt.get("duration"):
+                try:
+                    duration_sec = float(fmt.get("duration"))
+                except Exception:
+                    pass
+    except Exception as e:
+        _log_step(f"Warning saat ffprobe format: {e}")
+
+    # 3. Probe audio stream
+    try:
+        cmd_a = [
+            ffprobe, "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=codec_name",
+            "-of", "json",
+            str(p)
+        ]
+        res_a = subprocess.run(cmd_a, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        if res_a.returncode == 0 and res_a.stdout:
+            data_a = json.loads(res_a.stdout)
+            if data_a.get("streams"):
+                has_audio = True
+                if not codec:
+                    codec = data_a["streams"][0].get("codec_name", "")
+    except Exception as e:
+        _log_step(f"Warning saat ffprobe audio: {e}")
+
+    # 4. Orientation determination
+    if height > width and width > 0:
+        orientation = "vertical"
+    elif width > height and height > 0:
+        orientation = "horizontal"
+    elif width == height and width > 0:
+        orientation = "square"
+    else:
+        orientation = "unknown"
+
+    # 5. Quality & spec evaluation
+    if width == 0 and height == 0 and duration_sec <= 0:
+        issues.append("File rusak atau tidak dapat dibaca oleh ffprobe")
+    elif width > 0 and height > 0 and min(width, height) < 480:
+        issues.append(f"Resolusi terlalu rendah: {width}x{height} (minimal 480p)")
+
+    is_media_with_time = duration_sec > 0 or p.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".mp3", ".wav", ".aac", ".m4a"]
+    if is_media_with_time and 0 < duration_sec < 1.0:
+        issues.append(f"Durasi terlalu pendek: {duration_sec:.1f} detik (kurang dari 1 detik)")
+
+    if expected_ratio:
+        exp = expected_ratio.strip()
+        if exp == "9:16" and orientation == "horizontal":
+            issues.append("Orientasi horizontal bertolak belakang dengan expected ratio 9:16")
+        elif exp == "16:9" and orientation == "vertical":
+            issues.append("Orientasi vertical bertolak belakang dengan expected ratio 16:9")
+
+    # 6. Extract 3 keyframes
+    qa_frames = []
+    qa_dir = Path(os.getenv("HOME", "~")) / ".cache" / "qa_frames"
+    try:
+        qa_dir.mkdir(parents=True, exist_ok=True)
+        stem = re.sub(r"[^a-zA-Z0-9_-]", "_", p.stem)
+        if width > 0 and height > 0:
+            if duration_sec >= 1.0:
+                points = [0.10 * duration_sec, 0.50 * duration_sec, 0.85 * duration_sec]
+                for idx, t_sec in enumerate(points, start=1):
+                    frame_dest = qa_dir / f"{stem}_kf{idx}.png"
+                    cmd_kf = [
+                        ffmpeg, "-y",
+                        "-ss", f"{t_sec:.2f}",
+                        "-i", str(p),
+                        "-vframes", "1",
+                        "-vf", "scale='min(480,iw)':-1",
+                        str(frame_dest)
+                    ]
+                    subprocess.run(cmd_kf, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                    if frame_dest.exists() and frame_dest.stat().st_size > 0:
+                        qa_frames.append(str(frame_dest))
+            else:
+                frame_dest = qa_dir / f"{stem}_kf1.png"
+                cmd_kf = [
+                    ffmpeg, "-y",
+                    "-i", str(p),
+                    "-vframes", "1",
+                    "-vf", "scale='min(480,iw)':-1",
+                    str(frame_dest)
+                ]
+                subprocess.run(cmd_kf, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                if frame_dest.exists() and frame_dest.stat().st_size > 0:
+                    qa_frames.append(str(frame_dest))
+    except Exception as e:
+        _log_step(f"Warning saat ekstraksi QA keyframe: {e}")
+
+    passed = (len(issues) == 0)
+    result = {
+        "ok": True,
+        "passed": passed,
+        "width": width,
+        "height": height,
+        "durationSec": round(duration_sec, 2),
+        "orientation": orientation,
+        "codec": codec,
+        "hasAudio": has_audio,
+        "issues": issues,
+        "qaFrames": qa_frames
+    }
+    return result
+
+def qa(args):
+    parser = argparse.ArgumentParser(prog="media_fetcher.py qa")
+    parser.add_argument("--file", required=True)
+    parser.add_argument("--expected-ratio", default=None, choices=["9:16", "16:9"])
+    opts = parser.parse_args(args)
+    res = run_qa(opts.file, opts.expected_ratio)
+    json.dump(res, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+# ---------------------------------------------------------------------------
 # Download implementation
 # ---------------------------------------------------------------------------
 
@@ -256,6 +474,7 @@ def download(args):
     # Destination directory
     lib_media_dir = Path("library/media")
     lib_media_dir.mkdir(parents=True, exist_ok=True)
+    before_files = set(lib_media_dir.iterdir()) if lib_media_dir.exists() else set()
 
     # Determine output template
     out_template = "%(title)s.%(ext)s" if not opts.filename else opts.filename
@@ -270,22 +489,46 @@ def download(args):
     _log_step(f"Running yt‑dlp download: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
 
+    after_files = set(lib_media_dir.iterdir()) if lib_media_dir.exists() else set()
+    new_files = list(after_files - before_files)
+    downloaded_file = new_files[0] if new_files else None
+    if not downloaded_file and lib_media_dir.exists():
+        files_by_mtime = sorted(lib_media_dir.iterdir(), key=lambda f: f.stat().st_mtime, reverse=True)
+        if files_by_mtime:
+            downloaded_file = files_by_mtime[0]
+
     # If a project was supplied, copy to appropriate workspace folder
-    if opts.project:
+    project_saved_path = None
+    if opts.project and downloaded_file:
         ws_dir = Path("workspaces") / opts.project
         if ws_dir.is_dir():
             assets_dir = ws_dir / "assets"
             audio_dir = ws_dir / "audio"
             assets_dir.mkdir(parents=True, exist_ok=True)
             audio_dir.mkdir(parents=True, exist_ok=True)
-            for f in lib_media_dir.iterdir():
-                if opts.audio_only or f.suffix.lower() in [".mp3", ".wav", ".aac"]:
-                    shutil.copy2(f, audio_dir / f.name)
-                else:
-                    shutil.copy2(f, assets_dir / f.name)
-            _log_step(f"Copied media into project '{opts.project}'")
+            dest = audio_dir / downloaded_file.name if (opts.audio_only or downloaded_file.suffix.lower() in [".mp3", ".wav", ".aac"]) else assets_dir / downloaded_file.name
+            shutil.copy2(downloaded_file, dest)
+            project_saved_path = str(dest)
+            _log_step(f"Copied media into project '{opts.project}' -> {dest.name}")
 
     _log_step("Download completed")
+
+    # Run Auto-QA
+    qa_res = None
+    if downloaded_file:
+        target_check = project_saved_path if project_saved_path else str(downloaded_file)
+        qa_res = run_qa(target_check)
+
+    res_out = {
+        "status": "ok",
+        "file": str(downloaded_file) if downloaded_file else None,
+        "projectFile": project_saved_path,
+        "project": opts.project,
+        "qa": qa_res
+    }
+    json.dump(res_out, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 # ---------------------------------------------------------------------------
 # CLI dispatcher
@@ -302,6 +545,8 @@ def main():
         search(sys.argv[2:])
     elif cmd == "download":
         download(sys.argv[2:])
+    elif cmd == "qa":
+        qa(sys.argv[2:])
     else:
         sys.stderr.write(f"Unknown command: {cmd}\n")
         sys.exit(2)

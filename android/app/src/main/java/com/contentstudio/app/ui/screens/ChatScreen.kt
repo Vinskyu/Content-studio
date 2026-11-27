@@ -35,10 +35,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AttachFile
@@ -58,13 +62,20 @@ import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
 import android.content.Intent
+import android.media.MediaPlayer
 import android.speech.RecognizerIntent
+import android.widget.VideoView
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import coil.compose.AsyncImage
+import androidx.compose.material.icons.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.MicNone
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Stop
@@ -75,6 +86,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -82,6 +94,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -102,9 +115,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.contentstudio.app.runtime.ActionPlanCardData
 import com.contentstudio.app.runtime.ChatController
 import com.contentstudio.app.runtime.ChatMessageItem
 import com.contentstudio.app.runtime.LinuxRuntimeManager
+import com.contentstudio.app.runtime.MemoryEntry
+import com.contentstudio.app.runtime.StockMediaItem
 import com.contentstudio.app.runtime.WorkspaceSummary
 import com.contentstudio.app.ui.theme.StudioAccent
 import com.contentstudio.app.ui.theme.StudioBg
@@ -168,6 +184,23 @@ fun ChatScreen(
     var editMessageTarget by remember { mutableStateOf<Pair<Int, String>?>(null) }
     var editDialogText by remember { mutableStateOf("") }
     var scriptSavedToast by remember { mutableStateOf<String?>(null) }
+    var showMentionPicker by remember { mutableStateOf(false) }
+    var previewMediaTarget by remember { mutableStateOf<StockMediaItem?>(null) }
+    val projectMemories by ChatController.projectMemories.collectAsState()
+    val globalMemories by ChatController.globalMemories.collectAsState()
+    var showAddMemoryDialog by remember { mutableStateOf(false) }
+    var newMemoryNote by remember { mutableStateOf("") }
+    var newMemoryCategory by remember { mutableStateOf("decision") }
+    val contextItems by produceState(
+        initialValue = listOf("@script", "@scenes", "@channel_dna", "@memory"),
+        key1 = activeWorkspace
+    ) {
+        value = LinuxRuntimeManager.getProjectContextItems(context, activeWorkspace)
+    }
+
+    LaunchedEffect(activeWorkspace) {
+        ChatController.refreshMemories(activeWorkspace)
+    }
 
     val listState = rememberLazyListState()
 
@@ -398,6 +431,49 @@ fun ChatScreen(
                 .background(MatteDivider)
         )
 
+        // Pinned messages strip
+        val pinnedMessages = messages.filter { it.isPinned }
+        if (pinnedMessages.isNotEmpty()) {
+            val firstPinned = pinnedMessages.first()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MatteSurface)
+                    .clickable {
+                        scope.launch {
+                            val idx = messages.indexOfFirst { it.id == firstPinned.id }
+                            if (idx != -1) listState.animateScrollToItem(idx)
+                        }
+                    }
+                    .padding(horizontal = 16.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.PushPin,
+                    contentDescription = "Pinned",
+                    tint = StudioSage,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = "Pinned: " + firstPinned.text.replace("\n", " ").take(60),
+                    fontSize = 11.sp,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (pinnedMessages.size > 1) {
+                    Text(
+                        text = "+${pinnedMessages.size - 1}",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = TextMuted
+                    )
+                }
+            }
+        }
+
         // Toast confirmation for script saved
         AnimatedVisibility(visible = scriptSavedToast != null) {
             Box(
@@ -487,6 +563,21 @@ fun ChatScreen(
                                             }
                                         }
                                     }
+                                },
+                                onApprovePlan = {
+                                    ChatController.approveActionPlan(index, activeWorkspace)
+                                },
+                                onDismissPlan = {
+                                    ChatController.dismissActionPlan(index)
+                                },
+                                onTogglePin = {
+                                    ChatController.togglePinMessage(index)
+                                },
+                                onSuggestionClick = { prompt ->
+                                    ChatController.sendMessage(prompt, activeWorkspace)
+                                },
+                                onPreviewMedia = { media ->
+                                    previewMediaTarget = media
                                 }
                             )
                         }
@@ -649,6 +740,79 @@ fun ChatScreen(
                     Spacer(modifier = Modifier.height(6.dp))
                 }
 
+                // Floating @ Context Mention Picker
+                val hasAt = draftText.contains("@")
+                val atQuery = if (hasAt) draftText.substringAfterLast("@").lowercase() else ""
+                val shouldShowMentions = showMentionPicker || (hasAt && !atQuery.contains(" "))
+                val mentionOptions = if (shouldShowMentions) {
+                    contextItems.filter {
+                        if (atQuery.isNotBlank()) it.lowercase().contains(atQuery) else true
+                    }
+                } else emptyList()
+
+                if (shouldShowMentions && mentionOptions.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MatteSurface)
+                            .padding(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Konteks Proyek (@)",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = TextMuted
+                            )
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = "Close",
+                                tint = TextMuted,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clickable { showMentionPicker = false }
+                            )
+                        }
+                        mentionOptions.forEach { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        val newText = if (hasAt) {
+                                            draftText.substringBeforeLast("@") + item + " "
+                                        } else {
+                                            if (draftText.isBlank()) "$item " else "$draftText $item "
+                                        }
+                                        ChatController.updateDraft(newText)
+                                        showMentionPicker = false
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = item,
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = StudioSage
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -714,7 +878,7 @@ fun ChatScreen(
                             Box(modifier = Modifier.fillMaxWidth()) {
                                 if (draftText.isEmpty()) {
                                     Text(
-                                        text = "Tulis pesan atau ketik '/'...",
+                                        text = "Tulis pesan, ketik '/', atau '@'...",
                                         fontSize = 14.sp,
                                         color = TextMuted
                                     )
@@ -732,7 +896,7 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // Left: Attach, Slash '/', Mode & Tools
+                        // Left: Attach, Slash '/', Mention '@', Mode & Tools
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -769,6 +933,24 @@ fun ChatScreen(
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
                                     color = TextSecondary
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (showMentionPicker) StudioSage.copy(alpha = 0.2f) else MatteElevated)
+                                    .clickable {
+                                        showMentionPicker = !showMentionPicker
+                                    }
+                                    .padding(horizontal = 9.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = "@",
+                                    fontSize = 13.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (showMentionPicker) StudioSage else TextSecondary
                                 )
                             }
 
@@ -1179,7 +1361,7 @@ fun ChatScreen(
         )
     }
 
-    // ── MODAL SHEET: AGENT TOOLS STATUS ──────────────────────────────────────
+    // ── MODAL SHEET: AGENT TOOLS STATUS & PROJECT MEMORY ──────────────────────
     if (showToolsSheet) {
         ModalBottomSheet(
             onDismissRequest = { showToolsSheet = false },
@@ -1190,8 +1372,8 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp)
-                    .padding(top = 8.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(top = 8.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
                     text = "Kemampuan & Engine Agent",
@@ -1202,9 +1384,125 @@ fun ChatScreen(
 
                 ToolStatusRow("Project & Script Engine", "Active", StudioSage)
                 ToolStatusRow("Voice & Render Engine", "Active", StudioSage)
-                ToolStatusRow("Stock Media Search", "Not Configured", TextMuted)
+                ToolStatusRow("Stock Media Search", "Active", StudioSage)
+                ToolStatusRow(
+                    "Cross-Session Memory",
+                    if (activeWorkspace.isNotBlank()) "Attached: $activeWorkspace" else "Global Only",
+                    StudioSage
+                )
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(2.dp))
+
+                // Project Memory & Rules section
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (activeWorkspace.isNotBlank()) "Project Memory & Rules (${projectMemories.size})" else "Global Preferences (${globalMemories.size})",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    )
+                    if (activeWorkspace.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MatteElevated)
+                                .clickable {
+                                    newMemoryNote = ""
+                                    newMemoryCategory = "decision"
+                                    showAddMemoryDialog = true
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Add,
+                                    contentDescription = "Add Rule",
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = "Add Rule",
+                                    fontSize = 11.sp,
+                                    color = TextPrimary,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (activeWorkspace.isBlank()) {
+                    Text(
+                        text = "Pilih proyek di menu atas untuk melihat dan mengelola memory proyek spesifik.",
+                        fontSize = 12.sp,
+                        color = TextMuted
+                    )
+                } else if (projectMemories.isEmpty()) {
+                    Text(
+                        text = "Belum ada rule atau preferensi tersimpan untuk proyek ini. Agent akan mencatat keputusan penting otomatis atau Anda bisa menambahkannya manual.",
+                        fontSize = 12.sp,
+                        color = TextMuted
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 200.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        projectMemories.forEach { mem ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MatteElevated)
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(end = 8.dp)
+                                ) {
+                                    Text(
+                                        text = mem.note,
+                                        fontSize = 12.sp,
+                                        color = TextPrimary,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = mem.category.uppercase(),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = "Hapus Memory",
+                                    tint = TextMuted,
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clickable {
+                                            ChatController.deleteMemory(activeWorkspace, mem.id)
+                                        }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
                 StudioPrimaryButton(
                     text = "Buka Skills & MCP",
                     onClick = {
@@ -1215,6 +1513,77 @@ fun ChatScreen(
                 )
             }
         }
+    }
+
+    // ── DIALOG: ADD MEMORY RULE ──────────────────────────────────────────────
+    if (showAddMemoryDialog && activeWorkspace.isNotBlank()) {
+        AlertDialog(
+            onDismissRequest = { showAddMemoryDialog = false },
+            containerColor = StudioSurface,
+            shape = RoundedCornerShape(10.dp),
+            title = {
+                Text(
+                    text = "Tambah Project Rule / Memory",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StudioTextField(
+                        value = newMemoryNote,
+                        onValueChange = { newMemoryNote = it },
+                        placeholder = "Catatan atau aturan untuk agent...",
+                        singleLine = false,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 60.dp, max = 120.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("decision", "style", "rejected", "fact").forEach { cat ->
+                            val isSelected = newMemoryCategory == cat
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (isSelected) StudioSage else MatteElevated)
+                                    .clickable { newMemoryCategory = cat }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = cat,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (isSelected) Color(0xFF0B0C0E) else TextMuted
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                StudioPrimaryButton(
+                    text = "Simpan",
+                    onClick = {
+                        val note = newMemoryNote.trim()
+                        if (note.isNotBlank()) {
+                            ChatController.addMemory(activeWorkspace, note, newMemoryCategory)
+                        }
+                        showAddMemoryDialog = false
+                    }
+                )
+            },
+            dismissButton = {
+                StudioSecondaryButton(
+                    text = "Batal",
+                    onClick = { showAddMemoryDialog = false }
+                )
+            }
+        )
     }
 
     // ── DIALOG: EDIT & RESEND ────────────────────────────────────────────────
@@ -1258,6 +1627,28 @@ fun ChatScreen(
                 StudioSecondaryButton(
                     text = "Batal",
                     onClick = { editMessageTarget = null }
+                )
+            }
+        )
+    }
+
+    // ── DIALOG: INLINE MEDIA PREVIEW ─────────────────────────────────────────
+    val previewTarget = previewMediaTarget
+    if (previewTarget != null) {
+        InlineMediaPreviewDialog(
+            media = previewTarget,
+            onDismiss = { previewMediaTarget = null },
+            onSave = {
+                val targetUrl = previewTarget.downloadUrl
+                previewMediaTarget = null
+                ChatController.sendMessage("Unduh media: $targetUrl", activeWorkspace)
+            },
+            onAddToProject = {
+                val targetUrl = previewTarget.downloadUrl
+                previewMediaTarget = null
+                ChatController.sendMessage(
+                    "Unduh dan pasangkan media ke scene proyek: $targetUrl",
+                    activeWorkspace
                 )
             }
         )
@@ -1430,7 +1821,12 @@ private fun AgentMessageView(
     hasActiveProject: Boolean,
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
-    onUseAsScript: (String) -> Unit
+    onUseAsScript: (String) -> Unit,
+    onApprovePlan: () -> Unit = {},
+    onDismissPlan: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
+    onSuggestionClick: (String) -> Unit = {},
+    onPreviewMedia: (StockMediaItem) -> Unit = {}
 ) {
     var copied by remember { mutableStateOf(false) }
     var traceExpanded by remember { mutableStateOf(false) }
@@ -1446,6 +1842,16 @@ private fun AgentMessageView(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // Action Plan Card if present
+        val plan = message.actionPlan
+        if (plan != null) {
+            ActionPlanCard(
+                plan = plan,
+                onApprove = onApprovePlan,
+                onDismiss = onDismissPlan
+            )
+        }
+
         if (!message.isStreaming && message.processSteps.isNotEmpty()) {
             val secStr = String.format(Locale.US, "%.1fs", message.processDurationMs / 1000.0)
             Column(
@@ -1563,6 +1969,32 @@ private fun AgentMessageView(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
                                         .background(MatteElevated)
+                                        .clickable { onPreviewMedia(media) }
+                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.PlayArrow,
+                                            contentDescription = "Preview",
+                                            tint = TextPrimary,
+                                            modifier = Modifier.size(10.dp)
+                                        )
+                                        Text(
+                                            text = "Play",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MatteElevated)
                                         .clickable {
                                             ChatController.sendMessage(
                                                 "Unduh media: ${media.downloadUrl}",
@@ -1633,6 +2065,24 @@ private fun AgentMessageView(
                     )
                 }
 
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.clickable { onTogglePin() }
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.PushPin,
+                        contentDescription = if (message.isPinned) "Unpin" else "Pin",
+                        tint = if (message.isPinned) StudioSage else TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = if (message.isPinned) "Pinned" else "Pin",
+                        fontSize = 11.sp,
+                        color = if (message.isPinned) StudioSage else TextMuted
+                    )
+                }
+
                 if (isLastAgentMessage) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1669,6 +2119,440 @@ private fun AgentMessageView(
                             text = "Use as Script",
                             fontSize = 11.sp,
                             color = TextMuted
+                        )
+                    }
+                }
+            }
+        }
+
+        // Smart next-step chips
+        if (isLastAgentMessage && !message.isStreaming && message.suggestions.isNotEmpty()) {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(message.suggestions) { suggestion ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MatteElevated)
+                            .clickable { onSuggestionClick(suggestion) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = suggestion,
+                            fontSize = 12.sp,
+                            color = TextPrimary
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionPlanCard(
+    plan: ActionPlanCardData,
+    onApprove: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MatteSurface)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = plan.title.ifBlank { "Action Plan" },
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = TextPrimary
+            )
+            val (badgeText, badgeColor) = when (plan.status) {
+                "approved" -> "APPROVED" to StudioSage
+                "dismissed" -> "DISMISSED" to StudioDangerRed
+                else -> "PLAN" to StudioAccent
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MatteElevated)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = badgeText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = badgeColor
+                )
+            }
+        }
+
+        if (plan.goal.isNotBlank()) {
+            Text(
+                text = plan.goal,
+                fontSize = 12.sp,
+                color = TextMuted,
+                lineHeight = 17.sp
+            )
+        }
+
+        if (plan.steps.isNotEmpty()) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                plan.steps.forEachIndexed { i, step ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .background(MatteElevated),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "${i + 1}",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                        }
+                        Text(
+                            text = step,
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                            color = TextPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        when (plan.status) {
+            "pending" -> {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MatteElevated)
+                            .clickable { onDismiss() }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Tolak",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = TextMuted
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(StudioSage)
+                            .clickable { onApprove() }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Jalankan Plan",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF0B0C0E)
+                        )
+                    }
+                }
+            }
+            "approved" -> {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 2.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Check,
+                        contentDescription = null,
+                        tint = StudioSage,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "Plan disetujui & sedang dijalankan",
+                        fontSize = 11.sp,
+                        color = StudioSage
+                    )
+                }
+            }
+            "dismissed" -> {
+                Text(
+                    text = "Plan ditolak",
+                    fontSize = 11.sp,
+                    color = TextMuted,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineMediaPreviewDialog(
+    media: StockMediaItem,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+    onAddToProject: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.75f))
+                .clickable { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MatteSurface)
+                    .clickable(enabled = false) {}
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = media.title.ifBlank { media.id },
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = media.provider.uppercase(),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = StudioAccent
+                            )
+                            if (media.durationSec > 0) {
+                                Text(
+                                    text = "· ${media.durationSec}s",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = TextMuted
+                                )
+                            }
+                            if (media.width > 0 && media.height > 0) {
+                                Text(
+                                    text = "· ${media.width}x${media.height}",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(MatteElevated)
+                            .clickable { onDismiss() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                // Media Preview
+                val isVideo = media.mediaType == "video" ||
+                        media.downloadUrl.endsWith(".mp4", ignoreCase = true) ||
+                        media.downloadUrl.endsWith(".webm", ignoreCase = true) ||
+                        media.downloadUrl.endsWith(".mov", ignoreCase = true) ||
+                        media.provider == "ytdlp"
+
+                val isAudio = media.mediaType == "audio" ||
+                        media.downloadUrl.endsWith(".mp3", ignoreCase = true) ||
+                        media.downloadUrl.endsWith(".wav", ignoreCase = true)
+
+                if (isVideo) {
+                    val videoUri = media.downloadUrl.ifBlank { media.thumbnailUrl }
+                    AndroidView(
+                        factory = { ctx ->
+                            VideoView(ctx).apply {
+                                val mc = android.widget.MediaController(ctx)
+                                mc.setAnchorView(this)
+                                setMediaController(mc)
+                                setVideoURI(Uri.parse(videoUri))
+                                setOnPreparedListener { mp ->
+                                    mp.isLooping = true
+                                    start()
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 180.dp, max = 320.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black)
+                    )
+                } else if (isAudio) {
+                    var isPlaying by remember { mutableStateOf(false) }
+                    val mediaPlayer = remember {
+                        MediaPlayer().apply {
+                            try {
+                                setDataSource(media.downloadUrl)
+                                prepareAsync()
+                                setOnPreparedListener {
+                                    start()
+                                    isPlaying = true
+                                }
+                                setOnCompletionListener {
+                                    isPlaying = false
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            try {
+                                mediaPlayer.stop()
+                                mediaPlayer.release()
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MatteElevated)
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(StudioAccent)
+                                .clickable {
+                                    if (mediaPlayer.isPlaying) {
+                                        mediaPlayer.pause()
+                                        isPlaying = false
+                                    } else {
+                                        mediaPlayer.start()
+                                        isPlaying = true
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = Color(0xFF0B0C0E),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = if (isPlaying) "Playing audio..." else "Paused",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            color = TextMuted
+                        )
+                    }
+                } else {
+                    AsyncImage(
+                        model = media.downloadUrl.ifBlank { media.thumbnailUrl },
+                        contentDescription = media.title,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 180.dp, max = 320.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+
+                // Actions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MatteElevated)
+                            .clickable { onSave() }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Save Media",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = TextPrimary
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFF2F4F8))
+                            .clickable { onAddToProject() }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "+ Add to Project",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0B0C0E)
                         )
                     }
                 }

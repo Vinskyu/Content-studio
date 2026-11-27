@@ -617,19 +617,54 @@ def execute_autonomous_agent(
         "scriptwriter": "Mode PENULIS NASKAH: Fokus menghasilkan naskah narasi yang kuat, hook memikat di detik awal, pacing rapat, dan emosi cerita yang mendalam.",
         "researcher": "Mode PENELITI: Fokus mencari referensi akurat, perburuan bahan footage/meme/audio yang relevan, dan perbandingan fakta.",
         "fast": "Mode CEPAT: Eksekusi langsung rencana dengan langkah paling singkat dan to-the-point tanpa penjelasan bertele-tele."
-    }.get(mode.lower(), "Mode SUTRADARA: Produksi konten otonom dari hulu ke hilir.")
+    }.get(mode, "Mode Sutradara Umum.")
+    # Baca Project Memory & Global Preferences
+    memory_notes = []
+    ws_dir = os.path.join(get_workspaces_dir(), active_ws)
+    mem_proj_file = os.path.join(ws_dir, "memory.json")
+    if os.path.exists(mem_proj_file):
+        try:
+            with open(mem_proj_file, "r", encoding="utf-8") as f:
+                p_mems = json.load(f)
+                if isinstance(p_mems, list):
+                    for m in p_mems:
+                        note = m.get("note", "").strip()
+                        cat = m.get("category", "decision")
+                        if note:
+                            memory_notes.append(f"- [Proyek:{cat}] {note}")
+        except Exception:
+            pass
 
-    # 3. Bangun System Prompt Proaktif V3.3
-    system_prompt = f"""Kamu adalah ContentStudio Autonomous AI Agent (ContentStudio V3.3), sutradara dan produser video profesional.
+    mem_global_file = os.path.join(get_cache_dir(), "user_preferences.json")
+    if os.path.exists(mem_global_file):
+        try:
+            with open(mem_global_file, "r", encoding="utf-8") as f:
+                g_mems = json.load(f)
+                if isinstance(g_mems, list):
+                    for m in g_mems:
+                        note = m.get("note", "").strip()
+                        cat = m.get("category", "decision")
+                        if note:
+                            memory_notes.append(f"- [Global:{cat}] {note}")
+        except Exception:
+            pass
+
+    memory_summary = "\n".join(memory_notes) if memory_notes else "Belum ada catatan memori tersimpan."
+
+    # 3. Bangun System Prompt Proaktif V3.4
+    system_prompt = f"""Kamu adalah ContentStudio Autonomous AI Agent (ContentStudio V3.4), sutradara dan produser video profesional.
 TARGET UTAMA: Vertikal 9:16 Full HD 1080p (1080x1920, 30fps) kecuali pengguna meminta format lain.
 
 WORKSPACE AKTIF: '{active_ws}'
 MODE OPERASI: {mode.upper()} - {mode_instructions}
 
+CROSS-SESSION PROJECT & GLOBAL MEMORY (ATURAN/KEPUTUSAN TETAP):
+{memory_summary}
+
 SKILL OPERASIONAL TERSEDIA (Gunakan tool load_skill jika memerlukan detail SOP):
 {skill_idx_summary}
 
-PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.3):
+PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
 1. DILARANG MERESPONS PASIF ala Customer Service ("Maaf...", atau balik bertanya hal teknis sebelum bertindak).
 2. DILARANG MENYURUH USER KLIK MANUAL DI UI. Gunakan tool 'run_studio_cli' untuk mengotomasi proyek:
    - Membuat/mengatur proyek: ['project', 'create', '--name', '<nama>', '--ratio', '9:16']
@@ -639,8 +674,15 @@ PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.3):
    - Voiceover AI: ['voice', 'generate', '--project', '<nama>']
    - Audio mastering: ['voice', 'master', '--project', '<nama>', '--preset', 'podcast']
    - Background music: ['audio', 'set-bgm', '--project', '<nama>', '--file', '<path>']
+   - Cross-session memory: ['memory', 'add', '--project', '<nama>', '--note', '<catatan>', '--category', 'decision']
 3. Jika belum ada bahan media: gunakan tool 'hunt_media' atau 'run_studio_cli' untuk mencari aset video/audio.
 4. Tampilkan tabel ringkasan shot list (adegan, narasi, visual, durasi) kepada pengguna di akhir.
+5. PROTOKOL INTERAKTIF V3.4:
+   - Catat preferensi atau koreksi penting user ke memory add.
+   - Untuk aksi multi-langkah berat/destruktif (misal render final, download massal, timpa naskah total), keluarkan:
+     [ACTION_PLAN] {{"title": "...", "steps": ["...", "..."], "approvePrompt": "Lanjutkan eksekusi rencana ini sekarang"}}
+   - Di akhir setiap jawaban, sertakan 2-3 rekomendasi langkah lanjutan ringkas (maks 4-5 kata per saran):
+     [SUGGESTIONS] ["Saran 1", "Saran 2", "Saran 3"]
 """
 
     # 4. Susun pesan percakapan

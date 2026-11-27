@@ -29,6 +29,7 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.util.zip.ZipInputStream
 
 data class ChatSessionSummary(
@@ -108,6 +109,20 @@ data class WorkspaceFileItem(
     val updatedAt: Long,
 )
 
+data class MemoryEntry(
+    val id: String,
+    val note: String,
+    val category: String,
+    val createdAt: String
+)
+
+data class ActionPlanCardData(
+    val title: String,
+    val steps: List<String>,
+    val approvePrompt: String,
+    val status: String = "pending" // pending | approved | dismissed
+)
+
 data class ChatMessageItem(
     val id: String = java.util.UUID.randomUUID().toString(),
     val isUser: Boolean,
@@ -116,6 +131,9 @@ data class ChatMessageItem(
     val processSteps: List<String> = emptyList(),
     val processDurationMs: Long = 0L,
     val mediaItems: List<StockMediaItem> = emptyList(),
+    val actionPlan: ActionPlanCardData? = null,
+    val suggestions: List<String> = emptyList(),
+    val isPinned: Boolean = false,
 )
 
 data class ExtensionSkillItem(
@@ -1901,6 +1919,8 @@ object LinuxRuntimeManager {
         onConnectionCreated: ((HttpURLConnection) -> Unit)? = null,
         onStatus: (String) -> Unit,
         onUiSync: ((scope: String, target: String) -> Unit)? = null,
+        onActionPlan: ((ActionPlanCardData) -> Unit)? = null,
+        onSuggestions: ((List<String>) -> Unit)? = null,
         onDelta: (String) -> Unit,
         onDone: (String) -> Unit,
         onError: (String) -> Unit,
@@ -1972,6 +1992,36 @@ object LinuxRuntimeManager {
                                     if (scope == "project" && target.isNotBlank()) {
                                         setActiveWorkspace(target)
                                     }
+                                } else if (currentEvent == "action_plan" || type == "action_plan") {
+                                    val title = obj.optString("title", "Action Plan")
+                                    val stepsArr = obj.optJSONArray("steps")
+                                    val stepsList = mutableListOf<String>()
+                                    if (stepsArr != null) {
+                                        for (i in 0 until stepsArr.length()) {
+                                            stepsList.add(stepsArr.optString(i))
+                                        }
+                                    }
+                                    val approvePrompt = obj.optString("approvePrompt", "Lanjutkan eksekusi rencana ini sekarang")
+                                    onActionPlan?.invoke(
+                                        ActionPlanCardData(
+                                            title = title,
+                                            steps = stepsList,
+                                            approvePrompt = approvePrompt,
+                                            status = "pending"
+                                        )
+                                    )
+                                } else if (currentEvent == "suggestions" || type == "suggestions") {
+                                    val sugArr = obj.optJSONArray("suggestions")
+                                    val sugList = mutableListOf<String>()
+                                    if (sugArr != null) {
+                                        for (i in 0 until sugArr.length()) {
+                                            val s = sugArr.optString(i).trim()
+                                            if (s.isNotEmpty()) sugList.add(s)
+                                        }
+                                    }
+                                    if (sugList.isNotEmpty()) {
+                                        onSuggestions?.invoke(sugList)
+                                    }
                                 } else when (type) {
                                     "status" -> {
                                         val stepLabel = text.ifBlank { obj.optString("step", "") }
@@ -2006,6 +2056,113 @@ object LinuxRuntimeManager {
         } catch (e: Exception) {
             onError(e.message ?: "Koneksi ke bridge terputus")
         }
+    }
+
+    suspend fun getMemories(projectName: String?): Pair<List<MemoryEntry>, List<MemoryEntry>> = withContext(Dispatchers.IO) {
+        try {
+            val q = if (!projectName.isNullOrBlank()) "?project=${URLEncoder.encode(projectName, "UTF-8")}" else ""
+            val conn = URL("$BRIDGE_BASE_URL/memory$q").openConnection() as HttpURLConnection
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
+            if (conn.responseCode == 200) {
+                val txt = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = JSONObject(txt)
+                val pArr = obj.optJSONArray("projectMemory")
+                val gArr = obj.optJSONArray("globalMemory")
+                val pList = mutableListOf<MemoryEntry>()
+                if (pArr != null) {
+                    for (i in 0 until pArr.length()) {
+                        val m = pArr.getJSONObject(i)
+                        pList.add(
+                            MemoryEntry(
+                                id = m.optString("id"),
+                                note = m.optString("note"),
+                                category = m.optString("category", "decision"),
+                                createdAt = m.optString("createdAt")
+                            )
+                        )
+                    }
+                }
+                val gList = mutableListOf<MemoryEntry>()
+                if (gArr != null) {
+                    for (i in 0 until gArr.length()) {
+                        val m = gArr.getJSONObject(i)
+                        gList.add(
+                            MemoryEntry(
+                                id = m.optString("id"),
+                                note = m.optString("note"),
+                                category = m.optString("category", "decision"),
+                                createdAt = m.optString("createdAt")
+                            )
+                        )
+                    }
+                }
+                Pair(pList, gList)
+            } else Pair(emptyList(), emptyList())
+        } catch (e: Exception) {
+            Pair(emptyList(), emptyList())
+        }
+    }
+
+    suspend fun addMemory(projectName: String?, note: String, category: String = "decision"): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL("$BRIDGE_BASE_URL/memory").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 4000
+                readTimeout = 4000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val body = JSONObject().apply {
+                if (!projectName.isNullOrBlank()) put("project", projectName)
+                put("note", note.trim())
+                put("category", category.trim())
+            }.toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            val ok = conn.responseCode == 200
+            if (ok) incrementUiSyncVersion()
+            ok
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun deleteMemory(projectName: String?, id: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL("$BRIDGE_BASE_URL/memory").openConnection() as HttpURLConnection).apply {
+                requestMethod = "DELETE"
+                connectTimeout = 4000
+                readTimeout = 4000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val body = JSONObject().apply {
+                if (!projectName.isNullOrBlank()) put("project", projectName)
+                put("id", id.trim())
+            }.toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            val ok = conn.responseCode == 200
+            if (ok) incrementUiSyncVersion()
+            ok
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun getProjectContextItems(context: Context, projectName: String?): List<String> = withContext(Dispatchers.IO) {
+        val baseItems = mutableListOf("@script", "@scenes", "@channel_dna", "@memory")
+        if (!projectName.isNullOrBlank()) {
+            try {
+                val assetsDir = getWorkspaceAssetsDir(context, projectName)
+                if (assetsDir.exists() && assetsDir.isDirectory) {
+                    val files = assetsDir.listFiles()?.filter { it.isFile && !it.name.startsWith(".") } ?: emptyList()
+                    files.take(8).forEach { f ->
+                        baseItems.add("@assets/${f.name}")
+                    }
+                }
+            } catch (_) {}
+        }
+        baseItems
     }
 
     suspend fun getMediaConfig(): StockMediaConfig? = withContext(Dispatchers.IO) {

@@ -1,6 +1,6 @@
-# KONSTITUSI CONTENTSTUDIO (AGENTS.md V3.3)
+# KONSTITUSI CONTENTSTUDIO (AGENTS.md V3.4)
 
-Pedoman hukum, arsitektur, dan instruksi eksekusi otonom mutlak bagi seluruh agen AI yang beroperasi di ContentStudio V3.3+.
+Pedoman hukum, arsitektur, dan instruksi eksekusi otonom mutlak bagi seluruh agen AI yang beroperasi di ContentStudio V3.4+.
 Setiap agen yang aktif terikat penuh tanpa pengecualian pada prinsip dan tata cara operasi berikut:
 
 ---
@@ -17,7 +17,9 @@ Setiap agen yang aktif terikat penuh tanpa pengecualian pada prinsip dan tata ca
   * `assets/` (footage, gambar, elemen visual lokal).
   * `audio/` (rekaman voiceover `vo.mp3`, file BGM, sound effect).
   * `renders/` (output render perantara & log).
-- **Dilarang keras** membuat atau menawarkan file warisan lama (`niche.md`, `style.md`, `laws.md`). Preferensi akun dikelola melalui Channel DNA (`channels.json`) dan Living Templates (`patterns.json`).
+  * `memory.json` (catatan keputusan, style, fact, dan aturan cross-session khusus proyek ini).
+- File preferensi global disimpan di `.cache/user_preferences.json`.
+- **Dilarang keras** membuat atau menawarkan file warisan lama (`niche.md`, `style.md`, `laws.md`). Preferensi akun dikelola melalui Channel DNA (`channels.json`), Living Templates (`patterns.json`), dan Memory (`memory.json`).
 
 ## 3. MASTER CLI COMMAND CHEATSHEET (`python3 engine/studio_cli.py`)
 Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
@@ -47,12 +49,18 @@ Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
 - `python3 engine/studio_cli.py voice master --project <nama> --preset podcast|cinematic|clean`
 - `python3 engine/studio_cli.py audio set-bgm --project <nama> --file <path_bgm> [--volume 0.18]`
 
-### E. Pencarian & Pengunduhan Media Mandiri
+### E. Pencarian & Pengunduhan Media Mandiri + Auto-QA
 - Cari media: `python3 engine/media_fetcher.py search --query "<keyword>" --source auto|wikimedia|ytdlp|pexels|pixabay --type video|photo --limit 6`
-- Unduh & alokasikan langsung ke adegan:
+- Unduh & alokasikan langsung ke adegan (dengan auto-QA):
   `python3 engine/studio_cli.py media assign --project <nama> --scene <index> --url "<url>" [--start "00:00:10"] [--end "00:00:25"]`
+- Inspeksi kualitas media (QA): `python3 engine/media_fetcher.py qa --file <path> [--expected-ratio 9:16|16:9]`
 
-### F. Render Final & Publish Kit
+### F. Cross-Session Project Memory & User Preferences
+- `python3 engine/studio_cli.py memory list [--project <nama>]`
+- `python3 engine/studio_cli.py memory add [--project <nama>] --note "<catatan>" [--category decision|style|rejected|fact]`
+- `python3 engine/studio_cli.py memory remove [--project <nama>] --id <id>`
+
+### G. Render Final & Publish Kit
 - `python3 engine/studio_cli.py render start --project <nama>`
 - `python3 engine/studio_cli.py publish set --project <nama> --title "<judul>" --description "<deskripsi>" --tags "#tag1 #tag2"`
 
@@ -61,14 +69,23 @@ Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
 - Jika pengguna meminta membuat video atau proyek, langsung buat proyek via CLI (default rasio `9:16` 1080x1920 kecuali pengguna menyebut `16:9`).
 - Tampilkan ringkasan status dalam bentuk tabel rapi dan padat di chat.
 
-## 5. ALUR KERJA WAJIB: INSPECT ➔ PLAN ➔ ACC ➔ RENDER
-1. **INSPECT & GATHER:**
-   - Analisis bahan atau cari media referensi via `media_fetcher.py search`.
-2. **PLAN & ASSEMBLE:**
+## 5. ALUR KERJA WAJIB & PROTOKOL INTERAKTIF V3.4
+1. **CROSS-SESSION PERSISTENCE:**
+   - Setiap kali user memberikan koreksi gaya, batasan durasi, atau penolakan elemen tertentu, Agent wajib memanggil `studio_cli.py memory add` agar tidak lupa di sesi obrolan berikutnya.
+2. **ACTION PLAN CARD:**
+   - Untuk aksi multi-langkah berat atau destruktif (misal: download massal, render final, timpa naskah total), Agent dapat mengeluarkan blok terstruktur:
+     `[ACTION_PLAN] {"title":"Judul Rencana","steps":["Langkah 1","Langkah 2"],"approvePrompt":"Lanjutkan eksekusi rencana ini sekarang"}`
+     sebelum mengeksekusi langsung.
+3. **SMART NEXT-STEP SUGGESTIONS:**
+   - Di akhir setiap jawaban, sertakan 2-3 rekomendasi langkah lanjutan relevan dalam format:
+     `[SUGGESTIONS] ["Saran 1","Saran 2","Saran 3"]` (maks 4-5 kata per saran).
+4. **INSPECT & QA:**
+   - Analisis bahan atau cari media referensi via `media_fetcher.py search`, lalu pastikan kelayakan resolusi dan aspek rasio via `media_fetcher.py qa`.
+5. **PLAN & ASSEMBLE:**
    - Susun naskah via `script set`, pecah adegan via `script split-scenes`, tetapkan media via `media assign`, dan hasilkan voiceover via `voice generate`.
-3. **ACC (Persetujuan Pengguna):**
+6. **ACC (Persetujuan Pengguna):**
    - Sajikan tabel ringkasan shot list (adegan, visual, narasi, durasi). Mintalah konfirmasi pengguna sebelum memulai rendering final video 1080p.
-4. **RENDER:**
+7. **RENDER:**
    - Jalankan `render start --project <nama>` setelah ACC diperoleh. Output akhir video tersimpan di `/sdcard/ContentStudio/out/`.
 
 ## 6. PARAMETER 100% DINAMIS & UNIVERSAL
