@@ -2084,7 +2084,7 @@ fun ProjectBoardScreen(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(RoundedCornerShape(6.dp))
-                            .background(if (coPilotInput.isNotBlank() && !isStreaming) StudioPrimary else StudioSecondary)
+                            .background(if (coPilotInput.isNotBlank() && !isStreaming) StudioPrimary else StudioSurfaceElevated)
                             .clickable(enabled = coPilotInput.isNotBlank() && !isStreaming) {
                                 val promptToSend = "[Project: $workspaceName, Stage: $currentStageName]\n" + coPilotInput.trim()
                                 ChatController.sendMessage(promptToSend, workspaceName)
