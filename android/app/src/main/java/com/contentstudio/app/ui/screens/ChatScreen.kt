@@ -1505,9 +1505,12 @@ private fun parseWorkspacesJson(res: org.json.JSONObject): List<WorkspaceSummary
         list.add(
             WorkspaceSummary(
                 name = obj.optString("name", ""),
+                path = obj.optString("path", ""),
+                filesCount = obj.optInt("files_count", 0),
+                updatedAt = obj.optLong("updated_at", 0L),
                 channelId = obj.optString("channel_id", ""),
                 aspectRatio = obj.optString("aspect_ratio", "9:16"),
-                stage = obj.optString("stage", "draft")
+                stage = obj.optString("stage", "script")
             )
         )
     }
