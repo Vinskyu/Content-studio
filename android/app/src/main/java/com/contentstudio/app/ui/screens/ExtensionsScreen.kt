@@ -104,41 +104,23 @@ fun ExtensionsScreen(
             .fillMaxSize()
             .background(StudioBg)
     ) {
-        // TOP BAR
-        StudioTopBar(
-            title = "Skills & MCP",
-            subtitle = "Extensions & Tools",
-            actions = {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(StudioSecondary)
-                        .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
-                        .clickable { refreshData() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Refresh,
-                        contentDescription = "Refresh",
-                        tint = TextPrimary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-        )
-
-        // TAB SWITCHER
+        // TAB SWITCHER & ACTIONS
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(StudioSurface)
-                .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
-                .padding(3.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(StudioSurface)
+                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
             val tab0Bg by animateColorAsState(if (selectedTab == 0) StudioSurfaceElevated else Color.Transparent, label = "tab0Bg")
             val tab0Text by animateColorAsState(if (selectedTab == 0) TextPrimary else TextSecondary, label = "tab0Text")
 
@@ -194,6 +176,24 @@ fun ExtensionsScreen(
                     fontSize = 12.sp,
                     fontWeight = if (selectedTab == 1) FontWeight.SemiBold else FontWeight.Medium,
                     color = tab1Text
+                )
+            }
+        }
+
+        Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(StudioSecondary)
+                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                    .clickable { refreshData() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Refresh,
+                    contentDescription = "Refresh",
+                    tint = TextPrimary,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }

@@ -399,13 +399,6 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Content Studio",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
@@ -414,13 +407,19 @@ fun ChatScreen(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = "Antigravity",
+                        text = "AI Director",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = BadgeGreenText
                     )
                 }
+                Text(
+                    text = "${sessions.size} sessions",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
             }
 
             Row(

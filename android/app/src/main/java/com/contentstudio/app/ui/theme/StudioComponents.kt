@@ -571,6 +571,7 @@ fun StudioTextField(
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
+        modifier = modifier,
         singleLine = singleLine,
         minLines = minLines,
         maxLines = maxLines,
@@ -582,11 +583,11 @@ fun StudioTextField(
         cursorBrush = SolidColor(StudioPrimary),
         decorationBox = { innerTextField ->
             Box(
-                modifier = modifier
+                modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(6.dp))
                     .background(StudioSurfaceElevated)
-                    .border(0.5.dp, StudioBorder, RoundedCornerShape(8.dp))
+                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 if (value.isEmpty() && placeholder.isNotEmpty()) {

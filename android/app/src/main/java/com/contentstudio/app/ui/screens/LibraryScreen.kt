@@ -258,20 +258,7 @@ fun LibraryScreen(
             .fillMaxSize()
             .background(BgDark)
     ) {
-        // TOP HEADER
-        StudioTopBar(
-            title = "Library",
-            subtitle = "${filteredAssets.size} Assets",
-            actions = {
-                StudioPrimaryButton(
-                    text = "Import",
-                    onClick = { importLauncher.launch("*/*") },
-                    height = 36.dp
-                )
-            }
-        )
-
-        // CATEGORY SEGMENTED CONTROL & SEARCH
+        // CATEGORY SEGMENTED CONTROL, SEARCH & IMPORT
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -282,11 +269,24 @@ fun LibraryScreen(
             val catKeys = listOf("all", "video", "audio", "image")
             val selectedIdx = catKeys.indexOf(selectedCategory).coerceAtLeast(0)
 
-            StudioSegmentedControl(
-                options = categories,
-                selectedIndex = selectedIdx,
-                onSelect = { selectedCategory = catKeys[it] }
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    StudioSegmentedControl(
+                        options = categories,
+                        selectedIndex = selectedIdx,
+                        onSelect = { selectedCategory = catKeys[it] }
+                    )
+                }
+                StudioPrimaryButton(
+                    text = "Import",
+                    onClick = { importLauncher.launch("*/*") },
+                    height = 36.dp
+                )
+            }
 
             StudioTextField(
                 value = searchQuery,
