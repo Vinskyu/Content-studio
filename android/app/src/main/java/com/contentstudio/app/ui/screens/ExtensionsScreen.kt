@@ -115,9 +115,8 @@ fun ExtensionsScreen(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(StudioSurface)
-                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF15171C))
                     .padding(3.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -127,7 +126,7 @@ fun ExtensionsScreen(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(4.dp))
+                    .clip(RoundedCornerShape(6.dp))
                     .background(tab0Bg)
                     .clickable { selectedTab = 0 }
                     .padding(vertical = 8.dp),
@@ -156,7 +155,7 @@ fun ExtensionsScreen(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(4.dp))
+                    .clip(RoundedCornerShape(6.dp))
                     .background(tab1Bg)
                     .clickable { selectedTab = 1 }
                     .padding(vertical = 8.dp),
@@ -183,9 +182,8 @@ fun ExtensionsScreen(
         Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(StudioSecondary)
-                    .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF15171C))
                     .clickable { refreshData() },
                 contentAlignment = Alignment.Center
             ) {
@@ -365,7 +363,6 @@ fun ExtensionsScreen(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(4.dp))
                                                 .background(StudioSurfaceElevated)
-                                                .border(0.5.dp, StudioBorder, RoundedCornerShape(4.dp))
                                                 .padding(horizontal = 7.dp, vertical = 3.dp)
                                         ) {
                                             Text(

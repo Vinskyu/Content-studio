@@ -2206,10 +2206,16 @@ async function handleChat(req, res) {
     }
   }
 
-  emit({ type: 'status', text: 'Menjalankan Antigravity...' });
+  function emitStatus(step, detail = '') {
+    const label = detail ? `${step} (${detail})` : step;
+    emit({ type: 'status', text: label, step, detail });
+  }
+
+  emitStatus('Menghubungkan engine lokal');
 
   // Susun instruksi dengan konteks dapur produksi, channel, dan workspace project
   const activeWorkspace = session.workspace || st.active_workspace || '';
+  emitStatus('Memuat konteks proyek & skill', activeWorkspace || '');
   let wsContextPrefix = '';
   let wsPath = '';
 
@@ -2284,6 +2290,8 @@ async function handleChat(req, res) {
   }
   cliArgs.push('-p', promptToSend);
 
+  emitStatus('Memproses permintaan ke model AI');
+
   const proc = spawn(ANTIGRAVITY_BIN, cliArgs, {
     env: getAntigravityEnv(false),
     cwd: workingDir,
@@ -2292,12 +2300,18 @@ async function handleChat(req, res) {
 
   let fullOutput = '';
   let errOutput = '';
+  let stderrLineBuffer = '';
+  let firstTokenEmitted = false;
 
   proc.stdout.on('data', (chunk) => {
     const rawText = chunk.toString('utf8');
     const cleanText = stripAnsi(rawText);
     fullOutput += cleanText;
     if (cleanText) {
+      if (!firstTokenEmitted) {
+        firstTokenEmitted = true;
+        emitStatus('Menyusun jawaban');
+      }
       emit({ type: 'delta', text: cleanText });
     }
   });
@@ -2305,6 +2319,20 @@ async function handleChat(req, res) {
   proc.stderr.on('data', (chunk) => {
     const text = chunk.toString('utf8');
     errOutput += text;
+    stderrLineBuffer += stripAnsi(text);
+    const lines = stderrLineBuffer.split(/\r?\n/);
+    stderrLineBuffer = lines.pop() || '';
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith('[STEP]')) {
+        emitStatus(line.replace(/^\[STEP\]\s*/, ''));
+      } else if (line.startsWith('[TOOL]')) {
+        emitStatus(line.replace(/^\[TOOL\]\s*/, ''));
+      } else if (line.includes('tool') || line.includes('Writing') || line.includes('Reading') || line.includes('Running')) {
+        emitStatus(line.slice(0, 90));
+      }
+    }
   });
 
   function killProcessSafely(p) {

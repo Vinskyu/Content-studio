@@ -534,6 +534,16 @@ def execute_local_tool(name: str, args: Dict[str, Any], session: Dict[str, Any])
 # MAIN AGENT LOOP (AUTONOMOUS EXECUTION ENGINE)
 # ==============================================================================
 
+def _emit_step(message: str) -> None:
+    """Emit structured step trace to stderr immediately without buffering."""
+    try:
+        print(f"[STEP] {message}", file=sys.stderr, flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
 def execute_autonomous_agent(
     user_prompt: str,
     attached_files: List[str] = [],
@@ -547,6 +557,7 @@ def execute_autonomous_agent(
     """
     sess = session or load_session()
     active_ws = sess.get("active_workspace", "default")
+    _emit_step(f"Memuat konteks proyek & skill ({active_ws})")
     history = load_chat_history(active_ws)
 
     # 1. Kumpulkan seluruh tools aktif (Core Tools + Remote MCP Tools)
@@ -555,7 +566,7 @@ def execute_autonomous_agent(
         mcp_tools = get_all_mcp_tools()
         all_tools.extend(mcp_tools)
     except Exception as e:
-        print(f"[!] Warning MCP: {e}", file=sys.stderr)
+        print(f"[!] Warning MCP: {e}", file=sys.stderr, flush=True)
 
     # 2. Ambil konteks DNA workspace & indeks skill
     ws_context = get_workspace_context(active_ws)
@@ -605,6 +616,7 @@ PERILAKU & ATURAN KERAS EKSEKUTOR:
 
     # 5. Loop Agentik (Maksimal 12 Langkah)
     for step_num in range(1, MAX_AGENT_STEPS + 1):
+        _emit_step(f"Memproses permintaan ke model AI (tahap {step_num})")
         try:
             llm_res = chat_with_tools(
                 messages=messages,
@@ -625,6 +637,7 @@ PERILAKU & ATURAN KERAS EKSEKUTOR:
 
         if not tool_calls:
             # Selesai: LLM memberikan jawaban akhir
+            _emit_step("Menyusun jawaban")
             final_reply = content
             break
 
@@ -634,6 +647,7 @@ PERILAKU & ATURAN KERAS EKSEKUTOR:
             t_name = tc.get("name", "")
             t_args = tc.get("arguments") or {}
 
+            _emit_step(f"Menjalankan tool: {t_name}")
             # Emit event ke Android Kotlin Service
             if event_callback:
                 event_callback({
@@ -666,6 +680,7 @@ PERILAKU & ATURAN KERAS EKSEKUTOR:
                 "detail": str(tool_output).replace("\n", " ")[:120]
             }
             steps_recorded.append(step_item)
+            _emit_step(f"Selesai {t_name}")
 
             if event_callback:
                 event_callback({

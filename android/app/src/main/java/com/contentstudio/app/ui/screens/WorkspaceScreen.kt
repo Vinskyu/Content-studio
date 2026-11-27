@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -83,6 +84,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.Icon
 import com.contentstudio.app.ui.theme.StudioBadge
 import com.contentstudio.app.ui.theme.StudioDangerRed
@@ -397,209 +399,77 @@ fun WorkspaceScreen(
             .fillMaxSize()
             .background(BgDark)
     ) {
-        // TOP BAR WITH SWITCHER
+        // ACTION BAR: + New Project & Quick Voice
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceCard)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 16.dp, vertical = 11.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+                .background(Color(0xFF0B0C0E))
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // SEGMENT SWITCHER: Projects | Channels | Patterns
-            Row(
+            Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(BgDark)
-                    .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                    .padding(2.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    .weight(1f)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFF2F4F8))
+                    .clickable {
+                        newProjectName = ""
+                        selectedChannelForProject = ""
+                        projectCreateError = null
+                        showCreateProjectDialog = true
+                    },
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (activeTab == "projects") CardHighlight else BgDark)
-                        .clickable { activeTab = "projects" }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = "Projects",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 12.sp,
-                        fontWeight = if (activeTab == "projects") FontWeight.Bold else FontWeight.Normal,
-                        color = if (activeTab == "projects") TextPrimary else TextSecondary
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = null,
+                        tint = Color(0xFF0B0C0E),
+                        modifier = Modifier.size(16.dp)
                     )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (activeTab == "channels") CardHighlight else BgDark)
-                        .clickable { activeTab = "channels" }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
                     Text(
-                        text = "Channels",
+                        text = "New Project",
                         fontFamily = FontFamily.Default,
-                        fontSize = 12.sp,
-                        fontWeight = if (activeTab == "channels") FontWeight.Bold else FontWeight.Normal,
-                        color = if (activeTab == "channels") TextPrimary else TextSecondary
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (activeTab == "patterns") CardHighlight else BgDark)
-                        .clickable { activeTab = "patterns" }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "Patterns",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 12.sp,
-                        fontWeight = if (activeTab == "patterns") FontWeight.Bold else FontWeight.Normal,
-                        color = if (activeTab == "patterns") TextPrimary else TextSecondary
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF0B0C0E)
                     )
                 }
             }
 
-            // ACTION BUTTON
-            when (activeTab) {
-                "projects" -> {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(ActionSolidBg)
-                                .clickable {
-                                    newProjectName = ""
-                                    selectedChannelForProject = ""
-                                    projectCreateError = null
-                                    showCreateProjectDialog = true
-                                }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Add,
-                                    contentDescription = null,
-                                    tint = ActionSolidText,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "New Project",
-                                    fontFamily = FontFamily.Default,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = ActionSolidText
-                                )
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(CardHighlight)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                .clickable {
-                                    onOpenQuickVoice?.invoke() ?: onNavigateToVoice?.invoke()
-                                }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.GraphicEq,
-                                    contentDescription = null,
-                                    tint = TextPrimary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "Quick Voice",
-                                    fontFamily = FontFamily.Default,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            }
-                        }
-                    }
-                }
-                "channels" -> {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(ActionSolidBg)
-                            .clickable {
-                                channelNameInput = ""
-                                channelAspectInput = "9:16"
-                                channelError = null
-                                showChannelDialog = true
-                            }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Add,
-                                contentDescription = null,
-                                tint = ActionSolidText,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = "New Channel",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = ActionSolidText
-                            )
-                        }
-                    }
-                }
-                else -> {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(ActionSolidBg)
-                            .clickable {
-                                newPatternName = ""
-                                newPatternAspect = "9:16"
-                                patternCreateError = null
-                                showCreatePatternDialog = true
-                            }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Add,
-                                contentDescription = null,
-                                tint = ActionSolidText,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = "New Pattern",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = ActionSolidText
-                            )
-                        }
-                    }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF15171C))
+                    .clickable {
+                        onOpenQuickVoice?.invoke() ?: onNavigateToVoice?.invoke()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.GraphicEq,
+                        contentDescription = null,
+                        tint = Color(0xFFF2F4F8),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Quick Voice",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFFF2F4F8)
+                    )
                 }
             }
         }
@@ -622,697 +492,209 @@ fun WorkspaceScreen(
             }
         }
 
-        // CONTENT SECTION
-        if (activeTab == "channels") {
-            // ── CHANNELS VIEW ────────────────────────────────────────────────
-            LazyColumn(
+        // CONTENT SECTION (100% Pure Projects)
+        if (workspaces.isEmpty()) {
+            Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(bottom = 32.dp)
+                    .padding(horizontal = 24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (channels.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                .padding(24.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "No channels created yet. Tap + New Channel to set up a profile.",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 13.sp,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-                } else {
-                    items(channels) { chan ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                .padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = chan.name,
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(BadgeGreenBg)
-                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = chan.aspectRatio,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = BadgeGreenText
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Tempo: ${String.format(Locale.US, "%.1f", chan.dna.avgSceneDuration)}s/adegan • ${if (chan.dna.styleSummary.isNotBlank()) chan.dna.styleSummary else "Gaya dinamis"}",
-                                    fontFamily = FontFamily.Default,
-                                    fontSize = 12.sp,
-                                    color = TextSecondary
-                                )
-
-                                if (chan.dna.learnedTraits.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "DNA: ${chan.dna.learnedTraits.take(2).joinToString(" | ")}",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        color = TextMuted,
-                                        maxLines = 2
-                                    )
-                                }
-                            }
-
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable {
-                                            channelForDnaRef = chan
-                                            dnaRefTextInput = ""
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = "From Ref",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable {
-                                            channelToInspectDna = chan
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = "Inspect",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable { channelToDelete = chan }
-                                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = "Delete",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = ErrorCardText
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else if (activeTab == "patterns") {
-            // ── PATTERNS VIEW ────────────────────────────────────────────────
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(bottom = 32.dp)
-            ) {
-                if (patterns.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                .padding(24.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "No patterns created yet. Tap + New Pattern to add a rhythm template.",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 13.sp,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-                } else {
-                    items(patterns) { pat ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                .padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = pat.name,
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(BadgeGreenBg)
-                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = pat.aspectRatio,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = BadgeGreenText
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "${pat.beatsCount} Beats • ${String.format(Locale.US, "%.1f", pat.totalDuration)}s",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                    color = TextSecondary
-                                )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = pat.beats.joinToString(" → ") { "${it.role} (${String.format(Locale.US, "%.1f", it.duration)}s)" },
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    color = TextMuted
-                                )
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(CardHighlight)
-                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .clickable { patternToDelete = pat }
-                                    .padding(horizontal = 8.dp, vertical = 5.dp)
-                            ) {
-                                Text(
-                                    text = "Delete",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = ErrorCardText
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // ── PROJECTS VIEW ────────────────────────────────────────────────
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = PaddingValues(bottom = 32.dp)
-            ) {
-                item {
-                    Text(
-                        text = "Projects",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextMuted,
-                        letterSpacing = 1.sp
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF15171C)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.VideoLibrary,
+                        contentDescription = null,
+                        tint = Color(0xFF8A919E),
+                        modifier = Modifier.size(26.dp)
                     )
                 }
-
-                if (workspaces.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                .padding(20.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "No projects yet. Tap + New Project to start.",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 13.sp,
-                                color = TextSecondary
-                            )
-                        }
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                    text = "No projects yet",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFFF2F4F8)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Tap + New Project or ask Agent to start.",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = Color(0xFF8A919E)
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 32.dp)
+            ) {
+                items(workspaces) { ws ->
+                    val isActive = ws.name == activeWorkspace
+                    val matchedChannel = channels.find { it.id == ws.channelId }
+                    val stageIdx = when (ws.stage.lowercase(Locale.US)) {
+                        "voice", "audio" -> 1
+                        "visual", "scenes" -> 2
+                        "export", "render", "done" -> 3
+                        else -> 0
                     }
-                } else {
-                    items(workspaces) { ws ->
-                        val isActive = ws.name == activeWorkspace
-                        val matchedChannel = channels.find { it.id == ws.channelId }
-                        val stageIdx = when (ws.stage.lowercase(Locale.US)) {
-                            "voice", "audio" -> 1
-                            "visual", "scenes" -> 2
-                            "export", "render", "done" -> 3
-                            else -> 0
-                        }
-                        val stageNames = listOf("Script", "Voice", "Visual", "Export")
+                    val stageNames = listOf("Script", "Voice", "Visual", "Export")
 
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isActive) CardHighlight else SurfaceCard)
-                                .border(1.dp, if (isActive) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
-                                .clickable {
-                                    LinuxRuntimeManager.setActiveWorkspace(ws.name)
-                                    onOpenProject?.invoke(ws.name) ?: run {
-                                        selectedProjectForBoard = ws.name
-                                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isActive) Color(0xFF1E2128) else Color(0xFF15171C))
+                            .clickable {
+                                LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                onOpenProject?.invoke(ws.name) ?: run {
+                                    selectedProjectForBoard = ws.name
                                 }
-                                .padding(14.dp)
+                            }
+                            .padding(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Row 1: Title + Active Badge + Aspect Ratio + Delete Icon
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f, fill = false)
                             ) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f, fill = false)
-                                ) {
-                                    Text(
-                                        text = ws.name,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                    if (isActive) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(BadgeGreenBg)
-                                                .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = "Active",
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = BadgeGreenText
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    StudioBadge(text = ws.aspectRatio, isAccent = true)
+                                Text(
+                                    text = ws.name,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFF2F4F8)
+                                )
+                                if (isActive) {
                                     Box(
                                         modifier = Modifier
-                                            .size(28.dp)
                                             .clip(RoundedCornerShape(4.dp))
-                                            .clickable { workspaceToDelete = ws },
-                                        contentAlignment = Alignment.Center
+                                            .background(BadgeGreenBg)
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.Delete,
-                                            contentDescription = "Delete",
-                                            tint = StudioDangerRed,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Row 2: 4 Progress Dots (Script, Voice, Visual, Export)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                stageNames.forEachIndexed { idx, stageName ->
-                                    val isDoneOrActive = idx <= stageIdx
-                                    val dotColor = if (isDoneOrActive) StudioSage else TextMuted
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(6.dp)
-                                                .clip(CircleShape)
-                                                .background(dotColor)
-                                        )
                                         Text(
-                                            text = stageName,
+                                            text = "Active",
                                             fontFamily = FontFamily.Monospace,
-                                            fontSize = 11.sp,
-                                            fontWeight = if (isDoneOrActive) FontWeight.Medium else FontWeight.Normal,
-                                            color = if (isDoneOrActive) TextPrimary else TextMuted
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = BadgeGreenText
                                         )
                                     }
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // Row 3: Meta info (Channel, files count)
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (matchedChannel != null) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(3.dp))
-                                            .background(SurfaceCard)
-                                            .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
-                                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                                    ) {
-                                        Text(
-                                            text = matchedChannel.name,
-                                            fontFamily = FontFamily.Default,
-                                            fontSize = 10.sp,
-                                            color = TextSecondary
-                                        )
-                                    }
-                                } else if (ws.channelId.isNotBlank()) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(3.dp))
-                                            .background(SurfaceCard)
-                                            .border(1.dp, BorderSubtle, RoundedCornerShape(3.dp))
-                                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                                    ) {
-                                        Text(
-                                            text = "Unlinked",
-                                            fontFamily = FontFamily.Default,
-                                            fontSize = 10.sp,
-                                            color = TextMuted
-                                        )
-                                    }
-                                }
-
-                                Text(
-                                    text = "${ws.filesCount} files",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    color = TextMuted
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // SECTION: FILES IN ACTIVE PROJECT
-                item {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (activeWorkspace.isNotBlank()) "Files in $activeWorkspace" else "Project Files",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextMuted,
-                            letterSpacing = 1.sp
-                        )
-
-                        if (activeWorkspace.isNotBlank()) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                StudioBadge(text = ws.aspectRatio, isAccent = true)
                                 Box(
                                     modifier = Modifier
+                                        .size(28.dp)
                                         .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable { loadWorkspaceFiles(activeWorkspace) }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        .clickable { workspaceToDelete = ws },
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Text(
-                                        text = "Refresh",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(ActionSolidBg)
-                                        .clickable { importLauncher.launch("*/*") }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = "+ Import",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = ActionSolidText
+                                    Icon(
+                                        imageVector = Icons.Outlined.Delete,
+                                        contentDescription = "Delete",
+                                        tint = StudioDangerRed,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
                         }
-                    }
-                }
 
-                if (currentFiles.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                .padding(20.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "No files in this project yet. Import media or prompt Agent tab.",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 12.sp,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-                } else {
-                    items(currentFiles) { file ->
-                        val categoryBadgeBg = when (file.category) {
-                            "scripts" -> CardHighlight
-                            "audio" -> BadgeGreenBg
-                            "output" -> ActionSolidBg
-                            else -> SurfaceCard
-                        }
-                        val categoryBadgeText = when (file.category) {
-                            "scripts" -> TextPrimary
-                            "audio" -> BadgeGreenText
-                            "output" -> ActionSolidText
-                            else -> TextSecondary
-                        }
-                        val sizeKb = file.size / 1024
-                        val sizeStr = if (sizeKb > 1024) String.format(Locale.US, "%.1f MB", sizeKb / 1024.0) else "$sizeKb KB"
-                        val isText = isTextFile(file.name)
-                        val isMedia = isMediaFile(file.name)
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        if (isText) previewTextFile(file)
-                                        else if (isMedia) openMediaFile(file)
-                                    }
-                            ) {
+                            stageNames.forEachIndexed { idx, stageName ->
+                                val isDoneOrActive = idx <= stageIdx
+                                val dotColor = if (isDoneOrActive) StudioSage else Color(0xFF8A919E)
                                 Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = file.name,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TextPrimary
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(dotColor)
                                     )
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(categoryBadgeBg)
-                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = file.category.uppercase(),
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = categoryBadgeText
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "${file.relPath} • $sizeStr",
-                                    fontFamily = FontFamily.Default,
-                                    fontSize = 11.sp,
-                                    color = TextSecondary
-                                )
-                            }
-
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (isText) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(CardHighlight)
-                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                            .clickable { previewTextFile(file) }
-                                            .padding(horizontal = 8.dp, vertical = 5.dp)
-                                    ) {
-                                        Text(
-                                            text = "Read",
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = TextPrimary
-                                        )
-                                    }
-                                } else if (isMedia) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(CardHighlight)
-                                            .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                            .clickable { openMediaFile(file) }
-                                            .padding(horizontal = 8.dp, vertical = 5.dp)
-                                    ) {
-                                        Text(
-                                            text = "Open",
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = TextPrimary
-                                        )
-                                    }
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable { exportFile(file) }
-                                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                                ) {
                                     Text(
-                                        text = "Export",
+                                        text = stageName,
                                         fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable { fileToDelete = file }
-                                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = "Delete",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = ErrorCardText
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isDoneOrActive) FontWeight.Medium else FontWeight.Normal,
+                                        color = if (isDoneOrActive) Color(0xFFF2F4F8) else Color(0xFF8A919E)
                                     )
                                 }
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (matchedChannel != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(Color(0xFF1E2128))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = matchedChannel.name,
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 10.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+                            } else if (ws.channelId.isNotBlank()) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(Color(0xFF1E2128))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "Unlinked",
+                                        fontFamily = FontFamily.Default,
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF8A919E)
+                                    )
+                                }
+                            }
+
+                            Text(
+                                text = "${ws.filesCount} files",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = Color(0xFF8A919E)
+                            )
                         }
                     }
                 }

@@ -235,9 +235,8 @@ fun StudioCard(
             scaleX = scale
             scaleY = scale
         }
-        .clip(RoundedCornerShape(6.dp))
+        .clip(RoundedCornerShape(8.dp))
         .background(StudioSurface)
-        .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
         .animateContentSize()
 
     val finalModifier = if (onClick != null) {

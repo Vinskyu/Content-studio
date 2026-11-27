@@ -110,6 +110,8 @@ data class ChatMessageItem(
     val isUser: Boolean,
     val text: String,
     val isStreaming: Boolean = false,
+    val processSteps: List<String> = emptyList(),
+    val processDurationMs: Long = 0L,
 )
 
 data class ExtensionSkillItem(
@@ -1905,7 +1907,10 @@ object LinuxRuntimeManager {
                                 val type = obj.optString("type")
                                 val text = obj.optString("text", "")
                                 when (type) {
-                                    "status" -> onStatus(text)
+                                    "status" -> {
+                                        val stepLabel = text.ifBlank { obj.optString("step", "") }
+                                        if (stepLabel.isNotBlank()) onStatus(stepLabel)
+                                    }
                                     "delta" -> onDelta(text)
                                     "done" -> {
                                         finished = true

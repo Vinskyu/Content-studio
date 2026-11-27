@@ -220,6 +220,9 @@ object ChatController {
         activeJob?.cancel()
         activeJob = null
         LinuxRuntimeManager.stopChat()
+        val startMs = _thinkingStartTimeMs.value
+        val durationMs = if (startMs != null) (System.currentTimeMillis() - startMs).coerceAtLeast(0L) else 0L
+        val recordedSteps = _thinkingSteps.value
         _isStreaming.value = false
         _liveStatus.value = ""
         _thinkingStartTimeMs.value = null
@@ -227,7 +230,11 @@ object ChatController {
         val lastIdx = current.indexOfLast { !it.isUser && it.isStreaming }
         if (lastIdx != -1) {
             val last = current[lastIdx]
-            current[lastIdx] = last.copy(isStreaming = false)
+            current[lastIdx] = last.copy(
+                isStreaming = false,
+                processSteps = recordedSteps,
+                processDurationMs = durationMs
+            )
             _messages.value = current
         }
     }
@@ -296,9 +303,10 @@ object ChatController {
 
         clearError()
         lastFailedPrompt = cleanPrompt
-        _thinkingStartTimeMs.value = System.currentTimeMillis()
-        _thinkingSteps.value = listOf("Menghubungkan ke studio engine...")
-        _liveStatus.value = "Menghubungkan..."
+        val startMs = System.currentTimeMillis()
+        _thinkingStartTimeMs.value = startMs
+        _thinkingSteps.value = emptyList()
+        _liveStatus.value = "Menghubungkan engine lokal"
 
         val userItem = ChatMessageItem(
             isUser = true,
@@ -347,10 +355,12 @@ object ChatController {
                     activeConnection = conn
                 },
                 onStatus = { st ->
-                    _liveStatus.value = st
                     val cleanSt = st.trim()
-                    if (cleanSt.isNotEmpty() && _thinkingSteps.value.lastOrNull() != cleanSt) {
-                        _thinkingSteps.value = _thinkingSteps.value + cleanSt
+                    if (cleanSt.isNotEmpty()) {
+                        _liveStatus.value = cleanSt
+                        if (_thinkingSteps.value.lastOrNull() != cleanSt) {
+                            _thinkingSteps.value = _thinkingSteps.value + cleanSt
+                        }
                     }
                 },
                 onDelta = { delta ->
@@ -369,6 +379,8 @@ object ChatController {
                 onDone = { finalText ->
                     activeConnection = null
                     lastFailedPrompt = null
+                    val durationMs = (System.currentTimeMillis() - startMs).coerceAtLeast(0L)
+                    val recordedSteps = _thinkingSteps.value
                     val resolved = if (finalText.isNotBlank()) finalText else responseBuilder.toString()
                     val currentList = _messages.value.toMutableList()
                     val idx = currentList.indexOfLast { it.id == assistantId }
@@ -376,6 +388,8 @@ object ChatController {
                         currentList[idx] = currentList[idx].copy(
                             text = resolved.ifBlank { "Selesai tanpa output teks." },
                             isStreaming = false,
+                            processSteps = recordedSteps,
+                            processDurationMs = durationMs
                         )
                         _messages.value = currentList
                     }

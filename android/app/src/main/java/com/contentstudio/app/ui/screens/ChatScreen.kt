@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,6 +54,7 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
@@ -880,7 +882,9 @@ fun ChatScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 8.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
@@ -892,7 +896,7 @@ fun ChatScreen(
 
                 ToolStatusRow("Project & Script Engine", "Active", StudioSage)
                 ToolStatusRow("Voice & Render Engine", "Active", StudioSage)
-                ToolStatusRow("Stock Media Search", "Phase 2 / MCP", TextMuted)
+                ToolStatusRow("Stock Media Search", "Not Configured", TextMuted)
 
                 Spacer(modifier = Modifier.height(6.dp))
                 StudioPrimaryButton(
@@ -903,7 +907,6 @@ fun ChatScreen(
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }
@@ -1124,6 +1127,7 @@ private fun AgentMessageView(
     onUseAsScript: (String) -> Unit
 ) {
     var copied by remember { mutableStateOf(false) }
+    var traceExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -1136,6 +1140,64 @@ private fun AgentMessageView(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        if (!message.isStreaming && message.processSteps.isNotEmpty()) {
+            val secStr = String.format(Locale.US, "%.1fs", message.processDurationMs / 1000.0)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MatteSurface)
+                    .clickable { traceExpanded = !traceExpanded }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Processed in $secStr · ${message.processSteps.size} steps",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextMuted
+                    )
+                    Icon(
+                        imageVector = if (traceExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+                        contentDescription = "Toggle Process Steps",
+                        tint = TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                AnimatedVisibility(visible = traceExpanded) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        message.processSteps.forEach { step ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Check,
+                                    contentDescription = null,
+                                    tint = StudioSage,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = step,
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         SelectionContainer {
             LightweightMarkdownBody(
                 text = message.text,
@@ -1358,7 +1420,7 @@ private fun LiveThinkingCard(
     liveStatus: String,
     steps: List<String>
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(true) }
     var elapsedMs by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(startTimeMs) {
@@ -1413,7 +1475,8 @@ private fun LiveThinkingCard(
                 Text(
                     text = liveStatus.ifBlank { "Memproses..." },
                     fontSize = 12.sp,
-                    color = TextSecondary,
+                    fontWeight = FontWeight.Medium,
+                    color = TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1430,7 +1493,7 @@ private fun LiveThinkingCard(
                     color = TextMuted
                 )
                 Icon(
-                    imageVector = if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    imageVector = if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
                     contentDescription = "Toggle Steps",
                     tint = TextMuted,
                     modifier = Modifier.size(16.dp)
@@ -1442,15 +1505,48 @@ private fun LiveThinkingCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                    .padding(top = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                steps.forEach { step ->
-                    Text(
-                        text = "• $step",
-                        fontSize = 11.sp,
-                        color = TextMuted
-                    )
+                steps.forEachIndexed { idx, step ->
+                    val isLatest = (idx == steps.lastIndex)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (isLatest) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .alpha(dotAlpha)
+                                        .clip(CircleShape)
+                                        .background(StudioAccent)
+                                )
+                            }
+                            Text(
+                                text = step,
+                                fontSize = 11.sp,
+                                color = TextPrimary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Outlined.Check,
+                                contentDescription = null,
+                                tint = StudioSage,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = step,
+                                fontSize = 11.sp,
+                                color = TextMuted
+                            )
+                        }
+                    }
                 }
             }
         }

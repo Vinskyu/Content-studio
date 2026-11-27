@@ -79,10 +79,10 @@ enum class StudioRoom(
     val icon: ImageVector,
     val isPrimaryGroup: Boolean = true
 ) {
-    PROJECTS("projects", "Projects", "Workspaces & Productions", Icons.Outlined.Folder, true),
+    PROJECTS("projects", "Projects", "Video Productions", Icons.Outlined.Folder, true),
     AGENT("agent", "Agent", "AI Director & Scripting", Icons.Outlined.AutoAwesome, true),
-    LIBRARY("library", "Library", "Channels DNA & Patterns", Icons.Outlined.CollectionsBookmark, true),
-    EXTENSIONS("extensions", "Skills & MCP", "Agent Tools & Extensions", Icons.Outlined.Extension, false)
+    LIBRARY("library", "Library", "Channels, Templates & Media", Icons.Outlined.CollectionsBookmark, true),
+    EXTENSIONS("extensions", "Skills & MCP", "Tools & Extensions", Icons.Outlined.Extension, false)
 }
 
 @Composable
@@ -132,50 +132,11 @@ fun MainStudioScreen(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Studio V2.2",
+                            text = "V3.2",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                             color = TextMuted
                         )
-                    }
-
-                    Spacer(modifier = Modifier.height(18.dp))
-
-                    // Active Workspace Pill
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(StudioSurfaceElevated)
-                            .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(StudioAccent)
-                            )
-                            Column {
-                                Text(
-                                    text = "Active Workspace",
-                                    fontFamily = FontFamily.Default,
-                                    fontSize = 10.sp,
-                                    color = TextMuted
-                                )
-                                Text(
-                                    text = activeWorkspace.ifBlank { "default" },
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
-                                )
-                            }
-                        }
                     }
 
                     Spacer(modifier = Modifier.height(20.dp))
@@ -465,7 +426,6 @@ fun MainStudioScreen(
                                         .size(36.dp)
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(StudioSecondary)
-                                        .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
                                         .clickable { coroutineScope.launch { drawerState.open() } },
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -477,21 +437,13 @@ fun MainStudioScreen(
                                     )
                                 }
 
-                                Column {
-                                    Text(
-                                        text = activeRoom.title,
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TextPrimary
-                                    )
-                                    Text(
-                                        text = activeWorkspace.ifBlank { "default" },
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        color = TextMuted
-                                    )
-                                }
+                                Text(
+                                    text = activeRoom.title,
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary
+                                )
                             }
 
                             if (isStreaming && activeRoom != StudioRoom.AGENT) {

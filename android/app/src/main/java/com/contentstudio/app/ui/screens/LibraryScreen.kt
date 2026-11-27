@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,12 +15,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -40,36 +43,46 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import com.contentstudio.app.runtime.ChannelDna
+import com.contentstudio.app.runtime.ChannelProfile
 import com.contentstudio.app.runtime.LibraryAssetItem
 import com.contentstudio.app.runtime.LinuxRuntimeManager
+import com.contentstudio.app.runtime.PatternBeat
+import com.contentstudio.app.runtime.PatternItem
 import com.contentstudio.app.runtime.WorkspaceSummary
-import com.contentstudio.app.ui.theme.StudioTopBar
-import com.contentstudio.app.ui.theme.StudioSegmentedControl
-import com.contentstudio.app.ui.theme.StudioTextField
-import com.contentstudio.app.ui.theme.StudioPrimaryButton
 import com.contentstudio.app.ui.theme.ActionSolidBg
 import com.contentstudio.app.ui.theme.ActionSolidText
-import com.contentstudio.app.ui.theme.BgDark
-import com.contentstudio.app.ui.theme.BorderSubtle
-import com.contentstudio.app.ui.theme.CardHighlight
+import com.contentstudio.app.ui.theme.BadgeGreenText
+import com.contentstudio.app.ui.theme.ErrorCardBg
 import com.contentstudio.app.ui.theme.ErrorCardText
 import com.contentstudio.app.ui.theme.StudioDangerRed
+import com.contentstudio.app.ui.theme.StudioPrimaryButton
+import com.contentstudio.app.ui.theme.StudioSecondaryButton
+import com.contentstudio.app.ui.theme.StudioTextField
 import com.contentstudio.app.ui.theme.SurfaceCard
+import com.contentstudio.app.ui.theme.TextMuted
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private val LibMatteBg = Color(0xFF0B0C0E)
+private val LibMatteCard = Color(0xFF15171C)
+private val LibMatteElevated = Color(0xFF1E2128)
 
 @Composable
 fun LibraryScreen(
@@ -79,15 +92,113 @@ fun LibraryScreen(
     val scope = rememberCoroutineScope()
 
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
+    var activeTab by remember { mutableStateOf("channels") } // "channels", "templates", "media"
+
+    // Media state
     var selectedCategory by remember { mutableStateOf("all") }
     var searchQuery by remember { mutableStateOf("") }
     val assets = remember { mutableStateListOf<LibraryAssetItem>() }
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
+    var assetToUse by remember { mutableStateOf<LibraryAssetItem?>(null) }
+    var assetToDelete by remember { mutableStateOf<LibraryAssetItem?>(null) }
+
+    // Channels state
+    val channels = remember { mutableStateListOf<ChannelProfile>() }
+    var expandedChannelId by remember { mutableStateOf<String?>(null) }
+    var showChannelDialog by remember { mutableStateOf(false) }
+    var channelNameInput by remember { mutableStateOf("") }
+    var channelAspectInput by remember { mutableStateOf("9:16") }
+    var channelError by remember { mutableStateOf<String?>(null) }
+    var channelToDelete by remember { mutableStateOf<ChannelProfile?>(null) }
+    var channelToInspectDna by remember { mutableStateOf<ChannelProfile?>(null) }
+
+    // Templates (Patterns) state
+    val templates = remember { mutableStateListOf<PatternItem>() }
+    var showCreateTemplateDialog by remember { mutableStateOf(false) }
+    var newTemplateName by remember { mutableStateOf("") }
+    var newTemplateAspect by remember { mutableStateOf("9:16") }
+    var templateCreateError by remember { mutableStateOf<String?>(null) }
+    var templateToDelete by remember { mutableStateOf<PatternItem?>(null) }
+    var applyTemplateTarget by remember { mutableStateOf<PatternItem?>(null) }
 
     var isBusy by remember { mutableStateOf(false) }
     var actionStatus by remember { mutableStateOf<String?>(null) }
-    var assetToUse by remember { mutableStateOf<LibraryAssetItem?>(null) }
-    var assetToDelete by remember { mutableStateOf<LibraryAssetItem?>(null) }
+
+    fun refreshChannels() {
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.listChannels()
+            val arr = res.optJSONArray("channels") ?: return@launch
+            val list = mutableListOf<ChannelProfile>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val dnaObj = obj.optJSONObject("dna")
+                val traitsArr = dnaObj?.optJSONArray("learned_traits")
+                val traits = mutableListOf<String>()
+                if (traitsArr != null) {
+                    for (j in 0 until traitsArr.length()) {
+                        traits.add(traitsArr.optString(j, ""))
+                    }
+                }
+                list.add(
+                    ChannelProfile(
+                        id = obj.optString("id", ""),
+                        name = obj.optString("name", ""),
+                        aspectRatio = obj.optString("aspect_ratio", "9:16"),
+                        dna = ChannelDna(
+                            avgSceneDuration = dnaObj?.optDouble("avg_scene_duration", 3.5) ?: 3.5,
+                            pacingWpm = dnaObj?.optInt("pacing_wpm", 145) ?: 145,
+                            preferredVoice = dnaObj?.optString("preferred_voice", "id-ID-ArdiNeural") ?: "id-ID-ArdiNeural",
+                            visualRules = dnaObj?.optString("visual_rules", "") ?: "",
+                            subtitleStyle = dnaObj?.optString("subtitle_style", "bottom_bold") ?: "bottom_bold",
+                            styleSummary = dnaObj?.optString("style_summary", "") ?: "",
+                            referenceNotes = dnaObj?.optString("reference_notes", "") ?: "",
+                            learnedTraits = traits
+                        )
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                channels.clear()
+                channels.addAll(list)
+            }
+        }
+    }
+
+    fun refreshTemplates() {
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.listPatterns()
+            val arr = res.optJSONArray("patterns") ?: return@launch
+            val list = mutableListOf<PatternItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val beatsArr = obj.optJSONArray("beats")
+                val beats = mutableListOf<PatternBeat>()
+                if (beatsArr != null) {
+                    for (j in 0 until beatsArr.length()) {
+                        val b = beatsArr.getJSONObject(j)
+                        beats.add(
+                            PatternBeat(
+                                role = b.optString("role", "Beat"),
+                                durationSec = b.optDouble("duration", 3.0)
+                            )
+                        )
+                    }
+                }
+                list.add(
+                    PatternItem(
+                        id = obj.optString("id", ""),
+                        name = obj.optString("name", ""),
+                        aspectRatio = obj.optString("aspect_ratio", "9:16"),
+                        beats = beats
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                templates.clear()
+                templates.addAll(list)
+            }
+        }
+    }
 
     fun refreshAssets() {
         scope.launch(Dispatchers.IO) {
@@ -138,9 +249,14 @@ fun LibraryScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        refreshChannels()
+        refreshTemplates()
+        loadWorkspaces()
+    }
+
     LaunchedEffect(selectedCategory) {
         refreshAssets()
-        loadWorkspaces()
     }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -188,27 +304,6 @@ fun LibraryScreen(
         }
     }
 
-    fun copyAssetToActiveWorkspace(asset: LibraryAssetItem, targetWorkspace: String) {
-        isBusy = true
-        actionStatus = "Copying ${asset.name} to $targetWorkspace..."
-        scope.launch(Dispatchers.IO) {
-            val res = LinuxRuntimeManager.copyLibraryAssetToWorkspace(
-                category = asset.category,
-                name = asset.name,
-                workspace = targetWorkspace
-            )
-            withContext(Dispatchers.Main) {
-                isBusy = false
-                if (res.optString("status") == "ok") {
-                    val rel = res.optString("rel_path", asset.name)
-                    actionStatus = "Copied to $targetWorkspace/$rel"
-                } else {
-                    actionStatus = "Failed to copy: ${res.optString("error", "Error")}"
-                }
-            }
-        }
-    }
-
     fun copyAssetToTargetWorkspace(targetWorkspace: String) {
         val asset = assetToUse ?: return
         isBusy = true
@@ -241,10 +336,10 @@ fun LibraryScreen(
                 isBusy = false
                 assetToDelete = null
                 if (res.optString("status") == "ok") {
-                    actionStatus = "Aset berhasil dihapus: ${asset.name}"
+                    actionStatus = "Asset deleted: ${asset.name}"
                     refreshAssets()
                 } else {
-                    actionStatus = "Gagal menghapus: ${res.optString("error", "Error")}"
+                    actionStatus = "Failed to delete: ${res.optString("error", "Error")}"
                 }
             }
         }
@@ -257,44 +352,91 @@ fun LibraryScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(BgDark)
+            .background(LibMatteBg)
     ) {
-        // CATEGORY SEGMENTED CONTROL, SEARCH & IMPORT
-        Column(
+        // 1. TOP 3-TAB BAR: Channels | Templates | Media (matte, no 1dp border)
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            val categories = listOf("All", "Video", "Audio", "Image")
-            val catKeys = listOf("all", "video", "audio", "image")
-            val selectedIdx = catKeys.indexOf(selectedCategory).coerceAtLeast(0)
-
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(LibMatteCard)
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    StudioSegmentedControl(
-                        options = categories,
-                        selectedIndex = selectedIdx,
-                        onSelect = { selectedCategory = catKeys[it] }
-                    )
+                listOf("channels" to "Channels", "templates" to "Templates", "media" to "Media").forEach { (key, label) ->
+                    val selected = activeTab == key
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (selected) LibMatteElevated else Color.Transparent)
+                            .clickable { activeTab = key }
+                            .padding(vertical = 7.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (selected) TextPrimary else TextMuted
+                        )
+                    }
                 }
-                StudioPrimaryButton(
-                    text = "Import",
-                    onClick = { importLauncher.launch("*/*") },
-                    height = 36.dp
-                )
             }
 
-            StudioTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = "Search assets...",
-                singleLine = true
-            )
+            // Contextual primary action button
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFF2F4F8))
+                    .clickable {
+                        when (activeTab) {
+                            "channels" -> {
+                                channelNameInput = ""
+                                channelAspectInput = "9:16"
+                                channelError = null
+                                showChannelDialog = true
+                            }
+                            "templates" -> {
+                                newTemplateName = ""
+                                newTemplateAspect = "9:16"
+                                templateCreateError = null
+                                showCreateTemplateDialog = true
+                            }
+                            else -> importLauncher.launch("*/*")
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = null,
+                        tint = Color(0xFF0B0C0E),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = when (activeTab) {
+                            "channels" -> "Channel"
+                            "templates" -> "Template"
+                            else -> "Import"
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF0B0C0E)
+                    )
+                }
+            }
         }
 
         // STATUS BANNER
@@ -302,155 +444,433 @@ fun LibraryScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(CardHighlight)
+                    .background(LibMatteElevated)
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = actionStatus ?: "",
-                    fontFamily = FontFamily.Default,
                     fontSize = 11.sp,
                     color = TextPrimary
                 )
             }
         }
 
-        // ASSET LIST
-        if (filteredAssets.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "No assets found in Library.",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 13.sp,
-                    color = TextSecondary
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = 32.dp)
-            ) {
-                items(filteredAssets) { asset ->
-                    val ext = asset.name.substringAfterLast('.', "").uppercase().take(4)
-                    val sizeKb = asset.size / 1024
-                    val sizeStr = if (sizeKb > 1024) String.format(Locale.US, "%.1f MB", sizeKb / 1024.0) else "$sizeKb KB"
-                    val dateStr = if (asset.mtime > 0) {
-                        SimpleDateFormat("dd MMM HH:mm", Locale.getDefault()).format(Date(asset.mtime))
-                    } else ""
-
-                    Row(
+        // TAB BODY
+        when (activeTab) {
+            "channels" -> {
+                if (channels.isEmpty()) {
+                    Box(
                         modifier = Modifier
+                            .weight(1f)
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(SurfaceCard)
-                            .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = ext.ifBlank { asset.category.uppercase() },
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                }
-                                Text(
-                                    text = asset.name,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary,
-                                    maxLines = 1
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "${asset.category.uppercase()} • $sizeStr • $dateStr",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 11.sp,
-                                color = TextSecondary
-                            )
-                        }
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
+                        Text(
+                            text = "No channels created yet. Tap + Channel to set up a profile.",
+                            fontSize = 13.sp,
+                            color = TextMuted
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 32.dp)
+                    ) {
+                        items(channels) { chan ->
+                            val isExpanded = (expandedChannelId == chan.id)
+                            val dna = chan.dna
+                            Column(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(CardHighlight)
-                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .clickable { openAssetFile(asset) }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = "Open",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(ActionSolidBg)
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(LibMatteCard)
                                     .clickable {
-                                        if (activeWorkspace.isNotBlank()) {
-                                            copyAssetToActiveWorkspace(asset, activeWorkspace)
-                                        } else {
-                                            actionStatus = "No active project. Select a project in Studio first."
+                                        expandedChannelId = if (isExpanded) null else chan.id
+                                    }
+                                    .padding(14.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = chan.name,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = TextPrimary
+                                        )
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = "${chan.aspectRatio} | Scene Avg ${dna.avgSceneDuration}s | ${dna.pacingWpm} WPM",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            color = TextMuted
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(LibMatteElevated)
+                                                .clickable { channelToInspectDna = chan }
+                                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = "DNA",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                color = TextPrimary
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .clickable { channelToDelete = chan },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Delete,
+                                                contentDescription = "Delete",
+                                                tint = StudioDangerRed,
+                                                modifier = Modifier.size(16.dp)
+                                            )
                                         }
                                     }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                }
+
+                                if (isExpanded) {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(LibMatteElevated)
+                                            .padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "Voice: ${dna.preferredVoice} | Subtitles: ${dna.subtitleStyle}",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            color = TextSecondary
+                                        )
+                                        if (dna.learnedTraits.isNotEmpty()) {
+                                            dna.learnedTraits.forEach { trait ->
+                                                Text(
+                                                    text = "• $trait",
+                                                    fontSize = 11.sp,
+                                                    color = BadgeGreenText
+                                                )
+                                            }
+                                        } else {
+                                            Text(
+                                                text = "Learned Traits: None yet (evolves from your edits)",
+                                                fontSize = 11.sp,
+                                                color = TextMuted
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "templates" -> {
+                if (templates.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No templates created yet. Tap + Template to add a rhythm template.",
+                            fontSize = 13.sp,
+                            color = TextMuted
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 32.dp)
+                    ) {
+                        items(templates) { tpl ->
+                            val totalDur = tpl.beats.sumOf { it.durationSec }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(LibMatteCard)
+                                    .padding(14.dp)
                             ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = tpl.name,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = TextPrimary
+                                        )
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = "${tpl.aspectRatio} | ${tpl.beats.size} beats | ${String.format(Locale.US, "%.1f", totalDur)}s",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            color = TextMuted
+                                        )
+                                    }
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(Color(0xFFF2F4F8))
+                                                .clickable { applyTemplateTarget = tpl }
+                                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Apply",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF0B0C0E)
+                                            )
+                                        }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .clickable { templateToDelete = tpl },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Delete,
+                                                contentDescription = "Delete",
+                                                tint = StudioDangerRed,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
                                 Text(
-                                    text = "Use",
+                                    text = tpl.beats.joinToString(" -> ") { "${it.role} (${it.durationSec}s)" },
                                     fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = ActionSolidText
+                                    fontSize = 11.sp,
+                                    color = TextSecondary
                                 )
                             }
+                        }
+                    }
+                }
+            }
+            else -> {
+                // MEDIA TAB: Filter chips + Search + Assets list
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val categories = listOf("All", "Video", "Audio", "Image")
+                        val catKeys = listOf("all", "video", "audio", "image")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(LibMatteCard)
+                                .padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            categories.forEachIndexed { idx, label ->
+                                val key = catKeys[idx]
+                                val selected = selectedCategory == key
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (selected) LibMatteElevated else Color.Transparent)
+                                        .clickable { selectedCategory = key }
+                                        .padding(vertical = 6.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (selected) TextPrimary else TextMuted
+                                    )
+                                }
+                            }
+                        }
 
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(CardHighlight)
-                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .clickable { assetToDelete = asset },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Delete,
-                                    contentDescription = "Delete",
-                                    tint = StudioDangerRed,
-                                    modifier = Modifier.size(16.dp)
-                                )
+                        StudioTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = "Search media assets...",
+                            singleLine = true
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (filteredAssets.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No media assets found.",
+                                fontSize = 13.sp,
+                                color = TextMuted
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(bottom = 32.dp)
+                        ) {
+                            items(filteredAssets) { asset ->
+                                val ext = asset.name.substringAfterLast('.', "").uppercase().take(4)
+                                val sizeKb = asset.size / 1024
+                                val sizeStr = if (sizeKb > 1024) String.format(Locale.US, "%.1f MB", sizeKb / 1024.0) else "$sizeKb KB"
+                                val dateStr = if (asset.mtime > 0) {
+                                    SimpleDateFormat("dd MMM HH:mm", Locale.getDefault()).format(Date(asset.mtime))
+                                } else ""
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(LibMatteCard)
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(LibMatteElevated)
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = ext.ifBlank { asset.category.uppercase() },
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = TextPrimary
+                                                )
+                                            }
+                                            Text(
+                                                text = asset.name,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = TextPrimary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "${asset.category.uppercase()} • $sizeStr • $dateStr",
+                                            fontSize = 11.sp,
+                                            color = TextMuted
+                                        )
+                                    }
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(LibMatteElevated)
+                                                .clickable { openAssetFile(asset) }
+                                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Open",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = TextPrimary
+                                            )
+                                        }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(Color(0xFFF2F4F8))
+                                                .clickable { assetToUse = asset }
+                                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Use",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF0B0C0E)
+                                            )
+                                        }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .clickable { assetToDelete = asset },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Delete,
+                                                contentDescription = "Delete",
+                                                tint = StudioDangerRed,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -459,56 +879,320 @@ fun LibraryScreen(
         }
     }
 
-    // DIALOG: SELECT WORKSPACE TO USE ASSET
-    if (assetToUse != null) {
-        val asset = assetToUse!!
+    // ── DIALOGS FOR CHANNELS ─────────────────────────────────────────────────
+    if (showChannelDialog) {
         AlertDialog(
-            onDismissRequest = { assetToUse = null },
+            onDismissRequest = { if (!isBusy) showChannelDialog = false },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(8.dp),
             title = {
-                Text(
-                    text = "Use Asset in Project",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
+                Text("New Channel", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
             },
             text = {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Select project to copy \"${asset.name}\":",
-                        fontFamily = FontFamily.Default,
+                        text = "Set up a channel identity. Channel DNA evolves automatically from project edits.",
                         fontSize = 12.sp,
                         color = TextSecondary
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    if (workspaces.isEmpty()) {
-                        Text(
-                            text = "No projects found. Create a project in Projects tab first.",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 12.sp,
-                            color = ErrorCardText
-                        )
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            workspaces.forEach { ws ->
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(SurfaceCard)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable { copyAssetToTargetWorkspace(ws.name) }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                ) {
-                                    Text(
-                                        text = ws.name,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
+                    StudioTextField(
+                        value = channelNameInput,
+                        onValueChange = { channelNameInput = it },
+                        placeholder = "Channel name",
+                        singleLine = true
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("9:16", "16:9").forEach { ratio ->
+                            val isSel = channelAspectInput == ratio
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isSel) LibMatteElevated else LibMatteCard)
+                                    .clickable { channelAspectInput = ratio }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = ratio,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    color = if (isSel) TextPrimary else TextMuted
+                                )
+                            }
+                        }
+                    }
+                    if (!channelError.isNullOrBlank()) {
+                        Text(text = channelError ?: "", color = ErrorCardText, fontSize = 11.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                StudioPrimaryButton(
+                    text = "Create",
+                    onClick = {
+                        val name = channelNameInput.trim()
+                        if (name.isBlank()) {
+                            channelError = "Channel name cannot be empty"
+                            return@StudioPrimaryButton
+                        }
+                        isBusy = true
+                        channelError = null
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.createChannel(name = name, aspectRatio = channelAspectInput)
+                            withContext(Dispatchers.Main) {
+                                isBusy = false
+                                if (res.optString("status") == "ok") {
+                                    showChannelDialog = false
+                                    refreshChannels()
+                                    actionStatus = "Channel '$name' created"
+                                } else {
+                                    channelError = res.optString("error", "Failed to create channel")
                                 }
+                            }
+                        }
+                    }
+                )
+            },
+            dismissButton = {
+                StudioSecondaryButton(text = "Cancel", onClick = { showChannelDialog = false })
+            }
+        )
+    }
+
+    if (channelToInspectDna != null) {
+        val chan = channelToInspectDna!!
+        AlertDialog(
+            onDismissRequest = { channelToInspectDna = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            title = {
+                Text("DNA Profile: ${chan.name}", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Tempo: ${String.format(Locale.US, "%.1f", chan.dna.avgSceneDuration)}s / scene | ${chan.dna.pacingWpm} WPM",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = chan.dna.styleSummary.ifBlank { "No style summary yet" },
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+                    if (chan.dna.learnedTraits.isNotEmpty()) {
+                        chan.dna.learnedTraits.forEach { trait ->
+                            Text(text = "• $trait", fontSize = 11.sp, color = BadgeGreenText)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                StudioPrimaryButton(text = "Close", onClick = { channelToInspectDna = null })
+            }
+        )
+    }
+
+    if (channelToDelete != null) {
+        val targetChan = channelToDelete!!
+        AlertDialog(
+            onDismissRequest = { channelToDelete = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            title = { Text("Delete Channel", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = ErrorCardText) },
+            text = { Text("Delete channel \"${targetChan.name}\" permanently?", fontSize = 13.sp, color = TextPrimary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val toDel = targetChan.id
+                        val delName = targetChan.name
+                        channelToDelete = null
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.deleteChannel(toDel)
+                            withContext(Dispatchers.Main) {
+                                if (res.optString("status") == "ok") {
+                                    actionStatus = "Channel '$delName' deleted"
+                                    refreshChannels()
+                                } else {
+                                    actionStatus = "Failed to delete channel"
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorCardBg, contentColor = ErrorCardText)
+                ) {
+                    Text("Delete", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                StudioSecondaryButton(text = "Cancel", onClick = { channelToDelete = null })
+            }
+        )
+    }
+
+    // ── DIALOGS FOR TEMPLATES ────────────────────────────────────────────────
+    if (showCreateTemplateDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isBusy) showCreateTemplateDialog = false },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            title = { Text("New Rhythm Template", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Create a reusable pacing template initialized with 4 standard beats.",
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+                    StudioTextField(
+                        value = newTemplateName,
+                        onValueChange = { newTemplateName = it },
+                        placeholder = "Template name",
+                        singleLine = true
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("9:16", "16:9").forEach { ratio ->
+                            val isSel = newTemplateAspect == ratio
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isSel) LibMatteElevated else LibMatteCard)
+                                    .clickable { newTemplateAspect = ratio }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = ratio,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    color = if (isSel) TextPrimary else TextMuted
+                                )
+                            }
+                        }
+                    }
+                    if (!templateCreateError.isNullOrBlank()) {
+                        Text(text = templateCreateError ?: "", color = ErrorCardText, fontSize = 11.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                StudioPrimaryButton(
+                    text = "Create",
+                    onClick = {
+                        val name = newTemplateName.trim()
+                        if (name.isBlank()) {
+                            templateCreateError = "Template name cannot be empty"
+                            return@StudioPrimaryButton
+                        }
+                        isBusy = true
+                        templateCreateError = null
+                        val defaultBeats = JSONArray().apply {
+                            put(JSONObject().apply { put("role", "Hook"); put("duration", 2.5) })
+                            put(JSONObject().apply { put("role", "Setup"); put("duration", 4.0) })
+                            put(JSONObject().apply { put("role", "Twist"); put("duration", 4.0) })
+                            put(JSONObject().apply { put("role", "Close"); put("duration", 2.5) })
+                        }
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.createPattern(name = name, aspectRatio = newTemplateAspect, beatsJsonArray = defaultBeats)
+                            withContext(Dispatchers.Main) {
+                                isBusy = false
+                                if (res.optString("status") == "ok") {
+                                    showCreateTemplateDialog = false
+                                    refreshTemplates()
+                                    actionStatus = "Template '$name' created"
+                                } else {
+                                    templateCreateError = res.optString("error", "Failed to create template")
+                                }
+                            }
+                        }
+                    }
+                )
+            },
+            dismissButton = {
+                StudioSecondaryButton(text = "Cancel", onClick = { showCreateTemplateDialog = false })
+            }
+        )
+    }
+
+    if (templateToDelete != null) {
+        val targetTpl = templateToDelete!!
+        AlertDialog(
+            onDismissRequest = { templateToDelete = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            title = { Text("Delete Template", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = ErrorCardText) },
+            text = { Text("Delete template \"${targetTpl.name}\" permanently?", fontSize = 13.sp, color = TextPrimary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val toDel = targetTpl.id
+                        val delName = targetTpl.name
+                        templateToDelete = null
+                        scope.launch(Dispatchers.IO) {
+                            val res = LinuxRuntimeManager.deletePattern(toDel)
+                            withContext(Dispatchers.Main) {
+                                if (res.optString("status") == "ok") {
+                                    actionStatus = "Template '$delName' deleted"
+                                    refreshTemplates()
+                                } else {
+                                    actionStatus = "Failed to delete template"
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorCardBg, contentColor = ErrorCardText)
+                ) {
+                    Text("Delete", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                StudioSecondaryButton(text = "Cancel", onClick = { templateToDelete = null })
+            }
+        )
+    }
+
+    if (applyTemplateTarget != null) {
+        val targetTpl = applyTemplateTarget!!
+        AlertDialog(
+            onDismissRequest = { applyTemplateTarget = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            title = { Text("Apply Template", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose a project for \"${targetTpl.name}\":", fontSize = 12.sp, color = TextSecondary)
+                    if (workspaces.isEmpty()) {
+                        Text("No projects available.", fontSize = 12.sp, color = ErrorCardText)
+                    } else {
+                        workspaces.forEach { ws ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(LibMatteElevated)
+                                    .clickable {
+                                        applyTemplateTarget = null
+                                        scope.launch(Dispatchers.IO) {
+                                            val res = LinuxRuntimeManager.applyPatternToWorkspace(targetTpl.id, ws.name)
+                                            withContext(Dispatchers.Main) {
+                                                actionStatus = if (res.optString("status") == "ok") {
+                                                    "Template applied to ${ws.name}"
+                                                } else {
+                                                    "Failed to apply template"
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Text(ws.name, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TextPrimary)
                             }
                         }
                     }
@@ -516,58 +1200,73 @@ fun LibraryScreen(
             },
             confirmButton = {},
             dismissButton = {
-                Button(
-                    onClick = { assetToUse = null },
-                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceCard)
-                ) {
-                    Text("Cancel", color = TextPrimary)
-                }
-            },
-            containerColor = BgDark,
-            tonalElevation = 6.dp
+                StudioSecondaryButton(text = "Cancel", onClick = { applyTemplateTarget = null })
+            }
         )
     }
 
-    // DIALOG: CONFIRM DELETE
+    // ── DIALOGS FOR MEDIA ASSETS ─────────────────────────────────────────────
+    if (assetToUse != null) {
+        val asset = assetToUse!!
+        AlertDialog(
+            onDismissRequest = { if (!isBusy) assetToUse = null },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            title = { Text("Copy Asset to Project", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Copy \"${asset.name}\" to project:", fontSize = 12.sp, color = TextSecondary)
+                    if (workspaces.isEmpty()) {
+                        Text("No projects available. Create a project first.", fontSize = 12.sp, color = ErrorCardText)
+                    } else {
+                        workspaces.forEach { ws ->
+                            val isActive = ws.name == activeWorkspace
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isActive) LibMatteElevated else LibMatteCard)
+                                    .clickable { copyAssetToTargetWorkspace(ws.name) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = if (isActive) "${ws.name} (Active)" else ws.name,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                StudioSecondaryButton(text = "Cancel", onClick = { assetToUse = null })
+            }
+        )
+    }
+
     if (assetToDelete != null) {
         val asset = assetToDelete!!
         AlertDialog(
             onDismissRequest = { assetToDelete = null },
-            title = {
-                Text(
-                    text = "Delete Asset",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-            },
-            text = {
-                Text(
-                    text = "Are you sure you want to delete \"${asset.name}\" from the Library?",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 13.sp,
-                    color = TextSecondary
-                )
-            },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            title = { Text("Delete Asset", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = ErrorCardText) },
+            text = { Text("Delete \"${asset.name}\" permanently from library?", fontSize = 13.sp, color = TextPrimary) },
             confirmButton = {
                 Button(
                     onClick = { confirmDeleteAsset() },
-                    colors = ButtonDefaults.buttonColors(containerColor = CardHighlight)
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorCardBg, contentColor = ErrorCardText)
                 ) {
-                    Text("Delete", color = ErrorCardText, fontWeight = FontWeight.Bold)
+                    Text("Delete", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                Button(
-                    onClick = { assetToDelete = null },
-                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceCard)
-                ) {
-                    Text("Cancel", color = TextPrimary)
-                }
-            },
-            containerColor = BgDark,
-            tonalElevation = 6.dp
+                StudioSecondaryButton(text = "Cancel", onClick = { assetToDelete = null })
+            }
         )
     }
 }
