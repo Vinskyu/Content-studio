@@ -444,14 +444,15 @@ fun MainStudioScreen(
                             .fillMaxSize()
                             .background(StudioBg)
                     ) {
-                        // SLIM 1-ROW TOP BAR (52.dp)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                                .background(StudioBg)
-                                .border(0.5.dp, StudioBorder, RoundedCornerShape(0.dp))
-                                .padding(horizontal = 14.dp),
+                        // SLIM 1-ROW TOP BAR (52.dp) — hidden in AGENT room because ChatScreen provides its own single 52dp top bar
+                        if (activeRoom != StudioRoom.AGENT) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .background(StudioBg)
+                                    .border(0.5.dp, StudioBorder, RoundedCornerShape(0.dp))
+                                    .padding(horizontal = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -522,6 +523,7 @@ fun MainStudioScreen(
                                 }
                             }
                         }
+                        }
 
                         // ROOM SWITCHING ANIMATION
                         AnimatedContent(
@@ -539,7 +541,10 @@ fun MainStudioScreen(
                                     onOpenProject = { activeProject = it },
                                     onOpenQuickVoice = { isQuickVoiceOpen = true }
                                 )
-                                StudioRoom.AGENT -> ChatScreen()
+                                StudioRoom.AGENT -> ChatScreen(
+                                    onOpenSidebar = { coroutineScope.launch { drawerState.open() } },
+                                    onNavigateToExtensions = { activeRoom = StudioRoom.EXTENSIONS }
+                                )
                                 StudioRoom.LIBRARY -> LibraryScreen()
                                 StudioRoom.EXTENSIONS -> ExtensionsScreen()
                             }

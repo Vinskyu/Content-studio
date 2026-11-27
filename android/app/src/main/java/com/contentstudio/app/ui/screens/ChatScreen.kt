@@ -1,48 +1,64 @@
 package com.contentstudio.app.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
@@ -50,7 +66,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,7 +76,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -67,1114 +87,1403 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.contentstudio.app.runtime.ChatController
+import com.contentstudio.app.runtime.ChatMessageItem
 import com.contentstudio.app.runtime.LinuxRuntimeManager
 import com.contentstudio.app.runtime.WorkspaceSummary
-import com.contentstudio.app.ui.theme.ActionSolidBg
-import com.contentstudio.app.ui.theme.ActionSolidText
-import com.contentstudio.app.ui.theme.BadgeGreenBg
-import com.contentstudio.app.ui.theme.BadgeGreenText
-import com.contentstudio.app.ui.theme.BgDark
-import com.contentstudio.app.ui.theme.BorderSubtle
-import com.contentstudio.app.ui.theme.CardHighlight
-import com.contentstudio.app.ui.theme.ErrorCardBg
-import com.contentstudio.app.ui.theme.ErrorCardBorder
-import com.contentstudio.app.ui.theme.ErrorCardText
-import com.contentstudio.app.ui.theme.InputContainerBg
-import com.contentstudio.app.ui.theme.InputContainerBorder
-import com.contentstudio.app.ui.theme.ProgressBarFill
-import com.contentstudio.app.ui.theme.ProgressBarTrack
-import com.contentstudio.app.ui.theme.SurfaceCard
+import com.contentstudio.app.ui.theme.StudioAccent
+import com.contentstudio.app.ui.theme.StudioBg
+import com.contentstudio.app.ui.theme.StudioBorder
+import com.contentstudio.app.ui.theme.StudioDangerBg
+import com.contentstudio.app.ui.theme.StudioDangerRed
+import com.contentstudio.app.ui.theme.StudioDangerText
+import com.contentstudio.app.ui.theme.StudioPrimary
+import com.contentstudio.app.ui.theme.StudioPrimaryButton
+import com.contentstudio.app.ui.theme.StudioPrimaryText
+import com.contentstudio.app.ui.theme.StudioSage
+import com.contentstudio.app.ui.theme.StudioSecondaryButton
+import com.contentstudio.app.ui.theme.StudioSurface
+import com.contentstudio.app.ui.theme.StudioSurfaceElevated
+import com.contentstudio.app.ui.theme.StudioTextField
 import com.contentstudio.app.ui.theme.TextMuted
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
-import com.contentstudio.app.ui.theme.UserBubbleBg
-import com.contentstudio.app.ui.theme.UserBubbleBorder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-@Composable
-fun MarkdownFormattedLine(line: String, modifier: Modifier = Modifier) {
-    val annotated = remember(line) {
-        buildAnnotatedString {
-            var i = 0
-            while (i < line.length) {
-                if (line.startsWith("**", i)) {
-                    val next = line.indexOf("**", i + 2)
-                    if (next != -1) {
-                        pushStyle(SpanStyle(fontWeight = FontWeight.Bold, color = TextPrimary))
-                        append(line.substring(i + 2, next))
-                        pop()
-                        i = next + 2
-                        continue
-                    }
-                } else if (line.startsWith("`", i)) {
-                    val next = line.indexOf("`", i + 1)
-                    if (next != -1) {
-                        pushStyle(
-                            SpanStyle(
-                                fontFamily = FontFamily.Monospace,
-                                background = CardHighlight,
-                                color = TextPrimary
-                            )
-                        )
-                        append(" ${line.substring(i + 1, next)} ")
-                        pop()
-                        i = next + 1
-                        continue
-                    }
-                }
-                append(line[i])
-                i++
-            }
-        }
-    }
-
-    Text(
-        text = annotated,
-        fontFamily = FontFamily.Default,
-        fontSize = 14.sp,
-        lineHeight = 22.sp,
-        color = TextPrimary,
-        modifier = modifier
-    )
-}
-
-@Composable
-fun MarkdownContent(
-    content: String,
-    onCopyCode: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val lines = remember(content) { content.split("\n") }
-
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        var inCodeBlock = false
-        val codeBuffer = StringBuilder()
-        var codeLang = ""
-
-        for (rawLine in lines) {
-            val line = rawLine.trimEnd()
-            if (line.startsWith("```")) {
-                if (!inCodeBlock) {
-                    inCodeBlock = true
-                    codeLang = line.removePrefix("```").trim()
-                    codeBuffer.clear()
-                } else {
-                    inCodeBlock = false
-                    val codeContent = codeBuffer.toString().trimEnd()
-                    val langLabel = codeLang.ifBlank { "code" }
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(BgDark)
-                            .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(CardHighlight)
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = langLabel.uppercase(),
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextSecondary
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(SurfaceCard)
-                                    .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                    .clickable { onCopyCode(codeContent) }
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                            ) {
-                                Text(
-                                    text = "Copy",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            }
-                        }
-                        Text(
-                            text = codeContent,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            lineHeight = 18.sp,
-                            color = TextPrimary,
-                            modifier = Modifier.padding(10.dp)
-                        )
-                    }
-                    codeBuffer.clear()
-                    codeLang = ""
-                }
-                continue
-            }
-
-            if (inCodeBlock) {
-                codeBuffer.append(rawLine).append("\n")
-                continue
-            }
-
-            if (line.startsWith("### ")) {
-                Text(
-                    text = line.removePrefix("### ").trim(),
-                    fontFamily = FontFamily.Default,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary,
-                    modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
-                )
-            } else if (line.startsWith("## ")) {
-                Text(
-                    text = line.removePrefix("## ").trim(),
-                    fontFamily = FontFamily.Default,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary,
-                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
-                )
-            } else if (line.startsWith("# ")) {
-                Text(
-                    text = line.removePrefix("# ").trim(),
-                    fontFamily = FontFamily.Default,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary,
-                    modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
-                )
-            } else if (line.startsWith("- ") || line.startsWith("* ")) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(text = "•", color = TextSecondary, fontSize = 14.sp)
-                    MarkdownFormattedLine(line.substring(2).trim(), modifier = Modifier.weight(1f))
-                }
-            } else if (line.matches(Regex("^\\d+\\.\\s.*"))) {
-                val prefix = line.substringBefore(".") + "."
-                val rest = line.substringAfter(".").trim()
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(text = prefix, color = TextSecondary, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-                    MarkdownFormattedLine(rest, modifier = Modifier.weight(1f))
-                }
-            } else if (line.isBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-            } else {
-                MarkdownFormattedLine(line)
-            }
-        }
-
-        if (inCodeBlock && codeBuffer.isNotEmpty()) {
-            val unclosed = codeBuffer.toString().trimEnd()
-            Text(
-                text = unclosed,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                color = TextPrimary,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(BgDark)
-                    .padding(8.dp)
-            )
-        }
-    }
-}
+private val MatteCanvas = Color(0xFF0B0C0E)
+private val MatteSurface = Color(0xFF15171C)
+private val MatteElevated = Color(0xFF1E2128)
+private val MatteDivider = Color(0xFF262A33)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenSidebar: () -> Unit = {},
+    onNavigateToExtensions: () -> Unit = {}
 ) {
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
 
     val messages by ChatController.messages.collectAsState()
     val isStreaming by ChatController.isStreaming.collectAsState()
-    val activeSessionId by ChatController.activeSessionId.collectAsState()
     val sessions by ChatController.sessions.collectAsState()
-    val liveStatus by ChatController.liveStatus.collectAsState()
-    val errorMessage by ChatController.errorMessage.collectAsState()
-
+    val activeSessionId by ChatController.activeSessionId.collectAsState()
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
-    val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
-
-    var inputText by remember { mutableStateOf("") }
+    val lastError by ChatController.lastError.collectAsState()
+    val liveStatus by ChatController.liveStatus.collectAsState()
+    val thinkingStartMs by ChatController.thinkingStartTimeMs.collectAsState()
+    val thinkingSteps by ChatController.thinkingSteps.collectAsState()
+    val draftText by ChatController.draftText.collectAsState()
+    val pendingAttachments by ChatController.pendingAttachments.collectAsState()
     val draftPrompt by ChatController.draftPrompt.collectAsState()
-    LaunchedEffect(draftPrompt) {
-        if (draftPrompt.isNotBlank()) {
-            inputText = draftPrompt
-            ChatController.consumeDraftPrompt()
-        }
-    }
+
+    val projectsList = remember { mutableStateListOf<WorkspaceSummary>() }
+    var showProjectSheet by remember { mutableStateOf(false) }
     var showHistorySheet by remember { mutableStateOf(false) }
-    var showWorkspaceSheet by remember { mutableStateOf(false) }
-    var copiedMsgId by remember { mutableStateOf<String?>(null) }
-    var selectModalText by remember { mutableStateOf<String?>(null) }
+    var showToolsSheet by remember { mutableStateOf(false) }
+    var editMessageTarget by remember { mutableStateOf<Pair<Int, String>?>(null) }
+    var editDialogText by remember { mutableStateOf("") }
+    var scriptSavedToast by remember { mutableStateOf<String?>(null) }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "loading_line")
-    val loadingPillFraction by infiniteTransition.animateFloat(
-        initialValue = -0.3f,
-        targetValue = 1.1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1100, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "loading_pill"
-    )
+    val listState = rememberLazyListState()
 
-    fun refreshWorkspacesList() {
-        scope.launch(Dispatchers.IO) {
-            val res = LinuxRuntimeManager.listWorkspaces()
-            val arr = res.optJSONArray("workspaces") ?: return@launch
-            val list = mutableListOf<WorkspaceSummary>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                list.add(
-                    WorkspaceSummary(
-                        name = obj.optString("name"),
-                        path = obj.optString("path"),
-                        filesCount = obj.optInt("files_count", 0),
-                        updatedAt = obj.optLong("updated_at", 0L)
-                    )
-                )
-            }
-            withContext(Dispatchers.Main) {
-                workspaces.clear()
-                workspaces.addAll(list)
-            }
+    val attachLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val label = uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { uri.toString() } ?: uri.toString()
+            ChatController.addAttachment(label)
         }
     }
 
     LaunchedEffect(Unit) {
         ChatController.ensureInitialized()
-        refreshWorkspacesList()
-    }
-
-    LaunchedEffect(copiedMsgId) {
-        if (copiedMsgId != null) {
-            kotlinx.coroutines.delay(1500)
-            copiedMsgId = null
+        withContext(Dispatchers.IO) {
+            val loaded = LinuxRuntimeManager.listWorkspaces()
+            withContext(Dispatchers.Main) {
+                projectsList.clear()
+                projectsList.addAll(loaded)
+            }
         }
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    LaunchedEffect(draftPrompt) {
+        if (draftPrompt.isNotBlank()) {
+            val consumed = ChatController.consumeDraftPrompt()
+            if (consumed.isNotBlank()) {
+                ChatController.updateDraft(consumed)
+            }
+        }
+    }
+
+    LaunchedEffect(scriptSavedToast) {
+        if (scriptSavedToast != null) {
+            delay(2200)
+            scriptSavedToast = null
+        }
+    }
+
+    val isNearBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val total = layoutInfo.totalItemsCount
+            if (total <= 1) return@derivedStateOf true
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible >= total - 2
+        }
+    }
+
+    LaunchedEffect(messages.size, messages.lastOrNull()?.text?.length, isStreaming) {
+        if (messages.isNotEmpty() && isNearBottom) {
+            listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
+    fun sendCurrentInput() {
+        val text = draftText.trim()
+        if (text.isEmpty() || isStreaming) return
+        val attachmentsPrefix = if (pendingAttachments.isNotEmpty()) {
+            "Lampiran: " + pendingAttachments.joinToString(", ") + "\n\n"
+        } else {
+            ""
+        }
+        val sent = ChatController.sendMessage(attachmentsPrefix + text, activeWorkspace)
+        if (sent) {
+            ChatController.updateDraft("")
+            ChatController.clearAttachments()
         }
     }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(BgDark)
+            .background(MatteCanvas)
+            .imePadding()
     ) {
-        // TOP BAR
+        // 1. SINGLE SLIM TOP BAR (52.dp)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceCard)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 16.dp, vertical = 11.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .height(52.dp)
+                .background(MatteCanvas)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // Left: Sidebar Menu (no border box)
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenSidebar() },
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(BadgeGreenBg)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "AI Director",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = BadgeGreenText
-                    )
-                }
-                Text(
-                    text = "${sessions.size} sessions",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 12.sp,
-                    color = TextSecondary
+                Icon(
+                    imageVector = Icons.Outlined.Menu,
+                    contentDescription = "Menu",
+                    tint = TextPrimary,
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
+            // Center: Active Project Pill
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MatteSurface)
+                    .clickable {
+                        scope.launch(Dispatchers.IO) {
+                            val loaded = LinuxRuntimeManager.listWorkspaces()
+                            withContext(Dispatchers.Main) {
+                                projectsList.clear()
+                                projectsList.addAll(loaded)
+                                showProjectSheet = true
+                            }
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Folder,
+                        contentDescription = null,
+                        tint = if (activeWorkspace.isNotBlank()) StudioAccent else TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = activeWorkspace.ifBlank { "No Project" },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (activeWorkspace.isNotBlank()) TextPrimary else TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 160.dp)
+                    )
+                    Icon(
+                        imageVector = Icons.Outlined.ExpandMore,
+                        contentDescription = "Switch Project",
+                        tint = TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            // Right: New Chat & History (no border box)
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(CardHighlight)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .clickable { ChatController.startNewSession(activeWorkspace) }
-                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            ChatController.startNewSession(activeWorkspace)
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Add,
-                            contentDescription = null,
-                            tint = TextPrimary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "New",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary,
-                            softWrap = false,
-                            maxLines = 1
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = "New Chat",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
-
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(CardHighlight)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(8.dp))
                         .clickable {
                             ChatController.refreshSessions()
                             showHistorySheet = true
-                        }
-                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.History,
-                            contentDescription = null,
-                            tint = TextPrimary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "History",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary,
-                            softWrap = false,
-                            maxLines = 1
-                        )
-                    }
-                }
-            }
-        }
-
-        // SUB-BAR: PROJECT SELECTOR
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(BgDark)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (activeWorkspace.isNotBlank()) "Project: $activeWorkspace" else "No active project",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (activeWorkspace.isNotBlank()) TextPrimary else TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(CardHighlight)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                        .clickable {
-                            refreshWorkspacesList()
-                            showWorkspaceSheet = true
-                        }
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "Switch",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                    Icon(
+                        imageVector = Icons.Outlined.History,
+                        contentDescription = "History",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
+        }
 
-            if (isStreaming && liveStatus.isNotBlank()) {
+        // Thin 1dp divider
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(MatteDivider)
+        )
+
+        // Toast confirmation for script saved
+        AnimatedVisibility(visible = scriptSavedToast != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MatteSurface)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
                 Text(
-                    text = liveStatus,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = BadgeGreenText,
-                    maxLines = 1,
-                    softWrap = false
+                    text = scriptSavedToast ?: "",
+                    fontSize = 12.sp,
+                    color = StudioSage
                 )
             }
         }
 
-        // CHAT THREAD
+        // 2. CHAT BODY (Messages or Empty State)
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            if (messages.isEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Content Studio Agent",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Enter production instructions or script briefs below.",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 13.sp,
-                        color = TextSecondary
-                    )
-                }
+            if (messages.isEmpty() && !isStreaming) {
+                GuidedEmptyState(
+                    onSelectAction = { prompt ->
+                        ChatController.sendMessage(prompt, activeWorkspace)
+                    }
+                )
             } else {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                        .padding(horizontal = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(messages, key = { it.id }) { msg ->
+                    item { Spacer(modifier = Modifier.height(8.dp)) }
+
+                    itemsIndexed(
+                        items = messages,
+                        key = { index, item -> "${item.id}_$index" }
+                    ) { index, msg ->
                         if (msg.isUser) {
-                            // USER MESSAGE BUBBLE
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .widthIn(max = 310.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(UserBubbleBg)
-                                        .border(1.dp, UserBubbleBorder, RoundedCornerShape(8.dp))
-                                        .padding(horizontal = 13.dp, vertical = 10.dp)
-                                ) {
-                                    Text(
-                                        text = msg.text,
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 14.sp,
-                                        lineHeight = 20.sp,
-                                        color = TextPrimary
-                                    )
+                            val lastUserIdx = messages.indexOfLast { it.isUser }
+                            UserMessageBubble(
+                                message = msg,
+                                isLastUserMessage = (index == lastUserIdx),
+                                onCopy = {
+                                    clipboardManager.setText(AnnotatedString(msg.text))
+                                },
+                                onEdit = {
+                                    editMessageTarget = Pair(index, msg.text)
+                                    editDialogText = msg.text
+                                },
+                                onUndo = {
+                                    ChatController.undoLastUserMessage()
                                 }
-                            }
+                            )
                         } else {
-                            // ASSISTANT MESSAGE CARD
-                            val isPureError = msg.text.trim().startsWith("Error:") || msg.text.trim().startsWith("ERR:")
-
-                            if (isPureError) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(ErrorCardBg)
-                                        .border(1.dp, ErrorCardBorder, RoundedCornerShape(6.dp))
-                                        .padding(13.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "System Error",
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = ErrorCardText
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(SurfaceCard)
-                                                .clickable {
-                                                    clipboardManager.setText(AnnotatedString(msg.text))
-                                                    copiedMsgId = msg.id
-                                                }
-                                                .padding(horizontal = 7.dp, vertical = 3.dp)
-                                        ) {
-                                            Text(
-                                                text = if (copiedMsgId == msg.id) "Copied" else "Copy",
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 10.sp,
-                                                color = TextPrimary
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = msg.text,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 12.sp,
-                                        lineHeight = 18.sp,
-                                        color = ErrorCardText
-                                    )
-                                }
-                            } else {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "Antigravity",
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = BadgeGreenText
-                                        )
-                                    }
-
-                                    MarkdownContent(
-                                        content = msg.text.ifBlank { "..." },
-                                        onCopyCode = { code ->
-                                            clipboardManager.setText(AnnotatedString(code))
-                                        }
-                                    )
-
-                                    if (msg.isStreaming) {
-                                        BoxWithConstraints(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(2.dp)
-                                                .background(ProgressBarTrack)
-                                        ) {
-                                            val w = maxWidth
-                                            val pillWidth = w * 0.35f
-                                            val pillOffset = (w * loadingPillFraction).coerceIn(0.dp, w - pillWidth)
-                                            Box(
-                                                modifier = Modifier
-                                                    .offset(x = pillOffset)
-                                                    .width(pillWidth)
-                                                    .fillMaxHeight()
-                                                    .background(ProgressBarFill)
-                                            )
-                                        }
-                                    }
-
-                                    // Action buttons row: Copy and Select
-                                    if (!msg.isStreaming && msg.text.isNotBlank()) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.End,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(4.dp))
-                                                        .background(CardHighlight)
-                                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                                        .clickable {
-                                                            clipboardManager.setText(AnnotatedString(msg.text))
-                                                            copiedMsgId = msg.id
-                                                        }
-                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                                ) {
-                                                    Text(
-                                                        text = if (copiedMsgId == msg.id) "Copied" else "Copy",
-                                                        fontFamily = FontFamily.Monospace,
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = TextPrimary
-                                                    )
-                                                }
-
-                                                Box(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(4.dp))
-                                                        .background(CardHighlight)
-                                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                                        .clickable { selectModalText = msg.text }
-                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "Select",
-                                                        fontFamily = FontFamily.Monospace,
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = TextPrimary
-                                                    )
+                            val lastAgentIdx = messages.indexOfLast { !it.isUser }
+                            AgentMessageView(
+                                message = msg,
+                                isLastAgentMessage = (index == lastAgentIdx),
+                                hasActiveProject = activeWorkspace.isNotBlank(),
+                                onCopy = { textToCopy ->
+                                    clipboardManager.setText(AnnotatedString(textToCopy))
+                                },
+                                onRegenerate = {
+                                    ChatController.regenerateLastResponse(activeWorkspace)
+                                },
+                                onUseAsScript = { scriptText ->
+                                    if (activeWorkspace.isNotBlank()) {
+                                        scope.launch(Dispatchers.IO) {
+                                            val ok = LinuxRuntimeManager.writeWorkspaceScript(activeWorkspace, scriptText)
+                                            withContext(Dispatchers.Main) {
+                                                scriptSavedToast = if (ok) {
+                                                    "Naskah disimpan ke proyek $activeWorkspace"
+                                                } else {
+                                                    "Gagal menyimpan naskah ke proyek"
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
+                            )
                         }
                     }
-                }
-            }
-        }
 
-        // ERROR BANNER
-        if (!errorMessage.isNullOrBlank()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(ErrorCardBg)
-                    .border(1.dp, ErrorCardBorder, RoundedCornerShape(0.dp))
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = errorMessage ?: "",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 12.sp,
-                        color = ErrorCardText,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Box(
-                        modifier = Modifier
-                            .clickable { ChatController.clearError() }
-                            .padding(4.dp)
-                    ) {
-                        Text(text = "Dismiss", color = ErrorCardText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    if (isStreaming) {
+                        item(key = "live_thinking_card") {
+                            LiveThinkingCard(
+                                startTimeMs = thinkingStartMs,
+                                liveStatus = liveStatus,
+                                steps = thinkingSteps
+                            )
+                        }
                     }
+
+                    if (lastError != null && !isStreaming) {
+                        item(key = "inline_error_card") {
+                            InlineErrorCard(
+                                errorText = lastError ?: "Terjadi kesalahan koneksi",
+                                onRetry = {
+                                    ChatController.retryLastFailed(activeWorkspace)
+                                }
+                            )
+                        }
+                    }
+
+                    item { Spacer(modifier = Modifier.height(16.dp)) }
+                }
+            }
+
+            // Floating Jump-to-Bottom Button
+            androidx.compose.animation.AnimatedVisibility(
+                visible = messages.isNotEmpty() && !isNearBottom,
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(150)),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(MatteElevated)
+                        .clickable {
+                            scope.launch {
+                                if (messages.isNotEmpty()) {
+                                    listState.animateScrollToItem(messages.lastIndex)
+                                }
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.KeyboardArrowDown,
+                        contentDescription = "Scroll to bottom",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
         }
 
-        // INPUT BAR
-        Row(
+        // 3. MODERN COMPOSER
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceCard)
-                .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            Box(
+            Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(InputContainerBg)
-                    .border(1.dp, InputContainerBorder, RoundedCornerShape(6.dp))
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MatteSurface)
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
-                if (inputText.isEmpty()) {
-                    Text(
-                        text = "Type message or instruction...",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 13.sp,
-                        color = TextMuted
-                    )
-                }
-                BasicTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    textStyle = TextStyle(
-                        fontFamily = FontFamily.Default,
-                        fontSize = 13.sp,
-                        color = TextPrimary
-                    ),
-                    cursorBrush = SolidColor(TextPrimary),
-                    maxLines = 4,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(
-                        onSend = {
-                            if (!isStreaming && inputText.isNotBlank()) {
-                                val toSend = inputText
-                                inputText = ""
-                                ChatController.sendMessage(toSend, activeWorkspace)
+                // Pending attachment chips
+                if (pendingAttachments.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        pendingAttachments.forEach { file ->
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MatteElevated)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = file,
+                                    fontSize = 11.sp,
+                                    color = TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 140.dp)
+                                )
+                                Icon(
+                                    imageVector = Icons.Outlined.Close,
+                                    contentDescription = "Remove attachment",
+                                    tint = TextMuted,
+                                    modifier = Modifier
+                                        .size(14.dp)
+                                        .clickable { ChatController.removeAttachment(file) }
+                                )
                             }
                         }
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            if (isStreaming) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(CardHighlight)
-                        .border(1.dp, ErrorCardBorder, RoundedCornerShape(6.dp))
-                        .clickable { ChatController.stopStreaming() }
-                        .padding(horizontal = 12.dp, vertical = 9.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Stop,
-                            contentDescription = "Stop",
-                            tint = ErrorCardText,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "Stop",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = ErrorCardText
-                        )
                     }
                 }
-            } else {
-                val canSend = inputText.isNotBlank()
-                Box(
+
+                // Auto-expanding input field
+                BasicTextField(
+                    value = draftText,
+                    onValueChange = { ChatController.updateDraft(it) },
+                    textStyle = TextStyle(
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    ),
+                    cursorBrush = SolidColor(TextPrimary),
+                    maxLines = 5,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (canSend) ActionSolidBg else CardHighlight)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                        .clickable(enabled = canSend) {
-                            val toSend = inputText
-                            inputText = ""
-                            ChatController.sendMessage(toSend, activeWorkspace)
+                        .fillMaxWidth()
+                        .heightIn(min = 24.dp, max = 110.dp),
+                    decorationBox = { innerTextField ->
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            if (draftText.isEmpty()) {
+                                Text(
+                                    text = "Tulis pesan untuk AI Director...",
+                                    fontSize = 14.sp,
+                                    color = TextMuted
+                                )
+                            }
+                            innerTextField()
                         }
-                        .padding(horizontal = 14.dp, vertical = 9.dp)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Bottom Toolbar Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    // Left: Attach & Tools
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Send,
-                            contentDescription = "Send",
-                            tint = if (canSend) ActionSolidText else TextMuted,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "Send",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (canSend) ActionSolidText else TextMuted
-                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MatteElevated)
+                                .clickable { attachLauncher.launch(arrayOf("*/*")) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.AttachFile,
+                                contentDescription = "Attach File",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MatteElevated)
+                                .clickable { showToolsSheet = true }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Build,
+                                    contentDescription = "Tools",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Tools",
+                                    fontSize = 12.sp,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+                    }
+
+                    // Right: Send or Stop
+                    if (isStreaming) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(StudioDangerBg)
+                                .clickable { ChatController.stopStreaming() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Stop,
+                                contentDescription = "Stop",
+                                tint = StudioDangerRed,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    } else {
+                        val canSend = draftText.isNotBlank()
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (canSend) StudioPrimary else MatteElevated)
+                                .clickable(enabled = canSend) { sendCurrentInput() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Send,
+                                contentDescription = "Send",
+                                tint = if (canSend) StudioPrimaryText else TextMuted,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
-    // MODAL DIALOG: SELECT AND HIGHLIGHT EXACT TEXT
-    if (selectModalText != null) {
-        val modalContent = selectModalText!!
-        var modalCopied by remember { mutableStateOf(false) }
+    // ── MODAL SHEET: PROJECT SWITCHER ────────────────────────────────────────
+    if (showProjectSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showProjectSheet = false },
+            containerColor = StudioSurface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Pilih Proyek Aktif",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
 
+                // Option: No Project
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (activeWorkspace.isBlank()) MatteElevated else Color.Transparent)
+                        .clickable {
+                            LinuxRuntimeManager.setActiveWorkspace("")
+                            showProjectSheet = false
+                        }
+                        .padding(horizontal = 12.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "No Project",
+                        fontSize = 13.sp,
+                        color = if (activeWorkspace.isBlank()) TextPrimary else TextSecondary
+                    )
+                    if (activeWorkspace.isBlank()) {
+                        Icon(
+                            imageVector = Icons.Outlined.Check,
+                            contentDescription = null,
+                            tint = StudioSage,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                projectsList.forEach { proj ->
+                    val isSelected = proj.name == activeWorkspace
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSelected) MatteElevated else Color.Transparent)
+                            .clickable {
+                                LinuxRuntimeManager.setActiveWorkspace(proj.name)
+                                showProjectSheet = false
+                            }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = proj.name,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "${proj.aspectRatio} | ${proj.stage}",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = TextMuted
+                            )
+                        }
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Outlined.Check,
+                                contentDescription = null,
+                                tint = StudioSage,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+
+    // ── MODAL SHEET: SESSION HISTORY ─────────────────────────────────────────
+    if (showHistorySheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showHistorySheet = false },
+            containerColor = StudioSurface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Riwayat Sesi Chat",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "${sessions.size} sesi",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextMuted
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (sessions.isEmpty()) {
+                    Text(
+                        text = "Belum ada riwayat sesi tersimpan.",
+                        fontSize = 13.sp,
+                        color = TextMuted,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    sessions.forEach { sess ->
+                        val isCurrent = sess.id == activeSessionId
+                        val dateStr = remember(sess.updatedAt) {
+                            if (sess.updatedAt > 0L) {
+                                SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(sess.updatedAt))
+                            } else {
+                                ""
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isCurrent) MatteElevated else Color.Transparent)
+                                .clickable {
+                                    ChatController.loadSession(sess.id)
+                                    showHistorySheet = false
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = sess.title.ifBlank { "Sesi Baru" },
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${sess.messageCount} pesan" + if (dateStr.isNotEmpty()) " | $dateStr" else "",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { ChatController.deleteSession(sess.id) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = "Delete Session",
+                                    tint = StudioDangerRed,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+
+    // ── MODAL SHEET: AGENT TOOLS STATUS ──────────────────────────────────────
+    if (showToolsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showToolsSheet = false },
+            containerColor = StudioSurface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Kemampuan & Engine Agent",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+
+                ToolStatusRow("Project & Script Engine", "Active", StudioSage)
+                ToolStatusRow("Voice & Render Engine", "Active", StudioSage)
+                ToolStatusRow("Stock Media Search", "Phase 2 / MCP", TextMuted)
+
+                Spacer(modifier = Modifier.height(6.dp))
+                StudioPrimaryButton(
+                    text = "Buka Skills & MCP",
+                    onClick = {
+                        showToolsSheet = false
+                        onNavigateToExtensions()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+        }
+    }
+
+    // ── DIALOG: EDIT & RESEND ────────────────────────────────────────────────
+    val editTarget = editMessageTarget
+    if (editTarget != null) {
         AlertDialog(
-            onDismissRequest = { selectModalText = null },
-            containerColor = SurfaceCard,
-            shape = RoundedCornerShape(6.dp),
+            onDismissRequest = { editMessageTarget = null },
+            containerColor = StudioSurface,
+            shape = RoundedCornerShape(10.dp),
             title = {
                 Text(
-                    text = "Select Text",
-                    fontFamily = FontFamily.Default,
+                    text = "Edit & Kirim Ulang",
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     color = TextPrimary
                 )
             },
             text = {
-                Box(
+                StudioTextField(
+                    value = editDialogText,
+                    onValueChange = { editDialogText = it },
+                    placeholder = "Ubah pesan...",
+                    singleLine = false,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 380.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(InputContainerBg)
-                        .border(1.dp, InputContainerBorder, RoundedCornerShape(4.dp))
-                        .padding(12.dp)
-                ) {
-                    val scroll = rememberScrollState()
-                    SelectionContainer {
-                        Text(
-                            text = modalContent,
-                            fontFamily = FontFamily.Default,
-                            fontSize = 13.sp,
-                            lineHeight = 20.sp,
-                            color = TextPrimary,
-                            modifier = Modifier.verticalScroll(scroll)
-                        )
-                    }
-                }
+                        .heightIn(min = 80.dp, max = 200.dp)
+                )
             },
             confirmButton = {
-                Button(
+                StudioPrimaryButton(
+                    text = "Kirim Ulang",
                     onClick = {
-                        clipboardManager.setText(AnnotatedString(modalContent))
-                        modalCopied = true
-                    },
-                    shape = RoundedCornerShape(4.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ActionSolidBg,
-                        contentColor = ActionSolidText
-                    )
-                ) {
-                    Text(text = if (modalCopied) "Copied" else "Copy All", color = ActionSolidText)
-                }
+                        val idx = editTarget.first
+                        val updated = editDialogText
+                        editMessageTarget = null
+                        ChatController.editAndResend(idx, updated, activeWorkspace)
+                    }
+                )
             },
             dismissButton = {
-                Button(
-                    onClick = { selectModalText = null },
-                    shape = RoundedCornerShape(4.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = CardHighlight,
-                        contentColor = TextPrimary
-                    )
-                ) {
-                    Text(text = "Close", color = TextPrimary)
-                }
+                StudioSecondaryButton(
+                    text = "Batal",
+                    onClick = { editMessageTarget = null }
+                )
             }
         )
     }
+}
 
-    // BOTTOM SHEET: SESSIONS HISTORY
-    if (showHistorySheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showHistorySheet = false },
-            containerColor = SurfaceCard,
-            dragHandle = null
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 18.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+@Composable
+private fun ToolStatusRow(name: String, status: String, statusColor: Color) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MatteElevated)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = name,
+            fontSize = 13.sp,
+            color = TextPrimary
+        )
+        Text(
+            text = status,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            color = statusColor
+        )
+    }
+}
+
+@Composable
+private fun GuidedEmptyState(
+    onSelectAction: (String) -> Unit
+) {
+    val actions = listOf(
+        "Riset Ide & Niche" to "Bantu saya riset ide konten dan niche yang potensial untuk video pendek.",
+        "Buat Project Baru" to "Buatkan project baru rasio 9:16 dan siapkan struktur project.json.",
+        "Tulis / Revisi Naskah" to "Tuliskan naskah voiceover singkat 30-45 detik dengan hook kuat di 3 detik pertama.",
+        "Siapkan Visual & Scene" to "Pecah naskah menjadi daftar scene lengkap dengan prompt visual yang jelas."
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.Start
+    ) {
+        Text(
+            text = "What are we creating?",
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = TextPrimary
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "Pilih langkah cepat atau tulis instruksi langsung di bawah.",
+            fontSize = 13.sp,
+            color = TextMuted
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            actions.forEach { (title, prompt) ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MatteSurface)
+                        .clickable { onSelectAction(prompt) }
+                        .padding(horizontal = 14.dp, vertical = 14.dp)
                 ) {
                     Text(
-                        text = "Session History",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
+                        text = title,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
                         color = TextPrimary
                     )
-                    Box(
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserMessageBubble(
+    message: ChatMessageItem,
+    isLastUserMessage: Boolean,
+    onCopy: () -> Unit,
+    onEdit: () -> Unit,
+    onUndo: () -> Unit
+) {
+    var copied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1500)
+            copied = false
+        }
+    }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val maxBubbleWidth = maxWidth * 0.85f
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.End
+        ) {
+            Box(
+                modifier = Modifier
+                    .widthIn(max = maxBubbleWidth)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MatteSurface)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                SelectionContainer {
+                    Text(
+                        text = message.text,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        color = TextPrimary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy,
+                    contentDescription = "Copy",
+                    tint = if (copied) StudioSage else TextMuted,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clickable {
+                            copied = true
+                            onCopy()
+                        }
+                )
+                Icon(
+                    imageVector = Icons.Outlined.Edit,
+                    contentDescription = "Edit",
+                    tint = TextMuted,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clickable { onEdit() }
+                )
+                if (isLastUserMessage) {
+                    Icon(
+                        imageVector = Icons.Outlined.Undo,
+                        contentDescription = "Undo",
+                        tint = TextMuted,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(ActionSolidBg)
-                            .clickable {
-                                showHistorySheet = false
-                                ChatController.startNewSession(activeWorkspace)
-                            }
-                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                            .size(16.dp)
+                            .clickable { onUndo() }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentMessageView(
+    message: ChatMessageItem,
+    isLastAgentMessage: Boolean,
+    hasActiveProject: Boolean,
+    onCopy: (String) -> Unit,
+    onRegenerate: () -> Unit,
+    onUseAsScript: (String) -> Unit
+) {
+    var copied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1500)
+            copied = false
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        SelectionContainer {
+            LightweightMarkdownBody(
+                text = message.text,
+                onCopyCodeBlock = onCopy
+            )
+        }
+
+        if (!message.isStreaming && message.text.isNotBlank()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.padding(top = 2.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.clickable {
+                        copied = true
+                        onCopy(message.text)
+                    }
+                ) {
+                    Icon(
+                        imageVector = if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy,
+                        contentDescription = "Copy",
+                        tint = if (copied) StudioSage else TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = if (copied) "Copied" else "Copy",
+                        fontSize = 11.sp,
+                        color = if (copied) StudioSage else TextMuted
+                    )
+                }
+
+                if (isLastAgentMessage) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.clickable { onRegenerate() }
                     ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = "Regenerate",
+                            tint = TextMuted,
+                            modifier = Modifier.size(16.dp)
+                        )
                         Text(
-                            text = "+ New Session",
-                            fontFamily = FontFamily.Default,
+                            text = "Regenerate",
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = ActionSolidText
+                            color = TextMuted
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
-
-                if (sessions.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
+                if (hasActiveProject) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.clickable { onUseAsScript(message.text) }
                     ) {
-                        Text(text = "No history found.", color = TextSecondary, fontSize = 13.sp)
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(sessions) { ses ->
-                            val isCurrent = ses.id == activeSessionId
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isCurrent) CardHighlight else BgDark)
-                                    .border(1.dp, if (isCurrent) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
-                                    .clickable {
-                                        showHistorySheet = false
-                                        ChatController.loadSession(ses.id)
-                                    }
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = ses.title,
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    val dateStr = if (ses.updatedAt > 0) {
-                                        java.text.SimpleDateFormat("dd MMM, HH:mm", java.util.Locale.ENGLISH).format(java.util.Date(ses.updatedAt))
-                                    } else ""
-                                    Text(
-                                        text = "${ses.messageCount} messages" + if (dateStr.isNotBlank()) " • $dateStr" else "",
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 11.sp,
-                                        color = TextSecondary
-                                    )
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(CardHighlight)
-                                        .border(1.dp, BorderSubtle, RoundedCornerShape(4.dp))
-                                        .clickable { ChatController.deleteSession(ses.id) }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = "Delete",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        color = ErrorCardText
-                                    )
-                                }
-                            }
-                        }
+                        Icon(
+                            imageVector = Icons.Outlined.Description,
+                            contentDescription = "Use as Script",
+                            tint = TextMuted,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Use as Script",
+                            fontSize = 11.sp,
+                            color = TextMuted
+                        )
                     }
                 }
             }
         }
     }
+}
 
-    // BOTTOM SHEET: SWITCH WORKSPACE
-    if (showWorkspaceSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showWorkspaceSheet = false },
-            containerColor = SurfaceCard,
-            dragHandle = null
+@Composable
+private fun LightweightMarkdownBody(
+    text: String,
+    onCopyCodeBlock: (String) -> Unit
+) {
+    val lines = remember(text) { text.lines() }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        var idx = 0
+        while (idx < lines.size) {
+            val line = lines[idx]
+            val trimmed = line.trim()
+            if (trimmed.startsWith("```")) {
+                val codeLines = mutableListOf<String>()
+                idx++
+                while (idx < lines.size && !lines[idx].trim().startsWith("```")) {
+                    codeLines.add(lines[idx])
+                    idx++
+                }
+                val codeContent = codeLines.joinToString("\n")
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MatteSurface)
+                        .padding(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.ContentCopy,
+                            contentDescription = "Copy code",
+                            tint = TextMuted,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable { onCopyCodeBlock(codeContent) }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = codeContent,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                        color = TextPrimary
+                    )
+                }
+                idx++
+                continue
+            }
+
+            when {
+                trimmed.startsWith("### ") -> {
+                    Text(
+                        text = parseInlineBold(trimmed.removePrefix("### ")),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+                trimmed.startsWith("## ") -> {
+                    Text(
+                        text = parseInlineBold(trimmed.removePrefix("## ")),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+                trimmed.startsWith("# ") -> {
+                    Text(
+                        text = parseInlineBold(trimmed.removePrefix("# ")),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+                trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
+                    Row(
+                        modifier = Modifier.padding(start = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "•",
+                            fontSize = 14.sp,
+                            color = TextMuted
+                        )
+                        Text(
+                            text = parseInlineBold(trimmed.drop(2)),
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                            color = TextPrimary
+                        )
+                    }
+                }
+                trimmed.isEmpty() -> {
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                else -> {
+                    Text(
+                        text = parseInlineBold(line),
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        color = TextPrimary
+                    )
+                }
+            }
+            idx++
+        }
+    }
+}
+
+private fun parseInlineBold(line: String): AnnotatedString {
+    return buildAnnotatedString {
+        var i = 0
+        while (i < line.length) {
+            val start = line.indexOf("**", i)
+            if (start == -1) {
+                append(line.substring(i))
+                break
+            }
+            append(line.substring(i, start))
+            val end = line.indexOf("**", start + 2)
+            if (end == -1) {
+                append(line.substring(start))
+                break
+            }
+            pushStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = TextPrimary))
+            append(line.substring(start + 2, end))
+            pop()
+            i = end + 2
+        }
+    }
+}
+
+@Composable
+private fun LiveThinkingCard(
+    startTimeMs: Long?,
+    liveStatus: String,
+    steps: List<String>
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var elapsedMs by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(startTimeMs) {
+        if (startTimeMs == null) {
+            elapsedMs = 0L
+            return@LaunchedEffect
+        }
+        while (true) {
+            elapsedMs = (System.currentTimeMillis() - startTimeMs).coerceAtLeast(0L)
+            delay(100)
+        }
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "thinkingDotPulse")
+    val dotAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(700, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dotAlpha"
+    )
+
+    val timerText = String.format(Locale.US, "%.1fs", elapsedMs / 1000.0)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MatteSurface)
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .alpha(dotAlpha)
+                        .clip(CircleShape)
+                        .background(StudioAccent)
+                )
+                Text(
+                    text = liveStatus.ifBlank { "Memproses..." },
+                    fontSize = 12.sp,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = timerText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = TextMuted
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    contentDescription = "Toggle Steps",
+                    tint = TextMuted,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = expanded && steps.isNotEmpty()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 18.dp)
+                    .padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(
-                    text = "Select Project",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                Spacer(modifier = Modifier.height(14.dp))
-
-                if (workspaces.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(text = "No projects found.", color = TextSecondary, fontSize = 13.sp)
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 350.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(workspaces) { ws ->
-                            val isSel = ws.name == activeWorkspace
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isSel) CardHighlight else BgDark)
-                                    .border(1.dp, if (isSel) TextPrimary else BorderSubtle, RoundedCornerShape(6.dp))
-                                    .clickable {
-                                        LinuxRuntimeManager.setActiveWorkspace(ws.name)
-                                        showWorkspaceSheet = false
-                                    }
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = ws.name,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
-                                )
-                                if (isSel) {
-                                    Text(
-                                        text = "Active",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        color = BadgeGreenText,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                    }
+                steps.forEach { step ->
+                    Text(
+                        text = "• $step",
+                        fontSize = 11.sp,
+                        color = TextMuted
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun InlineErrorCard(
+    errorText: String,
+    onRetry: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(StudioDangerBg)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = errorText,
+            fontSize = 12.sp,
+            color = StudioDangerText,
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 10.dp)
+        )
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(MatteElevated)
+                .clickable { onRetry() }
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = "Retry",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = TextPrimary
+            )
         }
     }
 }

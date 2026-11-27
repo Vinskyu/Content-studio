@@ -1,5 +1,13 @@
 'use strict';
 
+process.on('uncaughtException', (err) => {
+  console.error('[BRIDGE_UNCAUGHT]', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[BRIDGE_UNHANDLED]', reason);
+});
+
 const http = require('http');
 const { spawn, execFile } = require('child_process');
 const util = require('util');
@@ -2479,6 +2487,8 @@ function listMcpServers() {
 // ── HTTP Router ─────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
+  req.on('error', () => {});
+  res.on('error', () => {});
   const urlObj = new URL(req.url, `http://${HOST}:${PORT}`);
   const pathname = urlObj.pathname;
 
@@ -2910,6 +2920,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (require.main === module) {
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
   server.listen(PORT, HOST, () => {
     console.log(`[studio-bridge] listening on http://${HOST}:${PORT}`);
   });

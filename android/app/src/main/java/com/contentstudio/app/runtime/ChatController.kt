@@ -30,14 +30,54 @@ object ChatController {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _lastError = MutableStateFlow<String?>(null)
+    val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
     private val _liveStatus = MutableStateFlow("")
     val liveStatus: StateFlow<String> = _liveStatus.asStateFlow()
+
+    private val _thinkingStartTimeMs = MutableStateFlow<Long?>(null)
+    val thinkingStartTimeMs: StateFlow<Long?> = _thinkingStartTimeMs.asStateFlow()
+
+    private val _thinkingSteps = MutableStateFlow<List<String>>(emptyList())
+    val thinkingSteps: StateFlow<List<String>> = _thinkingSteps.asStateFlow()
+
+    private val _draftText = MutableStateFlow("")
+    val draftText: StateFlow<String> = _draftText.asStateFlow()
+
+    private val _pendingAttachments = MutableStateFlow<List<String>>(emptyList())
+    val pendingAttachments: StateFlow<List<String>> = _pendingAttachments.asStateFlow()
 
     private val _draftPrompt = MutableStateFlow("")
     val draftPrompt: StateFlow<String> = _draftPrompt.asStateFlow()
 
+    private var lastFailedPrompt: String? = null
+    private var isInitialized = false
+    private var activeConnection: java.net.HttpURLConnection? = null
+
+    fun updateDraft(text: String) {
+        _draftText.value = text
+    }
+
+    fun addAttachment(pathOrName: String) {
+        val clean = pathOrName.trim()
+        if (clean.isEmpty()) return
+        if (!_pendingAttachments.value.contains(clean)) {
+            _pendingAttachments.value = _pendingAttachments.value + clean
+        }
+    }
+
+    fun removeAttachment(pathOrName: String) {
+        _pendingAttachments.value = _pendingAttachments.value.filter { it != pathOrName }
+    }
+
+    fun clearAttachments() {
+        _pendingAttachments.value = emptyList()
+    }
+
     fun setDraftPrompt(prompt: String) {
         _draftPrompt.value = prompt
+        _draftText.value = prompt
     }
 
     fun consumeDraftPrompt(): String {
@@ -45,9 +85,6 @@ object ChatController {
         _draftPrompt.value = ""
         return current
     }
-
-    private var isInitialized = false
-    private var activeConnection: java.net.HttpURLConnection? = null
 
     fun ensureInitialized() {
         if (isInitialized) return
@@ -57,6 +94,7 @@ object ChatController {
 
     fun clearError() {
         _errorMessage.value = null
+        _lastError.value = null
     }
 
     fun refreshSessions() {
@@ -125,6 +163,7 @@ object ChatController {
                             }
                         }
                         _messages.value = list
+                        clearError()
                     }
                 }
             } catch (_: Exception) {}
@@ -140,8 +179,10 @@ object ChatController {
                     if (sid.isNotBlank()) {
                         _activeSessionId.value = sid
                         _messages.value = emptyList()
-                        _errorMessage.value = null
+                        clearError()
                         _liveStatus.value = ""
+                        _thinkingStartTimeMs.value = null
+                        _thinkingSteps.value = emptyList()
                         refreshSessions()
                     }
                 }
@@ -181,6 +222,7 @@ object ChatController {
         LinuxRuntimeManager.stopChat()
         _isStreaming.value = false
         _liveStatus.value = ""
+        _thinkingStartTimeMs.value = null
         val current = _messages.value.toMutableList()
         val lastIdx = current.indexOfLast { !it.isUser && it.isStreaming }
         if (lastIdx != -1) {
@@ -188,6 +230,57 @@ object ChatController {
             current[lastIdx] = last.copy(isStreaming = false)
             _messages.value = current
         }
+    }
+
+    fun undoLastUserMessage(): String? {
+        if (_isStreaming.value) {
+            stopStreaming()
+        }
+        val current = _messages.value.toMutableList()
+        val lastUserIdx = current.indexOfLast { it.isUser }
+        if (lastUserIdx == -1) return null
+        val userText = current[lastUserIdx].text
+        val trimmed = current.subList(0, lastUserIdx).toList()
+        _messages.value = trimmed
+        _draftText.value = userText
+        clearError()
+        return userText
+    }
+
+    fun editAndResend(messageIndex: Int, newText: String, projectName: String?) {
+        val clean = newText.trim()
+        if (clean.isEmpty()) return
+        if (_isStreaming.value) {
+            stopStreaming()
+        }
+        val current = _messages.value
+        if (messageIndex in current.indices) {
+            _messages.value = current.subList(0, messageIndex).toList()
+        }
+        sendMessage(clean, projectName ?: "")
+    }
+
+    fun regenerateLastResponse(projectName: String?) {
+        if (_isStreaming.value) {
+            stopStreaming()
+        }
+        val current = _messages.value.toMutableList()
+        val lastUserIdx = current.indexOfLast { it.isUser }
+        if (lastUserIdx == -1) return
+        val lastUserText = current[lastUserIdx].text
+        _messages.value = current.subList(0, lastUserIdx).toList()
+        sendMessage(lastUserText, projectName ?: "")
+    }
+
+    fun retryLastFailed(projectName: String?) {
+        val prompt = lastFailedPrompt ?: _messages.value.lastOrNull { it.isUser }?.text ?: return
+        clearError()
+        val current = _messages.value.toMutableList()
+        val lastUserIdx = current.indexOfLast { it.isUser }
+        if (lastUserIdx != -1 && lastUserIdx == current.lastIndex) {
+            _messages.value = current.subList(0, lastUserIdx).toList()
+        }
+        sendMessage(prompt, projectName ?: "")
     }
 
     fun sendMessage(prompt: String, workspace: String): Boolean {
@@ -201,7 +294,10 @@ object ChatController {
             _isStreaming.value = true
         }
 
-        _errorMessage.value = null
+        clearError()
+        lastFailedPrompt = cleanPrompt
+        _thinkingStartTimeMs.value = System.currentTimeMillis()
+        _thinkingSteps.value = listOf("Menghubungkan ke studio engine...")
         _liveStatus.value = "Menghubungkan..."
 
         val userItem = ChatMessageItem(
@@ -223,6 +319,23 @@ object ChatController {
         _messages.value = updated
 
         activeJob = scope.launch {
+            val serverReady = LinuxRuntimeManager.ensureServerRunning()
+            if (!serverReady) {
+                val err = "Server lokal tidak merespons. Silakan coba lagi."
+                _errorMessage.value = err
+                _lastError.value = err
+                _isStreaming.value = false
+                _liveStatus.value = ""
+                _thinkingStartTimeMs.value = null
+                val currentList = _messages.value.toMutableList()
+                val idx = currentList.indexOfLast { it.id == assistantId }
+                if (idx != -1) {
+                    currentList.removeAt(idx)
+                    _messages.value = currentList
+                }
+                return@launch
+            }
+
             val responseBuilder = StringBuilder()
             val sid = _activeSessionId.value
 
@@ -235,6 +348,10 @@ object ChatController {
                 },
                 onStatus = { st ->
                     _liveStatus.value = st
+                    val cleanSt = st.trim()
+                    if (cleanSt.isNotEmpty() && _thinkingSteps.value.lastOrNull() != cleanSt) {
+                        _thinkingSteps.value = _thinkingSteps.value + cleanSt
+                    }
                 },
                 onDelta = { delta ->
                     responseBuilder.append(delta)
@@ -251,6 +368,7 @@ object ChatController {
                 },
                 onDone = { finalText ->
                     activeConnection = null
+                    lastFailedPrompt = null
                     val resolved = if (finalText.isNotBlank()) finalText else responseBuilder.toString()
                     val currentList = _messages.value.toMutableList()
                     val idx = currentList.indexOfLast { it.id == assistantId }
@@ -263,6 +381,7 @@ object ChatController {
                     }
                     _isStreaming.value = false
                     _liveStatus.value = ""
+                    _thinkingStartTimeMs.value = null
                     refreshSessions()
                 },
                 onError = { err ->
@@ -282,8 +401,10 @@ object ChatController {
                         _messages.value = currentList
                     }
                     _errorMessage.value = err
+                    _lastError.value = err
                     _isStreaming.value = false
                     _liveStatus.value = ""
+                    _thinkingStartTimeMs.value = null
                     refreshSessions()
                 }
             )

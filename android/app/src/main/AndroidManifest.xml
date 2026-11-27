@@ -39,6 +39,7 @@
         <service
             android:name=".runtime.RuntimeLifecycleService"
             android:exported="false"
+            android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
 
         <provider

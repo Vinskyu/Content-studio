@@ -58,21 +58,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (LinuxRuntimeManager.isReady.value && !LinuxRuntimeManager.isLoggedIn.value) {
+        if (LinuxRuntimeManager.isReady.value) {
             Thread {
-                LinuxRuntimeManager.refreshHealth()
+                LinuxRuntimeManager.ensureServerRunning(applicationContext)
             }.start()
         }
     }
 
     private fun startRuntimeService() {
         val intent = Intent(this, StudioForegroundService::class.java)
+        val lifecycleIntent = Intent(this, com.contentstudio.app.runtime.RuntimeLifecycleService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
+            startForegroundService(lifecycleIntent)
         } else {
             startService(intent)
+            startService(lifecycleIntent)
         }
-        startService(Intent(this, com.contentstudio.app.runtime.RuntimeLifecycleService::class.java))
     }
 
     private fun requestNotificationPermissionIfNeeded() {

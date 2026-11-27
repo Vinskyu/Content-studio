@@ -140,6 +140,9 @@ object LinuxRuntimeManager {
     private var proxyProcess: Process? = null
     private var bridgeProcess: Process? = null
     private var appContext: Context? = null
+    @Volatile
+    private var isIntentionalShutdown = false
+    private val restartTimestamps = mutableListOf<Long>()
 
     fun setApplicationContext(context: Context) {
         if (appContext == null) {
@@ -747,6 +750,7 @@ object LinuxRuntimeManager {
         }
 
         if (!isProcessAlive(bridgeProcess)) {
+            isIntentionalShutdown = false
             val pbBridge = ProcessBuilder(nodeBin, "${paths.homeDir}/studio-bridge.js")
             pbBridge.environment().clear()
             pbBridge.environment().putAll(env)
@@ -765,12 +769,61 @@ object LinuxRuntimeManager {
                     }
                 } catch (_: Exception) {}
             }
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val exitCode = proc.waitFor()
+                    if (!isIntentionalShutdown) {
+                        appendLog("[watchdog] Bridge exited unexpectedly (code=$exitCode).")
+                        _isServerRunning.value = false
+                        val now = System.currentTimeMillis()
+                        val shouldRestart = synchronized(restartTimestamps) {
+                            restartTimestamps.removeAll { now - it > 60_000L }
+                            if (restartTimestamps.size < 5) {
+                                restartTimestamps.add(now)
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        if (shouldRestart) {
+                            delay(800)
+                            if (!isIntentionalShutdown) {
+                                appendLog("[watchdog] Auto-reviving bridge server...")
+                                ensureServerRunning()
+                            }
+                        } else {
+                            appendLog("[watchdog] Rate limit reached (max 5 restarts/60s). Skipping auto-revive.")
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
         }
     }
 
     // ── Bridge HTTP / SSE Client ───────────────────────────────────────────────
 
-    private fun httpRequest(method: String, path: String, jsonBody: String? = null, timeoutMs: Int = 15000): JSONObject {
+    private fun httpRequest(
+        method: String,
+        path: String,
+        jsonBody: String? = null,
+        timeoutMs: Int = 15000,
+        allowRevive: Boolean = true
+    ): JSONObject {
+        return try {
+            executeHttpRequest(method, path, jsonBody, timeoutMs)
+        } catch (e: Exception) {
+            val isConnError = e is java.net.ConnectException || e is java.io.EOFException
+            if (allowRevive && isConnError && !isIntentionalShutdown) {
+                appendLog("[runtime] Connection error (${e.javaClass.simpleName}) on $path. Reviving server...")
+                if (ensureServerRunning()) {
+                    return executeHttpRequest(method, path, jsonBody, timeoutMs)
+                }
+            }
+            throw e
+        }
+    }
+
+    private fun executeHttpRequest(method: String, path: String, jsonBody: String?, timeoutMs: Int): JSONObject {
         val conn = (URL("$BRIDGE_BASE_URL$path").openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 5000
@@ -792,7 +845,7 @@ object LinuxRuntimeManager {
 
     fun refreshHealth(): JSONObject? {
         return try {
-            val res = httpRequest("GET", "/health", timeoutMs = 4000)
+            val res = httpRequest("GET", "/health", timeoutMs = 4000, allowRevive = false)
             val authOk = res.optBoolean("authenticated", false) || res.optBoolean("logged_in", false)
             _isLoggedIn.value = authOk
             val sid = res.optString("active_session_id", "")
@@ -812,6 +865,7 @@ object LinuxRuntimeManager {
     }
 
     fun shutdownServerCleanly() {
+        isIntentionalShutdown = true
         try {
             bridgeProcess?.let { proc ->
                 if (isProcessAlive(proc)) {
@@ -845,6 +899,7 @@ object LinuxRuntimeManager {
     fun ensureServerRunning(context: Context? = null): Boolean {
         val ctx = context ?: appContext ?: return false
         setApplicationContext(ctx)
+        isIntentionalShutdown = false
 
         // 1. Cek apakah bridge sudah hidup dan merespons /health
         val currentHealth = refreshHealth()
@@ -855,6 +910,7 @@ object LinuxRuntimeManager {
 
         // 2. Jika belum hidup atau mati, pastikan proses lama dibersihkan
         shutdownServerCleanly()
+        isIntentionalShutdown = false
 
         val paths = BootstrapInstaller.getPaths(ctx)
         startBackgroundNodeServers(ctx, paths)
@@ -875,11 +931,13 @@ object LinuxRuntimeManager {
         scope.launch {
             shutdownServerCleanly()
             delay(500)
+            isIntentionalShutdown = false
             ensureServerRunning(context)
         }
     }
 
     fun stopServer() {
+        isIntentionalShutdown = true
         scope.launch {
             shutdownServerCleanly()
         }
