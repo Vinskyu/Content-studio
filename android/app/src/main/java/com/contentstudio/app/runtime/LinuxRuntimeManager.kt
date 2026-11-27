@@ -50,6 +50,10 @@ data class ChannelDna(
     val learnedTraits: List<String> = emptyList(),
     val referenceNotes: String = "",
     val avgSceneDuration: Float = 3.5f,
+    val pacingWpm: Int = 145,
+    val preferredVoice: String = "id-ID-ArdiNeural",
+    val visualRules: String = "",
+    val subtitleStyle: String = "bottom_bold",
     val styleSummary: String = "",
     val voiceProfile: VoiceProfile = VoiceProfile(),
 )
@@ -118,6 +122,7 @@ data class MemoryEntry(
 
 data class ActionPlanCardData(
     val title: String,
+    val goal: String = "",
     val steps: List<String>,
     val approvePrompt: String,
     val status: String = "pending" // pending | approved | dismissed
@@ -2005,6 +2010,7 @@ object LinuxRuntimeManager {
                                     onActionPlan?.invoke(
                                         ActionPlanCardData(
                                             title = title,
+                                            goal = obj.optString("goal", ""),
                                             steps = stepsList,
                                             approvePrompt = approvePrompt,
                                             status = "pending"
@@ -2160,7 +2166,7 @@ object LinuxRuntimeManager {
                         baseItems.add("@assets/${f.name}")
                     }
                 }
-            } catch (_) {}
+            } catch (_: Exception) {}
         }
         baseItems
     }

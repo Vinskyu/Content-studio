@@ -130,7 +130,7 @@ object ChatController {
             if (plan != null && plan.status == "pending") {
                 currentList[messageIndex] = item.copy(actionPlan = plan.copy(status = "approved"))
                 _messages.value = currentList
-                sendMessage(plan.approvePrompt, projectName)
+                sendMessage(plan.approvePrompt, projectName.orEmpty())
             }
         }
     }

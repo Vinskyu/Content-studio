@@ -81,6 +81,7 @@ import com.contentstudio.app.ui.theme.ErrorCardBg
 import com.contentstudio.app.ui.theme.ErrorCardText
 import com.contentstudio.app.ui.theme.StudioDangerRed
 import com.contentstudio.app.ui.theme.StudioPrimaryButton
+import com.contentstudio.app.ui.theme.StudioSage
 import com.contentstudio.app.ui.theme.StudioSecondaryButton
 import com.contentstudio.app.ui.theme.StudioTextField
 import com.contentstudio.app.ui.theme.SurfaceCard
@@ -187,6 +188,32 @@ fun LibraryScreen(
         }
     }
 
+    fun refreshAssets() {
+        scope.launch(Dispatchers.IO) {
+            val catParam = if (selectedCategory == "all") null else selectedCategory
+            val res = LinuxRuntimeManager.listLibraryAssets(catParam)
+            val arr = res.optJSONArray("assets") ?: return@launch
+            val list = mutableListOf<LibraryAssetItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    LibraryAssetItem(
+                        name = obj.optString("name", ""),
+                        category = obj.optString("category", "other"),
+                        size = obj.optLong("size", 0L),
+                        mtime = obj.optLong("mtime", 0L),
+                        path = obj.optString("path", ""),
+                        relPath = obj.optString("rel_path", ""),
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                assets.clear()
+                assets.addAll(list)
+            }
+        }
+    }
+
     fun downloadStockItem(item: StockMediaItem) {
         downloadingUrl = item.downloadUrl
         actionStatus = "Mengunduh ${item.title.take(30)}..."
@@ -274,7 +301,7 @@ fun LibraryScreen(
                         name = obj.optString("name", ""),
                         aspectRatio = obj.optString("aspect_ratio", "9:16"),
                         dna = ChannelDna(
-                            avgSceneDuration = dnaObj?.optDouble("avg_scene_duration", 3.5) ?: 3.5,
+                            avgSceneDuration = dnaObj?.optDouble("avg_scene_duration", 3.5)?.toFloat() ?: 3.5f,
                             pacingWpm = dnaObj?.optInt("pacing_wpm", 145) ?: 145,
                             preferredVoice = dnaObj?.optString("preferred_voice", "id-ID-ArdiNeural") ?: "id-ID-ArdiNeural",
                             visualRules = dnaObj?.optString("visual_rules", "") ?: "",
@@ -308,7 +335,7 @@ fun LibraryScreen(
                         beats.add(
                             PatternBeat(
                                 role = b.optString("role", "Beat"),
-                                durationSec = b.optDouble("duration", 3.0)
+                                duration = b.optDouble("duration", 3.0).toFloat()
                             )
                         )
                     }
@@ -325,32 +352,6 @@ fun LibraryScreen(
             withContext(Dispatchers.Main) {
                 templates.clear()
                 templates.addAll(list)
-            }
-        }
-    }
-
-    fun refreshAssets() {
-        scope.launch(Dispatchers.IO) {
-            val catParam = if (selectedCategory == "all") null else selectedCategory
-            val res = LinuxRuntimeManager.listLibraryAssets(catParam)
-            val arr = res.optJSONArray("assets") ?: return@launch
-            val list = mutableListOf<LibraryAssetItem>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                list.add(
-                    LibraryAssetItem(
-                        name = obj.optString("name", ""),
-                        category = obj.optString("category", "other"),
-                        size = obj.optLong("size", 0L),
-                        mtime = obj.optLong("mtime", 0L),
-                        path = obj.optString("path", ""),
-                        relPath = obj.optString("rel_path", ""),
-                    )
-                )
-            }
-            withContext(Dispatchers.Main) {
-                assets.clear()
-                assets.addAll(list)
             }
         }
     }
@@ -784,7 +785,7 @@ fun LibraryScreen(
                         contentPadding = PaddingValues(bottom = 32.dp)
                     ) {
                         items(templates) { tpl ->
-                            val totalDur = tpl.beats.sumOf { it.durationSec }
+                            val totalDur = tpl.beats.map { it.duration }.sum()
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -853,7 +854,7 @@ fun LibraryScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
 
                                 Text(
-                                    text = tpl.beats.joinToString(" -> ") { "${it.role} (${it.durationSec}s)" },
+                                    text = tpl.beats.joinToString(" -> ") { "${it.role} (${it.duration}s)" },
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 11.sp,
                                     color = TextSecondary
@@ -1355,9 +1356,9 @@ fun LibraryScreen(
                                     .clickable {
                                         applyTemplateTarget = null
                                         scope.launch(Dispatchers.IO) {
-                                            val res = LinuxRuntimeManager.applyPatternToWorkspace(targetTpl.id, ws.name)
+                                            val res = LinuxRuntimeManager.applyPattern(ws.name, targetTpl.id)
                                             withContext(Dispatchers.Main) {
-                                                actionStatus = if (res.optString("status") == "ok") {
+                                                actionStatus = if (res.isSuccess) {
                                                     "Template applied to ${ws.name}"
                                                 } else {
                                                     "Failed to apply template"

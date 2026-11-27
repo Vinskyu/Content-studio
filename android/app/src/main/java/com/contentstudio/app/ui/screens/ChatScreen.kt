@@ -131,6 +131,7 @@ import com.contentstudio.app.ui.theme.StudioDangerText
 import com.contentstudio.app.ui.theme.StudioPrimary
 import com.contentstudio.app.ui.theme.StudioPrimaryButton
 import com.contentstudio.app.ui.theme.StudioPrimaryText
+import com.contentstudio.app.runtime.ChatSessionSummary
 import com.contentstudio.app.ui.theme.StudioSage
 import com.contentstudio.app.ui.theme.StudioSecondaryButton
 import com.contentstudio.app.ui.theme.StudioSurface
@@ -2408,13 +2409,13 @@ private fun InlineMediaPreviewDialog(
                 }
 
                 // Media Preview
-                val isVideo = media.mediaType == "video" ||
+                val isVideo = media.type == "video" ||
                         media.downloadUrl.endsWith(".mp4", ignoreCase = true) ||
                         media.downloadUrl.endsWith(".webm", ignoreCase = true) ||
                         media.downloadUrl.endsWith(".mov", ignoreCase = true) ||
                         media.provider == "ytdlp"
 
-                val isAudio = media.mediaType == "audio" ||
+                val isAudio = media.type == "audio" ||
                         media.downloadUrl.endsWith(".mp3", ignoreCase = true) ||
                         media.downloadUrl.endsWith(".wav", ignoreCase = true)
 
@@ -2472,7 +2473,7 @@ private fun InlineMediaPreviewDialog(
                             .background(MatteElevated)
                             .padding(16.dp),
                         verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterVertically
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Box(
                             modifier = Modifier
