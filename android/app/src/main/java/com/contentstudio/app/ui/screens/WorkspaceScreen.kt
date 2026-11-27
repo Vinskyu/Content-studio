@@ -381,6 +381,17 @@ fun WorkspaceScreen(
         loadWorkspaceFiles(activeWorkspace)
     }
 
+    // Auto-refresh when AI engine syncs data
+    val uiSyncVersion by LinuxRuntimeManager.uiSyncVersion.collectAsState()
+    LaunchedEffect(uiSyncVersion) {
+        if (uiSyncVersion > 0L) {
+            refreshWorkspaces()
+            refreshChannels()
+            refreshPatterns()
+        }
+    }
+
+
     if (selectedProjectForBoard != null) {
         ProjectBoardScreen(
             workspaceName = selectedProjectForBoard!!,

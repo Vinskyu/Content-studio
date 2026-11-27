@@ -57,6 +57,15 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import coil.compose.AsyncImage
+import androidx.compose.material.icons.outlined.MicNone
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Undo
@@ -147,6 +156,7 @@ fun ChatScreen(
     val liveStatus by ChatController.liveStatus.collectAsState()
     val thinkingStartMs by ChatController.thinkingStartTimeMs.collectAsState()
     val thinkingSteps by ChatController.thinkingSteps.collectAsState()
+    val chatMode by ChatController.chatMode.collectAsState()
     val draftText by ChatController.draftText.collectAsState()
     val pendingAttachments by ChatController.pendingAttachments.collectAsState()
     val draftPrompt by ChatController.draftPrompt.collectAsState()
@@ -161,12 +171,35 @@ fun ChatScreen(
 
     val listState = rememberLazyListState()
 
+    val haptic = LocalHapticFeedback.current
+    var historySearchQuery by remember { mutableStateOf("") }
+    var sessionToRename by remember { mutableStateOf<ChatSessionSummary?>(null) }
+    var renameSessionInput by remember { mutableStateOf("") }
+
+    val speechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!spoken.isNullOrBlank()) {
+                val current = ChatController.draftText.value
+                val updated = if (current.isBlank()) spoken else "$current $spoken"
+                ChatController.updateDraft(updated)
+            }
+        }
+    }
+
     val attachLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            val label = uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { uri.toString() } ?: uri.toString()
-            ChatController.addAttachment(label)
+            val localPath = LinuxRuntimeManager.copyUriToAttachmentCache(context, uri)
+            if (localPath != null) {
+                ChatController.addAttachment(localPath)
+            } else {
+                val label = uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { uri.toString() } ?: uri.toString()
+                ChatController.addAttachment(label)
+            }
         }
     }
 
@@ -177,6 +210,18 @@ fun ChatScreen(
             withContext(Dispatchers.Main) {
                 projectsList.clear()
                 projectsList.addAll(loaded)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        ChatController.uiSyncEvents.collect {
+            withContext(Dispatchers.IO) {
+                val loaded = parseWorkspacesJson(LinuxRuntimeManager.listWorkspaces())
+                withContext(Dispatchers.Main) {
+                    projectsList.clear()
+                    projectsList.addAll(loaded)
+                }
             }
         }
     }
@@ -216,15 +261,14 @@ fun ChatScreen(
     fun sendCurrentInput() {
         val text = draftText.trim()
         if (text.isEmpty() || isStreaming) return
-        val attachmentsPrefix = if (pendingAttachments.isNotEmpty()) {
-            "Lampiran: " + pendingAttachments.joinToString(", ") + "\n\n"
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        val sent = if (text.startsWith("/")) {
+            ChatController.dispatchSlashCommand(text, activeWorkspace)
         } else {
-            ""
+            ChatController.sendMessage(text, activeWorkspace)
         }
-        val sent = ChatController.sendMessage(attachmentsPrefix + text, activeWorkspace)
         if (sent) {
             ChatController.updateDraft("")
-            ChatController.clearAttachments()
         }
     }
 
@@ -506,173 +550,318 @@ fun ChatScreen(
             }
         }
 
-        // 3. MODERN COMPOSER
+        // 3. MODE SELECTOR BAR
+        val modeList = listOf(
+            "director" to "Director",
+            "scriptwriter" to "Script",
+            "researcher" to "Research",
+            "fast" to "Fast"
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 2.dp)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            modeList.forEach { (mKey, mTitle) ->
+                val isSelected = (chatMode == mKey)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (isSelected) MatteElevated else MatteSurface)
+                        .clickable { ChatController.setChatMode(mKey) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = mTitle,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isSelected) StudioPrimaryText else TextMuted
+                    )
+                }
+            }
+        }
+
+        // 4. MODERN COMPOSER PRO
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MatteSurface)
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
-                // Pending attachment chips
-                if (pendingAttachments.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        pendingAttachments.forEach { file ->
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(MatteElevated)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = file,
-                                    fontSize = 11.sp,
-                                    color = TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 140.dp)
-                                )
-                                Icon(
-                                    imageVector = Icons.Outlined.Close,
-                                    contentDescription = "Remove attachment",
-                                    tint = TextMuted,
-                                    modifier = Modifier
-                                        .size(14.dp)
-                                        .clickable { ChatController.removeAttachment(file) }
-                                )
-                            }
-                        }
-                    }
+                // Floating Slash Command Menu
+                val isSlash = draftText.startsWith("/")
+                val slashOptions = listOf(
+                    "/script" to "Tulis naskah narasi",
+                    "/scenes" to "Pecah jadi adegan",
+                    "/media" to "Cari stok footage",
+                    "/dl" to "Download media dari URL",
+                    "/hook" to "Rancang hook viral",
+                    "/publish" to "Siapkan publish kit",
+                    "/clear" to "Bersihkan riwayat chat"
+                ).filter { (cmd, _) ->
+                    if (draftText.length > 1) cmd.startsWith(draftText.trim().lowercase()) else true
                 }
 
-                // Auto-expanding input field
-                BasicTextField(
-                    value = draftText,
-                    onValueChange = { ChatController.updateDraft(it) },
-                    textStyle = TextStyle(
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        lineHeight = 20.sp
-                    ),
-                    cursorBrush = SolidColor(TextPrimary),
-                    maxLines = 5,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 24.dp, max = 110.dp),
-                    decorationBox = { innerTextField ->
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            if (draftText.isEmpty()) {
+                if (isSlash && slashOptions.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MatteSurface)
+                            .padding(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        slashOptions.forEach { (cmd, desc) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        ChatController.updateDraft("$cmd ")
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = "Tulis pesan untuk AI Director...",
-                                    fontSize = 14.sp,
+                                    text = cmd,
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = StudioPrimaryText
+                                )
+                                Text(
+                                    text = desc,
+                                    fontSize = 11.sp,
                                     color = TextMuted
                                 )
                             }
-                            innerTextField()
                         }
                     }
-                )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Bottom Toolbar Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MatteSurface)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
-                    // Left: Attach & Tools
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
+                    // Pending attachment chips
+                    if (pendingAttachments.isNotEmpty()) {
+                        Row(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MatteElevated)
-                                .clickable { attachLauncher.launch(arrayOf("*/*")) }
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.AttachFile,
-                                contentDescription = "Attach File",
-                                tint = TextSecondary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MatteElevated)
-                                .clickable { showToolsSheet = true }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Build,
-                                    contentDescription = "Tools",
-                                    tint = TextSecondary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "Tools",
-                                    fontSize = 12.sp,
-                                    color = TextSecondary
-                                )
+                            pendingAttachments.forEach { file ->
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(MatteElevated)
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = file.substringAfterLast('/'),
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 140.dp)
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Outlined.Close,
+                                        contentDescription = "Remove attachment",
+                                        tint = TextMuted,
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .clickable { ChatController.removeAttachment(file) }
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // Right: Send or Stop
-                    if (isStreaming) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(StudioDangerBg)
-                                .clickable { ChatController.stopStreaming() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Stop,
-                                contentDescription = "Stop",
-                                tint = StudioDangerRed,
-                                modifier = Modifier.size(18.dp)
-                            )
+                    // Auto-expanding input field
+                    BasicTextField(
+                        value = draftText,
+                        onValueChange = { ChatController.updateDraft(it) },
+                        textStyle = TextStyle(
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
+                        ),
+                        cursorBrush = SolidColor(TextPrimary),
+                        maxLines = 5,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 24.dp, max = 110.dp),
+                        decorationBox = { innerTextField ->
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                if (draftText.isEmpty()) {
+                                    Text(
+                                        text = "Tulis pesan atau ketik '/'...",
+                                        fontSize = 14.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                                innerTextField()
+                            }
                         }
-                    } else {
-                        val canSend = draftText.isNotBlank()
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (canSend) StudioPrimary else MatteElevated)
-                                .clickable(enabled = canSend) { sendCurrentInput() },
-                            contentAlignment = Alignment.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Bottom Toolbar Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // Left: Attach, Slash '/', Mode & Tools
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Send,
-                                contentDescription = "Send",
-                                tint = if (canSend) StudioPrimaryText else TextMuted,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MatteElevated)
+                                    .clickable { attachLauncher.launch(arrayOf("*/*")) }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.AttachFile,
+                                    contentDescription = "Attach File",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MatteElevated)
+                                    .clickable {
+                                        if (!draftText.startsWith("/")) {
+                                            ChatController.updateDraft("/$draftText")
+                                        }
+                                    }
+                                    .padding(horizontal = 9.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = "/",
+                                    fontSize = 13.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextSecondary
+                                )
+                            }
+
+                            // Mode & Tools Pill
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MatteElevated)
+                                    .clickable { showToolsSheet = true }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "${chatMode.replaceFirstChar { it.uppercase() }} ⌄",
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Medium,
+                                        color = TextSecondary
+                                    )
+                                }
+                            }
+                        }
+
+                        // Right: Voice Input + Send/Stop
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MatteElevated)
+                                    .clickable {
+                                        try {
+                                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "id-ID")
+                                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Bicara sekarang...")
+                                            }
+                                            speechLauncher.launch(intent)
+                                        } catch (_: Exception) {}
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.MicNone,
+                                    contentDescription = "Voice Input",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            if (isStreaming) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(StudioDangerBg)
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            ChatController.stopStreaming()
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Stop,
+                                        contentDescription = "Stop",
+                                        tint = StudioDangerRed,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            } else {
+                                val canSend = draftText.isNotBlank()
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (canSend) StudioPrimary else MatteElevated)
+                                        .clickable(enabled = canSend) { sendCurrentInput() },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Send,
+                                        contentDescription = "Send",
+                                        tint = if (canSend) StudioPrimaryText else TextMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -803,17 +992,57 @@ fun ChatScreen(
                         color = TextMuted
                     )
                 }
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                if (sessions.isEmpty()) {
+                // Search chats bar
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MatteElevated)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Search,
+                            contentDescription = null,
+                            tint = TextMuted,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        BasicTextField(
+                            value = historySearchQuery,
+                            onValueChange = { historySearchQuery = it },
+                            textStyle = TextStyle(fontSize = 13.sp, color = TextPrimary),
+                            cursorBrush = SolidColor(TextPrimary),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            decorationBox = { inner ->
+                                if (historySearchQuery.isEmpty()) {
+                                    Text(text = "Search chats...", fontSize = 13.sp, color = TextMuted)
+                                }
+                                inner()
+                            }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val filteredSessions = sessions.filter {
+                    historySearchQuery.isBlank() || it.title.contains(historySearchQuery.trim(), ignoreCase = true)
+                }
+
+                if (filteredSessions.isEmpty()) {
                     Text(
-                        text = "Belum ada riwayat sesi tersimpan.",
+                        text = if (historySearchQuery.isBlank()) "Belum ada riwayat sesi tersimpan." else "Tidak ada sesi yang cocok.",
                         fontSize = 13.sp,
                         color = TextMuted,
                         modifier = Modifier.padding(vertical = 16.dp)
                     )
                 } else {
-                    sessions.forEach { sess ->
+                    filteredSessions.forEach { sess ->
                         val isCurrent = sess.id == activeSessionId
                         val dateStr = remember(sess.updatedAt) {
                             if (sess.updatedAt > 0L) {
@@ -851,19 +1080,41 @@ fun ChatScreen(
                                     color = TextMuted
                                 )
                             }
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable { ChatController.deleteSession(sess.id) },
-                                contentAlignment = Alignment.Center
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Delete,
-                                    contentDescription = "Delete Session",
-                                    tint = StudioDangerRed,
-                                    modifier = Modifier.size(16.dp)
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            sessionToRename = sess
+                                            renameSessionInput = sess.title
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Edit,
+                                        contentDescription = "Rename Session",
+                                        tint = TextMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { ChatController.deleteSession(sess.id) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Delete,
+                                        contentDescription = "Delete Session",
+                                        tint = StudioDangerRed,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -871,6 +1122,61 @@ fun ChatScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
+
+    // Rename Session Dialog
+    if (sessionToRename != null) {
+        val targetSess = sessionToRename!!
+        AlertDialog(
+            onDismissRequest = { sessionToRename = null },
+            containerColor = MatteSurface,
+            title = { Text(text = "Ubah Nama Sesi", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary) },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MatteElevated)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    BasicTextField(
+                        value = renameSessionInput,
+                        onValueChange = { renameSessionInput = it },
+                        textStyle = TextStyle(fontSize = 13.sp, color = TextPrimary),
+                        cursorBrush = SolidColor(TextPrimary),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFF2F4F8))
+                        .clickable {
+                            val newName = renameSessionInput.trim()
+                            if (newName.isNotBlank()) {
+                                ChatController.renameSession(targetSess.id, newName)
+                            }
+                            sessionToRename = null
+                        }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(text = "Simpan", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF0B0C0E))
+                }
+            },
+            dismissButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { sessionToRename = null }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(text = "Batal", fontSize = 12.sp, color = TextMuted)
+                }
+            }
+        )
     }
 
     // ── MODAL SHEET: AGENT TOOLS STATUS ──────────────────────────────────────
@@ -1203,6 +1509,101 @@ private fun AgentMessageView(
                 text = message.text,
                 onCopyCodeBlock = onCopy
             )
+        }
+
+        // Inline Media Cards
+        if (message.mediaItems.isNotEmpty()) {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(message.mediaItems) { media ->
+                    Column(
+                        modifier = Modifier
+                            .width(150.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MatteSurface)
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (media.thumbnailUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = media.thumbnailUrl,
+                                contentDescription = media.title,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(84.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF0B0C0E))
+                            )
+                        }
+                        Text(
+                            text = media.title.ifBlank { media.id },
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = media.provider.uppercase(),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 9.sp,
+                                color = TextMuted
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MatteElevated)
+                                        .clickable {
+                                            ChatController.sendMessage(
+                                                "Unduh media: ${media.downloadUrl}",
+                                                ""
+                                            )
+                                        }
+                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "Save",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Color(0xFFF2F4F8))
+                                        .clickable {
+                                            ChatController.sendMessage(
+                                                "Unduh dan pasangkan media ke scene proyek: ${media.downloadUrl}",
+                                                ""
+                                            )
+                                        }
+                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "+ Project",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0B0C0E)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if (!message.isStreaming && message.text.isNotBlank()) {

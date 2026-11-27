@@ -501,6 +501,17 @@ fun ProjectBoardScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        loadProject()
+    }
+
+    val uiSyncVersion by LinuxRuntimeManager.uiSyncVersion.collectAsState()
+    LaunchedEffect(uiSyncVersion) {
+        if (uiSyncVersion > 0L) {
+            loadProject()
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()

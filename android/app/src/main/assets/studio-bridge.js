@@ -62,6 +62,7 @@ function getAntigravityEnv(isAuthMode = false) {
   const env = {
     ...process.env,
     HOME: HOME_DIR,
+    BRIDGE_PORT: String(PORT),
     XDG_CONFIG_HOME: path.join(HOME_DIR, '.config'),
     XDG_DATA_HOME: path.join(HOME_DIR, '.local', 'share'),
     SSL_CERT_FILE: path.join(PREFIX_DIR, 'etc', 'tls', 'cert.pem'),
@@ -2164,6 +2165,23 @@ async function handleChat(req, res) {
     return sendJson(res, 400, { status: 'error', error: 'Pesan kosong' });
   }
 
+  const chatMode = String(body.mode || 'director').toLowerCase();
+  const attachments = Array.isArray(body.attachments) ? body.attachments.map(String).filter(Boolean) : [];
+
+  let modeInstruction = 'Mode SUTRADARA: Pimpin seluruh proses produksi secara otonom menggunakan `python3 engine/studio_cli.py`.';
+  if (chatMode === 'scriptwriter') {
+    modeInstruction = 'Mode PENULIS NASKAH: Fokus menyusun naskah dan alur cerita dengan hook kuat di detik awal, narasi berbobot, dan pemecahan adegan terstruktur.';
+  } else if (chatMode === 'researcher') {
+    modeInstruction = 'Mode PENELITI: Cari bahan referensi akurat, perburuan media via `python3 engine/media_fetcher.py search`, dan kurasi footage terbaik.';
+  } else if (chatMode === 'fast') {
+    modeInstruction = 'Mode CEPAT: Jalankan aksi sesingkat mungkin secara langsung, ringkas tanpa penjelasan panjang.';
+  }
+
+  let modeAndAttachmentPrefix = `[Mode: ${chatMode.toUpperCase()} - ${modeInstruction}]\n`;
+  if (attachments.length > 0) {
+    modeAndAttachmentPrefix += `[Lampiran Media Pengguna (${attachments.length} file):\n${attachments.map((f, i) => `  ${i + 1}. ${f}`).join('\n')}]\n`;
+  }
+
   if (!fs.existsSync(ANTIGRAVITY_BIN)) {
     return sendJson(res, 500, { status: 'error', error: `Binary Antigravity tidak ditemukan di ${ANTIGRAVITY_BIN}` });
   }
@@ -2216,7 +2234,7 @@ async function handleChat(req, res) {
   // Susun instruksi dengan konteks dapur produksi, channel, dan workspace project
   const activeWorkspace = session.workspace || st.active_workspace || '';
   emitStatus('Memuat konteks proyek & skill', activeWorkspace || '');
-  let wsContextPrefix = '';
+  let wsContextPrefix = modeAndAttachmentPrefix;
   let wsPath = '';
 
   if (activeWorkspace) {
@@ -2238,12 +2256,13 @@ async function handleChat(req, res) {
         }
       } catch (_) {}
 
-      let rawPrefix = `[Konteks Workspace: "${activeWorkspace}" | Path: "${wsPath}"]\n` +
+      let rawPrefix = modeAndAttachmentPrefix +
+        `[Konteks Workspace: "${activeWorkspace}" | Path: "${wsPath}"]\n` +
         chanInfo +
         projInfo +
-        `Anda beroperasi di workspace ini. Anda dapat langsung memodifikasi file "${wsPath}/project.json" atau "${wsPath}/scripts/main.txt" saat diminta membuat atau mengubah naskah dan susunan adegan. Simpan file script ke "${wsPath}/scripts", aset ke "${wsPath}/assets", audio ke "${wsPath}/audio", dan render ke "${wsPath}/renders".\n\n`;
-      if (rawPrefix.length > 1800) {
-        rawPrefix = rawPrefix.slice(0, 1790) + '...\n\n';
+        `Anda beroperasi di workspace ini. Anda dapat langsung menggunakan 'python3 engine/studio_cli.py' atau memodifikasi file "${wsPath}/project.json" atau "${wsPath}/scripts/main.txt". Simpan file script ke "${wsPath}/scripts", aset ke "${wsPath}/assets", audio ke "${wsPath}/audio", dan render ke "${wsPath}/renders".\n\n`;
+      if (rawPrefix.length > 2200) {
+        rawPrefix = rawPrefix.slice(0, 2190) + '...\n\n';
       }
       wsContextPrefix = rawPrefix;
     }
@@ -2305,7 +2324,28 @@ async function handleChat(req, res) {
 
   proc.stdout.on('data', (chunk) => {
     const rawText = chunk.toString('utf8');
-    const cleanText = stripAnsi(rawText);
+    let cleanText = stripAnsi(rawText);
+
+    if (cleanText.includes('[UI_SYNC]')) {
+      const pLines = cleanText.split(/\r?\n/);
+      const kept = [];
+      for (const pl of pLines) {
+        if (pl.trim().startsWith('[UI_SYNC]')) {
+          const payloadStr = pl.trim().replace(/^\[UI_SYNC\]\s*/, '').trim();
+          const sepIdx = payloadStr.indexOf(':');
+          const scope = sepIdx !== -1 ? payloadStr.slice(0, sepIdx).trim() : 'all';
+          const target = sepIdx !== -1 ? payloadStr.slice(sepIdx + 1).trim() : payloadStr;
+          if (!res.writableEnded) {
+            res.write(`event: ui_sync\ndata: ${JSON.stringify({ scope, target })}\n\n`);
+          }
+          emit({ type: 'ui_sync', scope, target });
+        } else {
+          kept.push(pl);
+        }
+      }
+      cleanText = kept.join('\n');
+    }
+
     fullOutput += cleanText;
     if (cleanText) {
       if (!firstTokenEmitted) {
@@ -2325,7 +2365,16 @@ async function handleChat(req, res) {
     for (const rawLine of lines) {
       const line = rawLine.trim();
       if (!line) continue;
-      if (line.startsWith('[STEP]')) {
+      if (line.startsWith('[UI_SYNC]')) {
+        const payloadStr = line.replace(/^\[UI_SYNC\]\s*/, '').trim();
+        const sepIdx = payloadStr.indexOf(':');
+        const scope = sepIdx !== -1 ? payloadStr.slice(0, sepIdx).trim() : 'all';
+        const target = sepIdx !== -1 ? payloadStr.slice(sepIdx + 1).trim() : payloadStr;
+        if (!res.writableEnded) {
+          res.write(`event: ui_sync\ndata: ${JSON.stringify({ scope, target })}\n\n`);
+        }
+        emit({ type: 'ui_sync', scope, target });
+      } else if (line.startsWith('[STEP]')) {
         emitStatus(line.replace(/^\[STEP\]\s*/, ''));
       } else if (line.startsWith('[TOOL]')) {
         emitStatus(line.replace(/^\[TOOL\]\s*/, ''));
@@ -2419,6 +2468,135 @@ async function handleChat(req, res) {
     emit({ type: 'error', text: `Gagal menjalankan Antigravity: ${cleanMsg}` });
     if (!res.writableEnded) res.end();
   });
+}
+
+// ── Media Engine & Stock Operations ─────────────────────────────────────────
+
+const MEDIA_KEYS_FILE = path.join(CONTENT_STUDIO_DIR, '.cache', 'media_keys.json');
+
+function getMediaConfig() {
+  let keys = { pexelsKey: '', pixabayKey: '' };
+  try {
+    if (fs.existsSync(MEDIA_KEYS_FILE)) {
+      keys = JSON.parse(fs.readFileSync(MEDIA_KEYS_FILE, 'utf8'));
+    }
+  } catch (_) {}
+
+  const binDir = path.join(CONTENT_STUDIO_DIR, '.cache', 'bin');
+  const ytdlpFile = path.join(binDir, 'yt-dlp');
+  const ytdlpReady = (fs.existsSync(ytdlpFile) && fs.statSync(ytdlpFile).size > 10000) ||
+    fs.existsSync(path.join(PREFIX_DIR, 'bin', 'yt-dlp'));
+
+  return {
+    pexelsConfigured: !!(keys && keys.pexelsKey && keys.pexelsKey.trim()),
+    pixabayConfigured: !!(keys && keys.pixabayKey && keys.pixabayKey.trim()),
+    ytdlpReady: !!ytdlpReady,
+    wikimediaActive: true,
+    active: true,
+  };
+}
+
+function saveMediaConfig(data) {
+  fs.mkdirSync(path.dirname(MEDIA_KEYS_FILE), { recursive: true });
+  let existing = {};
+  try {
+    if (fs.existsSync(MEDIA_KEYS_FILE)) {
+      existing = JSON.parse(fs.readFileSync(MEDIA_KEYS_FILE, 'utf8'));
+    }
+  } catch (_) {}
+  const merged = {
+    ...existing,
+    pexelsKey: typeof data.pexelsKey === 'string' ? data.pexelsKey.trim() : (existing.pexelsKey || ''),
+    pixabayKey: typeof data.pixabayKey === 'string' ? data.pixabayKey.trim() : (existing.pixabayKey || ''),
+    updated_at: new Date().toISOString(),
+  };
+  fs.writeFileSync(MEDIA_KEYS_FILE, JSON.stringify(merged, null, 2));
+  return getMediaConfig();
+}
+
+async function searchMedia(body) {
+  const pythonBin = resolvePythonBin();
+  const fetcherScript = path.join(CONTENT_STUDIO_DIR, 'engine', 'media_fetcher.py');
+  if (!fs.existsSync(fetcherScript)) {
+    throw new Error('Script media_fetcher.py tidak ditemukan di engine/');
+  }
+
+  const query = String(body.query || '').trim();
+  if (!query) throw new Error('Query pencarian tidak boleh kosong');
+
+  const source = String(body.source || 'auto').trim();
+  const type = String(body.type || 'video').trim();
+  const orientation = String(body.orientation || 'all').trim();
+  const limit = Math.max(1, Math.min(20, parseInt(body.limit || '8', 10)));
+
+  const args = [
+    fetcherScript, 'search',
+    '--query', query,
+    '--source', source,
+    '--type', type,
+    '--orientation', orientation,
+    '--limit', String(limit)
+  ];
+
+  const env = getAntigravityEnv(false);
+  env.BRIDGE_PORT = String(PORT);
+
+  const { stdout } = await execFileAsync(pythonBin, args, { env, cwd: CONTENT_STUDIO_DIR, timeout: 45000 });
+  const cleanOut = stripAnsi(stdout).trim();
+  try {
+    return JSON.parse(cleanOut);
+  } catch (e) {
+    return [];
+  }
+}
+
+async function downloadMedia(body) {
+  const pythonBin = resolvePythonBin();
+  const fetcherScript = path.join(CONTENT_STUDIO_DIR, 'engine', 'media_fetcher.py');
+  if (!fs.existsSync(fetcherScript)) {
+    throw new Error('Script media_fetcher.py tidak ditemukan di engine/');
+  }
+
+  const url = String(body.url || '').trim();
+  if (!url) throw new Error('URL unduhan tidak boleh kosong');
+
+  const args = [fetcherScript, 'download', '--url', url];
+  if (body.filename) args.push('--filename', String(body.filename).trim());
+  if (body.project) args.push('--project', path.basename(String(body.project).trim()));
+  if (body.audioOnly || body.audio_only) args.push('--audio-only');
+  if (body.start) args.push('--start', String(body.start).trim());
+  if (body.end) args.push('--end', String(body.end).trim());
+
+  const env = getAntigravityEnv(false);
+  env.BRIDGE_PORT = String(PORT);
+
+  // Timeout aman 10 menit (600.000 ms) untuk video panjang
+  const { stdout } = await execFileAsync(pythonBin, args, { env, cwd: CONTENT_STUDIO_DIR, timeout: 600000 });
+  const cleanOut = stripAnsi(stdout).trim();
+  try {
+    return JSON.parse(cleanOut);
+  } catch (e) {
+    return { status: 'ok', raw: cleanOut };
+  }
+}
+
+async function updateYtdlp() {
+  const pythonBin = resolvePythonBin();
+  const fetcherScript = path.join(CONTENT_STUDIO_DIR, 'engine', 'media_fetcher.py');
+  if (!fs.existsSync(fetcherScript)) {
+    throw new Error('Script media_fetcher.py tidak ditemukan di engine/');
+  }
+
+  const env = getAntigravityEnv(false);
+  env.BRIDGE_PORT = String(PORT);
+
+  const { stdout } = await execFileAsync(pythonBin, [fetcherScript, 'update-ytdlp'], { env, cwd: CONTENT_STUDIO_DIR, timeout: 90000 });
+  const cleanOut = stripAnsi(stdout).trim();
+  try {
+    return JSON.parse(cleanOut);
+  } catch (e) {
+    return { status: 'ok', raw: cleanOut };
+  }
 }
 
 function listStudioSkills() {
@@ -2933,6 +3111,50 @@ const server = http.createServer(async (req, res) => {
     return handleChat(req, res);
   }
 
+  // ── Media Engine & Stock Endpoints ─────────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/media/config') {
+    const cfg = getMediaConfig();
+    return sendJson(res, 200, { status: 'ok', ...cfg });
+  }
+
+  if (req.method === 'POST' && pathname === '/media/config') {
+    let body;
+    try { body = await readJsonBody(req); } catch (_) { return sendJson(res, 400, { status: 'error', error: 'JSON tidak valid' }); }
+    const updated = saveMediaConfig(body);
+    return sendJson(res, 200, { status: 'ok', ...updated });
+  }
+
+  if (req.method === 'POST' && pathname === '/media/search') {
+    let body;
+    try { body = await readJsonBody(req); } catch (_) { return sendJson(res, 400, { status: 'error', error: 'JSON tidak valid' }); }
+    try {
+      const items = await searchMedia(body);
+      return sendJson(res, 200, { status: 'ok', items });
+    } catch (e) {
+      return sendJson(res, 500, { status: 'error', error: e.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/media/download') {
+    let body;
+    try { body = await readJsonBody(req); } catch (_) { return sendJson(res, 400, { status: 'error', error: 'JSON tidak valid' }); }
+    try {
+      const result = await downloadMedia(body);
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 500, { status: 'error', error: e.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/media/update-ytdlp') {
+    try {
+      const result = await updateYtdlp();
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 500, { status: 'error', error: e.message });
+    }
+  }
+
   // ── Extensions: Skills & MCP Endpoints ────────────────────────────────────
   if (req.method === 'GET' && pathname === '/extensions/skills') {
     const skills = listStudioSkills();
@@ -2986,4 +3208,9 @@ module.exports = {
   generatePublishKit,
   listStudioSkills,
   listMcpServers,
+  getMediaConfig,
+  saveMediaConfig,
+  searchMedia,
+  downloadMedia,
+  updateYtdlp,
 };

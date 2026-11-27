@@ -26,12 +26,29 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import coil.compose.AsyncImage
+import com.contentstudio.app.runtime.StockMediaConfig
+import com.contentstudio.app.runtime.StockMediaItem
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -84,6 +101,7 @@ private val LibMatteBg = Color(0xFF0B0C0E)
 private val LibMatteCard = Color(0xFF15171C)
 private val LibMatteElevated = Color(0xFF1E2128)
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     modifier: Modifier = Modifier
@@ -101,6 +119,22 @@ fun LibraryScreen(
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
     var assetToUse by remember { mutableStateOf<LibraryAssetItem?>(null) }
     var assetToDelete by remember { mutableStateOf<LibraryAssetItem?>(null) }
+
+    // Stock Media & BYOK state
+    var showStockSheet by remember { mutableStateOf(false) }
+    var stockSheetTab by remember { mutableIntStateOf(0) } // 0: Search, 1: URL Download
+    var stockQuery by remember { mutableStateOf("") }
+    var stockSource by remember { mutableStateOf("auto") } // "auto", "ytdlp", "wikimedia", "pexels", "pixabay"
+    var stockType by remember { mutableStateOf("video") } // "video", "photo", "audio"
+    val stockResults = remember { mutableStateListOf<StockMediaItem>() }
+    var isSearchingStock by remember { mutableStateOf(false) }
+    var downloadingUrl by remember { mutableStateOf<String?>(null) }
+    var urlDownloadInput by remember { mutableStateOf("") }
+    var isAudioOnlyDownload by remember { mutableStateOf(false) }
+    var startTimestampInput by remember { mutableStateOf("") }
+    var endTimestampInput by remember { mutableStateOf("") }
+    var isDownloadingUrl by remember { mutableStateOf(false) }
+    var mediaConfig by remember { mutableStateOf<StockMediaConfig?>(null) }
 
     // Channels state
     val channels = remember { mutableStateListOf<ChannelProfile>() }
@@ -123,6 +157,101 @@ fun LibraryScreen(
 
     var isBusy by remember { mutableStateOf(false) }
     var actionStatus by remember { mutableStateOf<String?>(null) }
+
+    fun loadMediaConfig() {
+        scope.launch(Dispatchers.IO) {
+            val cfg = LinuxRuntimeManager.getMediaConfig()
+            withContext(Dispatchers.Main) {
+                mediaConfig = cfg
+            }
+        }
+    }
+
+    fun performStockSearch() {
+        val q = stockQuery.trim()
+        if (q.isBlank()) return
+        isSearchingStock = true
+        actionStatus = "Mencari media stock..."
+        scope.launch(Dispatchers.IO) {
+            val res = LinuxRuntimeManager.searchMedia(
+                query = q,
+                source = stockSource,
+                type = stockType
+            )
+            withContext(Dispatchers.Main) {
+                stockResults.clear()
+                stockResults.addAll(res)
+                isSearchingStock = false
+                actionStatus = if (res.isEmpty()) "Tidak ada hasil untuk '$q'" else "Ditemukan ${res.size} hasil"
+            }
+        }
+    }
+
+    fun downloadStockItem(item: StockMediaItem) {
+        downloadingUrl = item.downloadUrl
+        actionStatus = "Mengunduh ${item.title.take(30)}..."
+        scope.launch(Dispatchers.IO) {
+            val ok = LinuxRuntimeManager.downloadMedia(
+                url = item.downloadUrl,
+                filename = item.title.take(40),
+                project = activeWorkspace,
+                audioOnly = (item.type == "audio")
+            )
+            withContext(Dispatchers.Main) {
+                downloadingUrl = null
+                actionStatus = if (ok) "Media berhasil diunduh ke library & proyek!" else "Gagal mengunduh media"
+                val catParam = if (selectedCategory == "all") null else selectedCategory
+                val res = LinuxRuntimeManager.listLibraryAssets(catParam)
+                val arr = res.optJSONArray("assets")
+                if (arr != null) {
+                    val list = mutableListOf<LibraryAssetItem>()
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        list.add(
+                            LibraryAssetItem(
+                                name = obj.optString("name", ""),
+                                category = obj.optString("category", "other"),
+                                size = obj.optLong("size", 0L),
+                                mtime = obj.optLong("mtime", 0L),
+                                path = obj.optString("path", ""),
+                                relPath = obj.optString("rel_path", ""),
+                            )
+                        )
+                    }
+                    assets.clear()
+                    assets.addAll(list)
+                }
+            }
+        }
+    }
+
+    fun downloadDirectUrl() {
+        val url = urlDownloadInput.trim()
+        if (url.isBlank()) return
+        isDownloadingUrl = true
+        actionStatus = "Mengunduh media dari URL..."
+        scope.launch(Dispatchers.IO) {
+            val ok = LinuxRuntimeManager.downloadMedia(
+                url = url,
+                filename = "",
+                project = activeWorkspace,
+                audioOnly = isAudioOnlyDownload,
+                start = startTimestampInput.trim(),
+                end = endTimestampInput.trim()
+            )
+            withContext(Dispatchers.Main) {
+                isDownloadingUrl = false
+                actionStatus = if (ok) "Media berhasil diunduh ke library & proyek!" else "Gagal mengunduh media dari URL"
+                if (ok) {
+                    urlDownloadInput = ""
+                    startTimestampInput = ""
+                    endTimestampInput = ""
+                    showStockSheet = false
+                }
+                refreshAssets()
+            }
+        }
+    }
 
     fun refreshChannels() {
         scope.launch(Dispatchers.IO) {
@@ -253,6 +382,18 @@ fun LibraryScreen(
         refreshChannels()
         refreshTemplates()
         loadWorkspaces()
+        loadMediaConfig()
+    }
+
+    // Auto-refresh on UI sync event
+    val uiSyncVersion by LinuxRuntimeManager.uiSyncVersion.collectAsState()
+    LaunchedEffect(uiSyncVersion) {
+        if (uiSyncVersion > 0L) {
+            refreshChannels()
+            refreshTemplates()
+            loadWorkspaces()
+            refreshAssets()
+        }
     }
 
     LaunchedEffect(selectedCategory) {
@@ -391,50 +532,84 @@ fun LibraryScreen(
                 }
             }
 
-            // Contextual primary action button
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFF2F4F8))
-                    .clickable {
-                        when (activeTab) {
-                            "channels" -> {
-                                channelNameInput = ""
-                                channelAspectInput = "9:16"
-                                channelError = null
-                                showChannelDialog = true
-                            }
-                            "templates" -> {
-                                newTemplateName = ""
-                                newTemplateAspect = "9:16"
-                                templateCreateError = null
-                                showCreateTemplateDialog = true
-                            }
-                            else -> importLauncher.launch("*/*")
+            // Contextual primary action button(s)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (activeTab == "media") {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(LibMatteElevated)
+                            .clickable { showStockSheet = true }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Search,
+                                contentDescription = null,
+                                tint = TextPrimary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = "Fetch / Stock",
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary
+                            )
                         }
                     }
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFF2F4F8))
+                        .clickable {
+                            when (activeTab) {
+                                "channels" -> {
+                                    channelNameInput = ""
+                                    channelAspectInput = "9:16"
+                                    channelError = null
+                                    showChannelDialog = true
+                                }
+                                "templates" -> {
+                                    newTemplateName = ""
+                                    newTemplateAspect = "9:16"
+                                    templateCreateError = null
+                                    showCreateTemplateDialog = true
+                                }
+                                else -> importLauncher.launch("*/*")
+                            }
+                        }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Add,
-                        contentDescription = null,
-                        tint = Color(0xFF0B0C0E),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = when (activeTab) {
-                            "channels" -> "Channel"
-                            "templates" -> "Template"
-                            else -> "Import"
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF0B0C0E)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Add,
+                            contentDescription = null,
+                            tint = Color(0xFF0B0C0E),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = when (activeTab) {
+                                "channels" -> "Channel"
+                                "templates" -> "Template"
+                                else -> "Import"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF0B0C0E)
+                        )
+                    }
                 }
             }
         }
@@ -1268,5 +1443,338 @@ fun LibraryScreen(
                 StudioSecondaryButton(text = "Cancel", onClick = { assetToDelete = null })
             }
         )
+    }
+
+    // ── MODAL BOTTOM SHEET: FETCH / STOCK MEDIA ──────────────────────────────
+    if (showStockSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showStockSheet = false },
+            containerColor = LibMatteCard
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 8.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Header + sub-tabs
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Fetch / Stock Media",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    )
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(LibMatteElevated)
+                            .padding(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        listOf(0 to "Search", 1 to "URL Download").forEach { (idx, label) ->
+                            val isSel = stockSheetTab == idx
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (isSel) Color(0xFF262A33) else Color.Transparent)
+                                    .clickable { stockSheetTab = idx }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSel) TextPrimary else TextMuted
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (stockSheetTab == 0) {
+                    // Search tab
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(LibMatteElevated)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            BasicTextField(
+                                value = stockQuery,
+                                onValueChange = { stockQuery = it },
+                                textStyle = TextStyle(fontSize = 13.sp, color = TextPrimary),
+                                cursorBrush = SolidColor(TextPrimary),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                decorationBox = { inner ->
+                                    if (stockQuery.isEmpty()) {
+                                        Text(text = "Cari video / foto / audio...", fontSize = 13.sp, color = TextMuted)
+                                    }
+                                    inner()
+                                }
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFF2F4F8))
+                                .clickable(enabled = !isSearchingStock && stockQuery.isNotBlank()) {
+                                    performStockSearch()
+                                }
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = if (isSearchingStock) "..." else "Search",
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0B0C0E)
+                            )
+                        }
+                    }
+
+                    // Source and type chips
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("video" to "Video", "photo" to "Photo", "audio" to "Audio").forEach { (tKey, tLabel) ->
+                            val isSel = stockType == tKey
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isSel) Color(0xFF262A33) else LibMatteElevated)
+                                    .clickable { stockType = tKey; if (stockQuery.isNotBlank()) performStockSearch() }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = tLabel,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (isSel) TextPrimary else TextMuted
+                                )
+                            }
+                        }
+                    }
+
+                    // Stock results grid (2 columns)
+                    if (stockResults.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (isSearchingStock) "Mencari media stock..." else "Ketik kata kunci dan tekan Search.",
+                                fontSize = 12.sp,
+                                color = TextMuted
+                            )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 300.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(stockResults) { item ->
+                                Column(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(LibMatteElevated)
+                                        .padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (item.thumbnailUrl.isNotBlank()) {
+                                        AsyncImage(
+                                            model = item.thumbnailUrl,
+                                            contentDescription = item.title,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(75.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(Color(0xFF0B0C0E))
+                                        )
+                                    }
+                                    Text(
+                                        text = item.title.ifBlank { item.id },
+                                        fontSize = 11.sp,
+                                        color = TextPrimary,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = item.provider.uppercase(),
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            color = TextMuted
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color(0xFFF2F4F8))
+                                                .clickable(enabled = downloadingUrl != item.downloadUrl) {
+                                                    downloadStockItem(item)
+                                                }
+                                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                        ) {
+                                            Text(
+                                                text = if (downloadingUrl == item.downloadUrl) "..." else "Save",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF0B0C0E)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // URL Download tab
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(text = "Media URL (YouTube, Vimeo, direct link)", fontSize = 11.sp, color = TextMuted)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(LibMatteElevated)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            BasicTextField(
+                                value = urlDownloadInput,
+                                onValueChange = { urlDownloadInput = it },
+                                textStyle = TextStyle(fontSize = 13.sp, color = TextPrimary),
+                                cursorBrush = SolidColor(TextPrimary),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                decorationBox = { inner ->
+                                    if (urlDownloadInput.isEmpty()) {
+                                        Text(text = "https://...", fontSize = 13.sp, color = TextMuted)
+                                    }
+                                    inner()
+                                }
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(LibMatteElevated)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                BasicTextField(
+                                    value = startTimestampInput,
+                                    onValueChange = { startTimestampInput = it },
+                                    textStyle = TextStyle(fontSize = 12.sp, color = TextPrimary, fontFamily = FontFamily.Monospace),
+                                    cursorBrush = SolidColor(TextPrimary),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    decorationBox = { inner ->
+                                        if (startTimestampInput.isEmpty()) {
+                                            Text(text = "Start (00:00:10)", fontSize = 11.sp, color = TextMuted)
+                                        }
+                                        inner()
+                                    }
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(LibMatteElevated)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                BasicTextField(
+                                    value = endTimestampInput,
+                                    onValueChange = { endTimestampInput = it },
+                                    textStyle = TextStyle(fontSize = 12.sp, color = TextPrimary, fontFamily = FontFamily.Monospace),
+                                    cursorBrush = SolidColor(TextPrimary),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    decorationBox = { inner ->
+                                        if (endTimestampInput.isEmpty()) {
+                                            Text(text = "End (00:00:25)", fontSize = 11.sp, color = TextMuted)
+                                        }
+                                        inner()
+                                    }
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isAudioOnlyDownload) Color(0xFF262A33) else LibMatteElevated)
+                                    .clickable { isAudioOnlyDownload = !isAudioOnlyDownload }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = if (isAudioOnlyDownload) "Audio Only: ON" else "Audio Only: OFF",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (isAudioOnlyDownload) StudioSage else TextMuted
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFF2F4F8))
+                                    .clickable(enabled = !isDownloadingUrl && urlDownloadInput.isNotBlank()) {
+                                        downloadDirectUrl()
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = if (isDownloadingUrl) "Mengunduh..." else "Download",
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0B0C0E)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

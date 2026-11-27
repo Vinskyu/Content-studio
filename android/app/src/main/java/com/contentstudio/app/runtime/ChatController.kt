@@ -4,8 +4,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
@@ -42,6 +45,12 @@ object ChatController {
     private val _thinkingSteps = MutableStateFlow<List<String>>(emptyList())
     val thinkingSteps: StateFlow<List<String>> = _thinkingSteps.asStateFlow()
 
+    private val _chatMode = MutableStateFlow("director")
+    val chatMode: StateFlow<String> = _chatMode.asStateFlow()
+
+    private val _uiSyncEvents = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 16)
+    val uiSyncEvents: SharedFlow<Pair<String, String>> = _uiSyncEvents.asSharedFlow()
+
     private val _draftText = MutableStateFlow("")
     val draftText: StateFlow<String> = _draftText.asStateFlow()
 
@@ -51,9 +60,19 @@ object ChatController {
     private val _draftPrompt = MutableStateFlow("")
     val draftPrompt: StateFlow<String> = _draftPrompt.asStateFlow()
 
+    private val _mediaConfig = MutableStateFlow<StockMediaConfig?>(null)
+    val mediaConfig: StateFlow<StockMediaConfig?> = _mediaConfig.asStateFlow()
+
     private var lastFailedPrompt: String? = null
     private var isInitialized = false
     private var activeConnection: java.net.HttpURLConnection? = null
+
+    fun setChatMode(mode: String) {
+        val clean = mode.trim().lowercase()
+        if (clean in listOf("director", "scriptwriter", "researcher", "fast")) {
+            _chatMode.value = clean
+        }
+    }
 
     fun updateDraft(text: String) {
         _draftText.value = text
@@ -73,6 +92,13 @@ object ChatController {
 
     fun clearAttachments() {
         _pendingAttachments.value = emptyList()
+    }
+
+    fun refreshMediaConfig() {
+        scope.launch {
+            val cfg = LinuxRuntimeManager.getMediaConfig()
+            _mediaConfig.value = cfg
+        }
     }
 
     fun setDraftPrompt(prompt: String) {
@@ -212,6 +238,16 @@ object ChatController {
         }
     }
 
+    fun renameSession(id: String, newTitle: String) {
+        if (id.isBlank() || newTitle.isBlank()) return
+        scope.launch {
+            try {
+                LinuxRuntimeManager.renameSession(id, newTitle)
+                refreshSessions()
+            } catch (_: Exception) {}
+        }
+    }
+
     fun stopStreaming() {
         try {
             activeConnection?.disconnect()
@@ -290,6 +326,32 @@ object ChatController {
         sendMessage(prompt, projectName ?: "")
     }
 
+    fun dispatchSlashCommand(command: String, workspace: String): Boolean {
+        val parts = command.trim().removePrefix("/").split(" ", limit = 2)
+        val cmd = parts.getOrElse(0) { "" }.lowercase()
+        val arg = parts.getOrElse(1) { "" }.trim()
+        return when (cmd) {
+            "clear" -> {
+                _messages.value = emptyList()
+                clearError()
+                true
+            }
+            "media" -> {
+                val prompt = if (arg.isNotBlank()) "Cari media stock: $arg" else "Tampilkan status media engine"
+                sendMessage(prompt, workspace)
+            }
+            "dl" -> {
+                if (arg.isBlank()) false
+                else sendMessage("Unduh media dari URL: $arg", workspace)
+            }
+            "script" -> sendMessage("Tulis naskah narasi untuk proyek $workspace", workspace)
+            "scenes" -> sendMessage("Pecah naskah menjadi daftar adegan untuk proyek $workspace", workspace)
+            "hook" -> sendMessage("Buat hook pembuka yang kuat untuk proyek $workspace", workspace)
+            "publish" -> sendMessage("Buat publish kit (judul, deskripsi, hashtag) untuk proyek $workspace", workspace)
+            else -> sendMessage(command, workspace)
+        }
+    }
+
     fun sendMessage(prompt: String, workspace: String): Boolean {
         val cleanPrompt = prompt.trim()
         if (cleanPrompt.isEmpty()) return false
@@ -303,6 +365,9 @@ object ChatController {
 
         clearError()
         lastFailedPrompt = cleanPrompt
+        val currentAttachments = _pendingAttachments.value
+        _pendingAttachments.value = emptyList()
+        val activeMode = _chatMode.value
         val startMs = System.currentTimeMillis()
         _thinkingStartTimeMs.value = startMs
         _thinkingSteps.value = emptyList()
@@ -351,6 +416,8 @@ object ChatController {
                 sessionId = sid,
                 message = cleanPrompt,
                 workspace = workspace,
+                mode = activeMode,
+                attachments = currentAttachments,
                 onConnectionCreated = { conn ->
                     activeConnection = conn
                 },
@@ -362,6 +429,9 @@ object ChatController {
                             _thinkingSteps.value = _thinkingSteps.value + cleanSt
                         }
                     }
+                },
+                onUiSync = { scope, target ->
+                    _uiSyncEvents.tryEmit(Pair(scope, target))
                 },
                 onDelta = { delta ->
                     responseBuilder.append(delta)

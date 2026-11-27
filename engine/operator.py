@@ -350,6 +350,24 @@ CORE_TOOLS: List[Dict[str, Any]] = [
                 "required": ["plan_path", "summary"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_studio_cli",
+            "description": "Menjalankan perintah Master CLI ContentStudio (project, channel, template, script, scene, voice, audio, media, render, publish) secara otonom.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Argumen perintah Master CLI (contoh: ['project', 'create', '--name', 'proyek_01', '--ratio', '9:16'], ['script', 'split-scenes', '--project', 'proyek_01'], ['voice', 'generate', '--project', 'proyek_01'])"
+                    }
+                },
+                "required": ["args"]
+            }
+        }
     }
 ]
 
@@ -528,6 +546,26 @@ def execute_local_tool(name: str, args: Dict[str, Any], session: Dict[str, Any])
         save_session(session)
         return f"[RENDER_READY] Rencana video siap dirender:\nPath: {target_p}\nRingkasan: {summary}"
 
+    elif name == "run_studio_cli":
+        cli_args = args.get("args", [])
+        cli_py = os.path.join(_script_dir, "studio_cli.py")
+        cmd = [sys.executable, cli_py] + [str(a) for a in cli_args]
+        env = dict(os.environ)
+        if "BRIDGE_PORT" not in env:
+            env["BRIDGE_PORT"] = os.environ.get("PORT", "18950")
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+            for line in proc.stderr.splitlines():
+                l_str = line.strip()
+                if l_str.startswith("[STEP]") or l_str.startswith("[UI_SYNC]"):
+                    sys.stderr.write(l_str + "\n")
+                    sys.stderr.flush()
+            if proc.returncode != 0:
+                return f"[ERR] studio_cli error: {proc.stderr or proc.stdout}"
+            return proc.stdout.strip() or "[OK]"
+        except Exception as e:
+            return f"[ERR] Gagal menjalankan studio_cli: {e}"
+
     return f"[ERR] Tool lokal '{name}' tidak dikenal."
 
 # ==============================================================================
@@ -548,12 +586,13 @@ def execute_autonomous_agent(
     user_prompt: str,
     attached_files: List[str] = [],
     session: Optional[Dict[str, Any]] = None,
-    event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+    event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    mode: str = "director"
 ) -> Dict[str, Any]:
     """
     Eksekusi loop otonom Real CLI Agent hingga 12 langkah dengan Native Tool-Calling:
-    - Auto-Inject Konteks (Skills, MCP, DNA Workspace)
-    - Proaktif & Self-Correction (Auto-Hunt, Auto-Plan, Auto-Validation)
+    - Auto-Inject Konteks (Skills, MCP, DNA Channel, Master CLI)
+    - Proaktif & Self-Correction (Auto-Hunt, Studio CLI, Auto-Validation)
     """
     sess = session or load_session()
     active_ws = sess.get("active_workspace", "default")
@@ -568,34 +607,40 @@ def execute_autonomous_agent(
     except Exception as e:
         print(f"[!] Warning MCP: {e}", file=sys.stderr, flush=True)
 
-    # 2. Ambil konteks DNA workspace & indeks skill
-    ws_context = get_workspace_context(active_ws)
+    # 2. Ambil konteks proyek dan Channel DNA
     skill_index = get_skill_index()
     skill_idx_summary = "\n".join([f"- {s['slug']}: {s['description']}" for s in skill_index])
 
-    # 3. Bangun System Prompt Proaktif
-    system_prompt = f"""Kamu adalah ContentStudio Autonomous CLI Agent, sutradara dan produser video profesional di Android.
-Target format utama video: Vertikal 9:16 Full HD 1080p (1080x1920, 30fps).
+    # Mode orientation
+    mode_instructions = {
+        "director": "Mode SUTRADARA: Bertanggung jawab penuh memimpin alur produksi dari awal hingga selesai (naskah, adegan, media visual, voiceover, musik, render).",
+        "scriptwriter": "Mode PENULIS NASKAH: Fokus menghasilkan naskah narasi yang kuat, hook memikat di detik awal, pacing rapat, dan emosi cerita yang mendalam.",
+        "researcher": "Mode PENELITI: Fokus mencari referensi akurat, perburuan bahan footage/meme/audio yang relevan, dan perbandingan fakta.",
+        "fast": "Mode CEPAT: Eksekusi langsung rencana dengan langkah paling singkat dan to-the-point tanpa penjelasan bertele-tele."
+    }.get(mode.lower(), "Mode SUTRADARA: Produksi konten otonom dari hulu ke hilir.")
+
+    # 3. Bangun System Prompt Proaktif V3.3
+    system_prompt = f"""Kamu adalah ContentStudio Autonomous AI Agent (ContentStudio V3.3), sutradara dan produser video profesional.
+TARGET UTAMA: Vertikal 9:16 Full HD 1080p (1080x1920, 30fps) kecuali pengguna meminta format lain.
 
 WORKSPACE AKTIF: '{active_ws}'
-DNA KONSTITUSI WORKSPACE:
-- Niche: {ws_context.get('niche') or 'Belum didefinisikan.'}
-- Style: {ws_context.get('style') or 'Standard 9:16, 1080p Full HD, blur_fill.'}
-- Laws: {ws_context.get('laws') or 'Bebas black-bars, hook 3 detik awal, anti-pasif.'}
+MODE OPERASI: {mode.upper()} - {mode_instructions}
 
 SKILL OPERASIONAL TERSEDIA (Gunakan tool load_skill jika memerlukan detail SOP):
 {skill_idx_summary}
 
-PERILAKU & ATURAN KERAS EKSEKUTOR:
-1. DILARANG MERESPONS PASIF ala Customer Service ("Maaf mendengar itu...", atau balik bertanya sebelum bertindak).
-2. Jika pengguna meminta membuat video / konten:
-   - Segera muat skill relevan via 'load_skill' (misal: 'short-form-producer').
-   - Periksa bahan di inbox atau folder proyek via 'ls_dir'.
-   - Jika belum ada bahan media: gunakan tool 'hunt_media' untuk berburu klip video 1080p, meme reaksi, atau SFX.
-   - Susun file 'plan.json' lengkap via 'write_file' dengan 'resolution': '1080p', 'aspect': '9:16', 'framing': 'blur_fill'.
-   - Validasi menggunakan 'validate_plan'. Jika ada error, perbaiki sendiri file 'plan.json' hingga lolos.
-   - Akhiri dengan 'prepare_render' agar tombol ACC produksi muncul untuk pengguna.
-3. Selalu bertindak mandiri memanfaatkan tool yang tersedia sebelum memberikan laporan final kepada pengguna.
+PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.3):
+1. DILARANG MERESPONS PASIF ala Customer Service ("Maaf...", atau balik bertanya hal teknis sebelum bertindak).
+2. DILARANG MENYURUH USER KLIK MANUAL DI UI. Gunakan tool 'run_studio_cli' untuk mengotomasi proyek:
+   - Membuat/mengatur proyek: ['project', 'create', '--name', '<nama>', '--ratio', '9:16']
+   - Menyimpan naskah: ['script', 'set', '--project', '<nama>', '--text', '<naskah>']
+   - Memecah adegan: ['script', 'split-scenes', '--project', '<nama>']
+   - Mencari & mengalokasikan media: ['media', 'assign', '--project', '<nama>', '--scene', '<idx>', '--url', '<url>']
+   - Voiceover AI: ['voice', 'generate', '--project', '<nama>']
+   - Audio mastering: ['voice', 'master', '--project', '<nama>', '--preset', 'podcast']
+   - Background music: ['audio', 'set-bgm', '--project', '<nama>', '--file', '<path>']
+3. Jika belum ada bahan media: gunakan tool 'hunt_media' atau 'run_studio_cli' untuk mencari aset video/audio.
+4. Tampilkan tabel ringkasan shot list (adegan, narasi, visual, durasi) kepada pengguna di akhir.
 """
 
     # 4. Susun pesan percakapan
@@ -878,7 +923,8 @@ Atau ketik instruksi bahasa alami bebas untuk memerintahkan AI Agent menyusun da
 def execute_command(
     input_text: str,
     attached_files: List[str] = [],
-    event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+    event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    mode: str = "director"
 ) -> Dict[str, Any]:
     """
     Pintu masuk interaktif utama yang dipanggil oleh bridge.run_console:
@@ -894,17 +940,23 @@ def execute_command(
         user_prompt=text,
         attached_files=attached_files,
         session=session,
-        event_callback=event_callback
+        event_callback=event_callback,
+        mode=mode
     )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ContentStudio Autonomous CLI Agent")
     parser.add_argument("prompt", nargs="?", default="", help="Instruksi untuk agen atau perintah '/'")
     parser.add_argument("--file", action="append", default=[], help="Lampiran file media")
+    parser.add_argument("--mode", default="director", choices=["director", "scriptwriter", "researcher", "fast"], help="Mode agen AI")
+    parser.add_argument("--bridge-port", default=None, help="Port server studio-bridge lokal")
     args = parser.parse_args()
 
+    if args.bridge_port:
+        os.environ["BRIDGE_PORT"] = args.bridge_port
+
     if args.prompt:
-        res = execute_command(args.prompt, args.file)
+        res = execute_command(args.prompt, args.file, mode=args.mode)
         print(json.dumps(res, indent=2, ensure_ascii=False))
     else:
         print("ContentStudio Autonomous CLI Agent Ready.")

@@ -7,7 +7,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Refresh
@@ -43,22 +43,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.contentstudio.app.runtime.ExtensionMcpItem
 import com.contentstudio.app.runtime.ExtensionSkillItem
 import com.contentstudio.app.runtime.LinuxRuntimeManager
-import com.contentstudio.app.ui.theme.StudioBg
-import com.contentstudio.app.ui.theme.StudioBorder
-import com.contentstudio.app.ui.theme.StudioCard
+import com.contentstudio.app.ui.theme.StudioDangerRed
 import com.contentstudio.app.ui.theme.StudioSage
-import com.contentstudio.app.ui.theme.StudioSecondary
-import com.contentstudio.app.ui.theme.StudioSurface
-import com.contentstudio.app.ui.theme.StudioSurfaceElevated
-import com.contentstudio.app.ui.theme.StudioTopBar
 import com.contentstudio.app.ui.theme.TextMuted
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
@@ -66,45 +63,67 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private val ExtBg = Color(0xFF0B0C0E)
+private val ExtCard = Color(0xFF15171C)
+private val ExtElevated = Color(0xFF1E2128)
+
 @Composable
 fun ExtensionsScreen(
     modifier: Modifier = Modifier,
     onMenuClick: (() -> Unit)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Skills, 1: MCP
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Skills, 1: MCP, 2: Media Engine
     var isLoading by remember { mutableStateOf(false) }
 
     val skills = remember { mutableStateListOf<ExtensionSkillItem>() }
     val mcpServers = remember { mutableStateListOf<ExtensionMcpItem>() }
 
+    // Media Engine BYOK state
+    var pexelsKey by remember { mutableStateOf("") }
+    var pixabayKey by remember { mutableStateOf("") }
+    var isSavingKeys by remember { mutableStateOf(false) }
+    var isUpdatingYtdlp by remember { mutableStateOf(false) }
+    var ytdlpReady by remember { mutableStateOf(false) }
+    var pexelsConfigured by remember { mutableStateOf(false) }
+    var pixabayConfigured by remember { mutableStateOf(false) }
+    var mediaStatusMsg by remember { mutableStateOf<String?>(null) }
+
     fun refreshData() {
         isLoading = true
         coroutineScope.launch {
-            val s = withContext(Dispatchers.IO) {
-                LinuxRuntimeManager.listExtensionSkills()
-            }
+            val s = withContext(Dispatchers.IO) { LinuxRuntimeManager.listExtensionSkills() }
             skills.clear()
             skills.addAll(s)
-            val m = withContext(Dispatchers.IO) {
-                LinuxRuntimeManager.listExtensionMcp()
-            }
+            val m = withContext(Dispatchers.IO) { LinuxRuntimeManager.listExtensionMcp() }
             mcpServers.clear()
             mcpServers.addAll(m)
             isLoading = false
         }
     }
 
+    fun refreshMediaConfig() {
+        coroutineScope.launch {
+            val cfg = withContext(Dispatchers.IO) { LinuxRuntimeManager.getMediaConfig() }
+            if (cfg != null) {
+                ytdlpReady = cfg.ytdlpReady
+                pexelsConfigured = cfg.pexelsConfigured
+                pixabayConfigured = cfg.pixabayConfigured
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         refreshData()
+        refreshMediaConfig()
     }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(StudioBg)
+            .background(ExtBg)
     ) {
-        // TAB SWITCHER & ACTIONS
+        // ── TAB SWITCHER ───────────────────────────────────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -116,75 +135,44 @@ fun ExtensionsScreen(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF15171C))
+                    .background(ExtCard)
                     .padding(3.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-            val tab0Bg by animateColorAsState(if (selectedTab == 0) StudioSurfaceElevated else Color.Transparent, label = "tab0Bg")
-            val tab0Text by animateColorAsState(if (selectedTab == 0) TextPrimary else TextSecondary, label = "tab0Text")
-
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(tab0Bg)
-                    .clickable { selectedTab = 0 }
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Extension,
-                    contentDescription = "Skills",
-                    tint = tab0Text,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.size(8.dp))
-                Text(
-                    text = "Skills (${skills.size})",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 12.sp,
-                    fontWeight = if (selectedTab == 0) FontWeight.SemiBold else FontWeight.Medium,
-                    color = tab0Text
-                )
+                listOf(0 to "Skills", 1 to "MCP", 2 to "Media").forEach { (idx, label) ->
+                    val tabBg by animateColorAsState(
+                        if (selectedTab == idx) ExtElevated else Color.Transparent,
+                        label = "tab${idx}Bg"
+                    )
+                    val tabText by animateColorAsState(
+                        if (selectedTab == idx) TextPrimary else TextSecondary,
+                        label = "tab${idx}Text"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(tabBg)
+                            .clickable { selectedTab = idx }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 12.sp,
+                            fontWeight = if (selectedTab == idx) FontWeight.SemiBold else FontWeight.Medium,
+                            color = tabText
+                        )
+                    }
+                }
             }
 
-            val tab1Bg by animateColorAsState(if (selectedTab == 1) StudioSurfaceElevated else Color.Transparent, label = "tab1Bg")
-            val tab1Text by animateColorAsState(if (selectedTab == 1) TextPrimary else TextSecondary, label = "tab1Text")
-
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(tab1Bg)
-                    .clickable { selectedTab = 1 }
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Tune,
-                    contentDescription = "MCP",
-                    tint = tab1Text,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.size(8.dp))
-                Text(
-                    text = "MCP Servers (${mcpServers.size})",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 12.sp,
-                    fontWeight = if (selectedTab == 1) FontWeight.SemiBold else FontWeight.Medium,
-                    color = tab1Text
-                )
-            }
-        }
-
-        Box(
+            Box(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF15171C))
-                    .clickable { refreshData() },
+                    .background(ExtCard)
+                    .clickable { refreshData(); refreshMediaConfig() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -196,33 +184,24 @@ fun ExtensionsScreen(
             }
         }
 
-        // CONTENT AREA WITH SMOOTH ANIMATION
+        // ── CONTENT ────────────────────────────────────────────────────────────
         AnimatedContent(
             targetState = selectedTab,
             transitionSpec = {
                 fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(160))
             },
             label = "extTabTransition",
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
+            modifier = Modifier.weight(1f).fillMaxWidth()
         ) { tab ->
             when (tab) {
+                // ── SKILLS ─────────────────────────────────────────────────────
                 0 -> {
-                    // SKILLS TAB
                     if (skills.isEmpty() && !isLoading) {
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(24.dp),
+                            modifier = Modifier.fillMaxSize().padding(24.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "Tidak ada custom skills aktif",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 13.sp,
-                                color = TextMuted
-                            )
+                            Text(text = "Tidak ada custom skills aktif", fontSize = 13.sp, color = TextMuted)
                         }
                     } else {
                         LazyColumn(
@@ -231,7 +210,13 @@ fun ExtensionsScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             items(skills) { skill ->
-                                StudioCard {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(ExtCard)
+                                        .padding(14.dp)
+                                ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -249,51 +234,37 @@ fun ExtensionsScreen(
                                             )
                                             Text(
                                                 text = skill.name,
-                                                fontFamily = FontFamily.Default,
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = TextPrimary
                                             )
                                         }
-
-                                        // Status Pill
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                                         ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(6.dp)
-                                                    .clip(CircleShape)
-                                                    .background(StudioSage)
-                                            )
+                                            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(StudioSage))
                                             Text(
                                                 text = "Active",
                                                 fontFamily = FontFamily.Monospace,
                                                 fontSize = 11.sp,
-                                                fontWeight = FontWeight.Medium,
                                                 color = StudioSage
                                             )
                                         }
                                     }
-
                                     Spacer(modifier = Modifier.height(6.dp))
-
                                     Text(
                                         text = skill.description,
-                                        fontFamily = FontFamily.Default,
                                         fontSize = 12.sp,
                                         color = TextSecondary,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
-
                                     Spacer(modifier = Modifier.height(8.dp))
-
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(4.dp))
-                                            .background(StudioSurfaceElevated)
+                                            .background(ExtElevated)
                                             .padding(horizontal = 8.dp, vertical = 4.dp)
                                     ) {
                                         Text(
@@ -310,21 +281,15 @@ fun ExtensionsScreen(
                         }
                     }
                 }
+
+                // ── MCP SERVERS ────────────────────────────────────────────────
                 1 -> {
-                    // MCP TAB
                     if (mcpServers.isEmpty() && !isLoading) {
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(24.dp),
+                            modifier = Modifier.fillMaxSize().padding(24.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "Tidak ada server MCP terkonfigurasi",
-                                fontFamily = FontFamily.Default,
-                                fontSize = 13.sp,
-                                color = TextMuted
-                            )
+                            Text(text = "Tidak ada server MCP terkonfigurasi", fontSize = 13.sp, color = TextMuted)
                         }
                     } else {
                         LazyColumn(
@@ -333,7 +298,13 @@ fun ExtensionsScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             items(mcpServers) { srv ->
-                                StudioCard {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(ExtCard)
+                                        .padding(14.dp)
+                                ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -351,18 +322,15 @@ fun ExtensionsScreen(
                                             )
                                             Text(
                                                 text = srv.name,
-                                                fontFamily = FontFamily.Default,
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = TextPrimary
                                             )
                                         }
-
-                                        // Type Badge
                                         Box(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(4.dp))
-                                                .background(StudioSurfaceElevated)
+                                                .background(ExtElevated)
                                                 .padding(horizontal = 7.dp, vertical = 3.dp)
                                         ) {
                                             Text(
@@ -373,14 +341,13 @@ fun ExtensionsScreen(
                                             )
                                         }
                                     }
-
                                     if (srv.target.isNotBlank()) {
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clip(RoundedCornerShape(4.dp))
-                                                .background(StudioSurfaceElevated)
+                                                .background(ExtElevated)
                                                 .padding(horizontal = 8.dp, vertical = 5.dp)
                                         ) {
                                             Text(
@@ -393,6 +360,227 @@ fun ExtensionsScreen(
                                             )
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── MEDIA ENGINE & API KEYS ────────────────────────────────────
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Engine status card
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(ExtCard)
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "Media Engine & API Keys",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary
+                                )
+                                listOf(
+                                    "Full Studio CLI" to true,
+                                    "Wikimedia Commons" to true,
+                                    "yt-dlp" to ytdlpReady,
+                                    "Pexels API" to pexelsConfigured,
+                                    "Pixabay API" to pixabayConfigured
+                                ).forEach { (label, active) ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(text = label, fontSize = 13.sp, color = TextSecondary)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.size(6.dp).clip(CircleShape)
+                                                    .background(if (active) StudioSage else Color(0xFF8A919E))
+                                            )
+                                            Text(
+                                                text = if (active) "Active" else "Not configured",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                color = if (active) StudioSage else TextMuted
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // yt-dlp update row
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(ExtCard)
+                                    .padding(14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(text = "yt-dlp", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+                                    Text(text = "Media downloader engine", fontSize = 11.sp, color = TextMuted)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(ExtElevated)
+                                        .clickable(enabled = !isUpdatingYtdlp) {
+                                            isUpdatingYtdlp = true
+                                            mediaStatusMsg = null
+                                            coroutineScope.launch {
+                                                val ok = withContext(Dispatchers.IO) { LinuxRuntimeManager.updateYtdlp() }
+                                                isUpdatingYtdlp = false
+                                                mediaStatusMsg = if (ok) "yt-dlp berhasil diperbarui" else "Gagal memperbarui yt-dlp"
+                                                refreshMediaConfig()
+                                            }
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = if (isUpdatingYtdlp) "Memperbarui..." else "Update yt-dlp",
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isUpdatingYtdlp) TextMuted else TextPrimary
+                                    )
+                                }
+                            }
+                        }
+
+                        // BYOK API Keys
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(ExtCard)
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "BYOK API Keys",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary
+                                )
+
+                                // Pexels Key
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(text = "Pexels API Key", fontSize = 11.sp, color = TextMuted)
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(ExtElevated)
+                                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    ) {
+                                        BasicTextField(
+                                            value = pexelsKey,
+                                            onValueChange = { pexelsKey = it },
+                                            textStyle = TextStyle(fontSize = 13.sp, color = TextPrimary, fontFamily = FontFamily.Monospace),
+                                            cursorBrush = SolidColor(TextPrimary),
+                                            visualTransformation = PasswordVisualTransformation(),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            decorationBox = { inner ->
+                                                if (pexelsKey.isEmpty()) {
+                                                    Text(
+                                                        text = if (pexelsConfigured) "Sudah dikonfigurasi" else "Masukkan Pexels API key...",
+                                                        fontSize = 13.sp,
+                                                        color = if (pexelsConfigured) StudioSage else TextMuted
+                                                    )
+                                                }
+                                                inner()
+                                            }
+                                        )
+                                    }
+                                }
+
+                                // Pixabay Key
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(text = "Pixabay API Key", fontSize = 11.sp, color = TextMuted)
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(ExtElevated)
+                                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    ) {
+                                        BasicTextField(
+                                            value = pixabayKey,
+                                            onValueChange = { pixabayKey = it },
+                                            textStyle = TextStyle(fontSize = 13.sp, color = TextPrimary, fontFamily = FontFamily.Monospace),
+                                            cursorBrush = SolidColor(TextPrimary),
+                                            visualTransformation = PasswordVisualTransformation(),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            decorationBox = { inner ->
+                                                if (pixabayKey.isEmpty()) {
+                                                    Text(
+                                                        text = if (pixabayConfigured) "Sudah dikonfigurasi" else "Masukkan Pixabay API key...",
+                                                        fontSize = 13.sp,
+                                                        color = if (pixabayConfigured) StudioSage else TextMuted
+                                                    )
+                                                }
+                                                inner()
+                                            }
+                                        )
+                                    }
+                                }
+
+                                if (mediaStatusMsg != null) {
+                                    Text(
+                                        text = mediaStatusMsg!!,
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (mediaStatusMsg!!.startsWith("Gagal")) StudioDangerRed else StudioSage
+                                    )
+                                }
+
+                                // Save button
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(ExtElevated)
+                                        .clickable(enabled = !isSavingKeys && (pexelsKey.isNotBlank() || pixabayKey.isNotBlank())) {
+                                            isSavingKeys = true
+                                            mediaStatusMsg = null
+                                            coroutineScope.launch {
+                                                val ok = withContext(Dispatchers.IO) {
+                                                    LinuxRuntimeManager.saveMediaConfig(pexelsKey, pixabayKey)
+                                                }
+                                                isSavingKeys = false
+                                                mediaStatusMsg = if (ok) "API keys berhasil disimpan" else "Gagal menyimpan API keys"
+                                                if (ok) { pexelsKey = ""; pixabayKey = ""; refreshMediaConfig() }
+                                            }
+                                        }
+                                        .padding(vertical = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (isSavingKeys) "Menyimpan..." else "Save Keys",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isSavingKeys) TextMuted else TextPrimary
+                                    )
                                 }
                             }
                         }

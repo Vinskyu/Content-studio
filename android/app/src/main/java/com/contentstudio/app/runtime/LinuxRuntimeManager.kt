@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -18,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
@@ -112,6 +115,7 @@ data class ChatMessageItem(
     val isStreaming: Boolean = false,
     val processSteps: List<String> = emptyList(),
     val processDurationMs: Long = 0L,
+    val mediaItems: List<StockMediaItem> = emptyList(),
 )
 
 data class ExtensionSkillItem(
@@ -128,6 +132,26 @@ data class ExtensionMcpItem(
     val type: String,
     val target: String,
     val status: String,
+)
+
+data class StockMediaConfig(
+    val pexelsConfigured: Boolean,
+    val pixabayConfigured: Boolean,
+    val ytdlpReady: Boolean,
+    val active: Boolean
+)
+
+data class StockMediaItem(
+    val id: String,
+    val provider: String,
+    val type: String,
+    val title: String,
+    val thumbnailUrl: String,
+    val downloadUrl: String,
+    val width: Int,
+    val height: Int,
+    val durationSec: Int,
+    val author: String
 )
 
 object LinuxRuntimeManager {
@@ -178,6 +202,13 @@ object LinuxRuntimeManager {
 
     private val _isServerRunning = MutableStateFlow(false)
     val isServerRunning: StateFlow<Boolean> = _isServerRunning.asStateFlow()
+
+    private val _uiSyncVersion = MutableStateFlow(0L)
+    val uiSyncVersion: StateFlow<Long> = _uiSyncVersion.asStateFlow()
+
+    private fun incrementUiSyncVersion() {
+        _uiSyncVersion.value = _uiSyncVersion.value + 1L
+    }
 
     private fun appendLog(line: String) {
         val clean = line.trimEnd()
@@ -1024,6 +1055,18 @@ object LinuxRuntimeManager {
         }
     }
 
+    fun renameSession(id: String, newTitle: String): JSONObject {
+        return try {
+            val body = JSONObject().apply { put("title", newTitle.trim()) }.toString()
+            httpRequest("PATCH", "/sessions/$id", body)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("error", e.message ?: "Gagal mengubah nama sesi")
+            }
+        }
+    }
+
     fun stopChat() {
         scope.launch {
             try {
@@ -1853,8 +1896,11 @@ object LinuxRuntimeManager {
         sessionId: String,
         message: String,
         workspace: String? = null,
+        mode: String? = "director",
+        attachments: List<String> = emptyList(),
         onConnectionCreated: ((HttpURLConnection) -> Unit)? = null,
         onStatus: (String) -> Unit,
+        onUiSync: ((scope: String, target: String) -> Unit)? = null,
         onDelta: (String) -> Unit,
         onDone: (String) -> Unit,
         onError: (String) -> Unit,
@@ -1866,6 +1912,14 @@ object LinuxRuntimeManager {
                 put("message", message)
                 if (!workspace.isNullOrBlank()) {
                     put("workspace", workspace)
+                }
+                if (!mode.isNullOrBlank()) {
+                    put("mode", mode)
+                }
+                if (attachments.isNotEmpty()) {
+                    val arr = JSONArray()
+                    attachments.forEach { arr.put(it) }
+                    put("attachments", arr)
                 }
             }.toString()
 
@@ -1898,15 +1952,27 @@ object LinuxRuntimeManager {
             BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { reader ->
                 var line = reader.readLine()
                 var finished = false
+                var currentEvent: String? = null
                 while (line != null) {
-                    if (line.startsWith("data: ")) {
-                        val jsonStr = line.removePrefix("data: ").trim()
+                    val trimmed = line.trim()
+                    if (trimmed.startsWith("event: ")) {
+                        currentEvent = trimmed.removePrefix("event: ").trim()
+                    } else if (trimmed.startsWith("data: ")) {
+                        val jsonStr = trimmed.removePrefix("data: ").trim()
                         if (jsonStr.isNotEmpty()) {
                             try {
                                 val obj = JSONObject(jsonStr)
                                 val type = obj.optString("type")
                                 val text = obj.optString("text", "")
-                                when (type) {
+                                if (currentEvent == "ui_sync" || type == "ui_sync") {
+                                    val scope = obj.optString("scope", "all")
+                                    val target = obj.optString("target", "")
+                                    onUiSync?.invoke(scope, target)
+                                    incrementUiSyncVersion()
+                                    if (scope == "project" && target.isNotBlank()) {
+                                        setActiveWorkspace(target)
+                                    }
+                                } else when (type) {
                                     "status" -> {
                                         val stepLabel = text.ifBlank { obj.optString("step", "") }
                                         if (stepLabel.isNotBlank()) onStatus(stepLabel)
@@ -1927,6 +1993,9 @@ object LinuxRuntimeManager {
                                 }
                             } catch (_: Exception) {}
                         }
+                        currentEvent = null
+                    } else if (trimmed.isEmpty()) {
+                        currentEvent = null
                     }
                     line = reader.readLine()
                 }
@@ -1938,4 +2007,178 @@ object LinuxRuntimeManager {
             onError(e.message ?: "Koneksi ke bridge terputus")
         }
     }
+
+    suspend fun getMediaConfig(): StockMediaConfig? = withContext(Dispatchers.IO) {
+        try {
+            val conn = URL("$BRIDGE_BASE_URL/media/config").openConnection() as HttpURLConnection
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
+            if (conn.responseCode == 200) {
+                val txt = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = JSONObject(txt)
+                StockMediaConfig(
+                    pexelsConfigured = obj.optBoolean("pexelsConfigured", false),
+                    pixabayConfigured = obj.optBoolean("pixabayConfigured", false),
+                    ytdlpReady = obj.optBoolean("ytdlpReady", false),
+                    active = obj.optBoolean("active", true)
+                )
+            } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun saveMediaConfig(pexelsKey: String, pixabayKey: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL("$BRIDGE_BASE_URL/media/config").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 5000
+                readTimeout = 5000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val body = JSONObject().apply {
+                put("pexelsKey", pexelsKey.trim())
+                put("pixabayKey", pixabayKey.trim())
+            }.toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            conn.responseCode == 200
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun updateYtdlp(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL("$BRIDGE_BASE_URL/media/update-ytdlp").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 5000
+                readTimeout = 120000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            conn.outputStream.close()
+            conn.responseCode == 200
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun searchMedia(
+        query: String,
+        source: String = "auto",
+        type: String = "video",
+        orientation: String = "all",
+        limit: Int = 8
+    ): List<StockMediaItem> = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL("$BRIDGE_BASE_URL/media/search").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8000
+                readTimeout = 50000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val body = JSONObject().apply {
+                put("query", query)
+                put("source", source)
+                put("type", type)
+                put("orientation", orientation)
+                put("limit", limit)
+            }.toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            if (conn.responseCode == 200) {
+                val txt = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = JSONObject(txt)
+                val itemsArr = obj.optJSONArray("items") ?: JSONArray()
+                val list = mutableListOf<StockMediaItem>()
+                for (i in 0 until itemsArr.length()) {
+                    val it = itemsArr.getJSONObject(i)
+                    list.add(
+                        StockMediaItem(
+                            id = it.optString("id"),
+                            provider = it.optString("provider"),
+                            type = it.optString("type"),
+                            title = it.optString("title"),
+                            thumbnailUrl = it.optString("thumbnailUrl"),
+                            downloadUrl = it.optString("downloadUrl"),
+                            width = it.optInt("width", 1080),
+                            height = it.optInt("height", 1920),
+                            durationSec = it.optInt("durationSec", 0),
+                            author = it.optString("author")
+                        )
+                    )
+                }
+                list
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun downloadMedia(
+        url: String,
+        filename: String = "",
+        project: String = "",
+        audioOnly: Boolean = false,
+        start: String = "",
+        end: String = ""
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL("$BRIDGE_BASE_URL/media/download").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 10000
+                readTimeout = 600000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val body = JSONObject().apply {
+                put("url", url)
+                if (filename.isNotBlank()) put("filename", filename)
+                if (project.isNotBlank()) put("project", project)
+                if (audioOnly) put("audioOnly", true)
+                if (start.isNotBlank()) put("start", start)
+                if (end.isNotBlank()) put("end", end)
+            }.toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            conn.responseCode == 200
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun resolveUriToLocalPath(context: Context, uri: Uri): String? {
+        return try {
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            var displayName = "file_${System.currentTimeMillis()}"
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val nameIdx = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIdx >= 0) {
+                        val n = it.getString(nameIdx)
+                        if (!n.isNullOrBlank()) displayName = n
+                    }
+                }
+            }
+            val cleanName = displayName.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
+            val attDir = File(context.cacheDir, "attachments")
+            attDir.mkdirs()
+            val destFile = File(attDir, "${System.currentTimeMillis()}_$cleanName")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (destFile.exists() && destFile.length() > 0) {
+                destFile.absolutePath
+            } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun copyUriToAttachmentCache(context: Context, uri: Uri): String? =
+        resolveUriToLocalPath(context, uri)
 }
