@@ -81,6 +81,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -132,6 +133,7 @@ fun ChatScreen(
     onNavigateToExtensions: () -> Unit = {}
 ) {
     val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     val messages by ChatController.messages.collectAsState()
@@ -169,7 +171,7 @@ fun ChatScreen(
     LaunchedEffect(Unit) {
         ChatController.ensureInitialized()
         withContext(Dispatchers.IO) {
-            val loaded = LinuxRuntimeManager.listWorkspaces()
+            val loaded = parseWorkspacesJson(LinuxRuntimeManager.listWorkspaces())
             withContext(Dispatchers.Main) {
                 projectsList.clear()
                 projectsList.addAll(loaded)
@@ -263,7 +265,7 @@ fun ChatScreen(
                     .background(MatteSurface)
                     .clickable {
                         scope.launch(Dispatchers.IO) {
-                            val loaded = LinuxRuntimeManager.listWorkspaces()
+                            val loaded = parseWorkspacesJson(LinuxRuntimeManager.listWorkspaces())
                             withContext(Dispatchers.Main) {
                                 projectsList.clear()
                                 projectsList.addAll(loaded)
@@ -423,7 +425,13 @@ fun ChatScreen(
                                 onUseAsScript = { scriptText ->
                                     if (activeWorkspace.isNotBlank()) {
                                         scope.launch(Dispatchers.IO) {
-                                            val ok = LinuxRuntimeManager.writeWorkspaceScript(activeWorkspace, scriptText)
+                                            val ok = try {
+                                                val dir = LinuxRuntimeManager.getWorkspaceScriptsDir(context, activeWorkspace)
+                                                java.io.File(dir, "main.txt").writeText(scriptText)
+                                                true
+                                            } catch (_: Exception) {
+                                                false
+                                            }
                                             withContext(Dispatchers.Main) {
                                                 scriptSavedToast = if (ok) {
                                                     "Naskah disimpan ke proyek $activeWorkspace"
@@ -1486,4 +1494,22 @@ private fun InlineErrorCard(
             )
         }
     }
+}
+
+private fun parseWorkspacesJson(res: org.json.JSONObject): List<WorkspaceSummary> {
+    if (res.optString("status") != "ok") return emptyList()
+    val arr = res.optJSONArray("workspaces") ?: return emptyList()
+    val list = mutableListOf<WorkspaceSummary>()
+    for (i in 0 until arr.length()) {
+        val obj = arr.optJSONObject(i) ?: continue
+        list.add(
+            WorkspaceSummary(
+                name = obj.optString("name", ""),
+                channelId = obj.optString("channel_id", ""),
+                aspectRatio = obj.optString("aspect_ratio", "9:16"),
+                stage = obj.optString("stage", "draft")
+            )
+        )
+    }
+    return list
 }
