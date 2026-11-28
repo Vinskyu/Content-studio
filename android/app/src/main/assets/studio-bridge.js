@@ -2391,60 +2391,90 @@ async function handleChat(req, res) {
   let fullOutput = '';
   let errOutput = '';
   let stderrLineBuffer = '';
+  let stdoutBuffer = '';
   let firstTokenEmitted = false;
+  const CHAT_MARKERS = ['[UI_SYNC]', '[ACTION_PLAN]', '[SUGGESTIONS]'];
+
+  function emitDeltaText(text) {
+    if (!text) return;
+    fullOutput += text;
+    if (!firstTokenEmitted) {
+      firstTokenEmitted = true;
+      emitStatus('Menyusun jawaban');
+    }
+    emit({ type: 'delta', text });
+  }
+
+  // Teks yang aman dikirim dari sisa baris: tahan bila ujungnya masih potongan awal marker.
+  function safeStdoutCut() {
+    const bracketIdx = stdoutBuffer.lastIndexOf('[');
+    if (bracketIdx === -1) return stdoutBuffer.length;
+    const frag = stdoutBuffer.slice(bracketIdx);
+    if (frag.length <= 24 && CHAT_MARKERS.some((m) => m.startsWith(frag))) return bracketIdx;
+    return stdoutBuffer.length;
+  }
+
+  function handleStdoutLine(rawLine) {
+    const line = stripAnsi(rawLine);
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (fullOutput) emitDeltaText('\n');
+      return;
+    }
+    if (trimmed.startsWith('[UI_SYNC]')) {
+      const payloadStr = trimmed.replace(/^\[UI_SYNC\]\s*/, '').trim();
+      const sepIdx = payloadStr.indexOf(':');
+      const scope = sepIdx !== -1 ? payloadStr.slice(0, sepIdx).trim() : 'all';
+      const target = sepIdx !== -1 ? payloadStr.slice(sepIdx + 1).trim() : payloadStr;
+      if (!res.writableEnded) {
+        res.write(`event: ui_sync\ndata: ${JSON.stringify({ scope, target })}\n\n`);
+      }
+      emit({ type: 'ui_sync', scope, target });
+    } else if (trimmed.startsWith('[ACTION_PLAN]')) {
+      const rawJson = trimmed.replace(/^\[ACTION_PLAN\]\s*/, '').trim();
+      try {
+        const planObj = JSON.parse(rawJson);
+        if (!res.writableEnded) {
+          res.write(`event: action_plan\ndata: ${JSON.stringify(planObj)}\n\n`);
+        }
+        emit({ type: 'action_plan', ...planObj });
+      } catch (_) {}
+    } else if (trimmed.startsWith('[SUGGESTIONS]')) {
+      const rawJson = trimmed.replace(/^\[SUGGESTIONS\]\s*/, '').trim();
+      try {
+        const sugArr = JSON.parse(rawJson);
+        if (Array.isArray(sugArr)) {
+          if (!res.writableEnded) {
+            res.write(`event: suggestions\ndata: ${JSON.stringify({ suggestions: sugArr })}\n\n`);
+          }
+          emit({ type: 'suggestions', suggestions: sugArr });
+        }
+      } catch (_) {}
+    } else {
+      emitDeltaText(line + '\n');
+    }
+  }
 
   proc.stdout.on('data', (chunk) => {
-    const rawText = chunk.toString('utf8');
-    let cleanText = stripAnsi(rawText);
+    stdoutBuffer += stripAnsi(chunk.toString('utf8'));
 
-    if (cleanText.includes('[UI_SYNC]') || cleanText.includes('[ACTION_PLAN]') || cleanText.includes('[SUGGESTIONS]')) {
-      const pLines = cleanText.split(/\r?\n/);
-      const kept = [];
-      for (const pl of pLines) {
-        const trimmed = pl.trim();
-        if (trimmed.startsWith('[UI_SYNC]')) {
-          const payloadStr = trimmed.replace(/^\[UI_SYNC\]\s*/, '').trim();
-          const sepIdx = payloadStr.indexOf(':');
-          const scope = sepIdx !== -1 ? payloadStr.slice(0, sepIdx).trim() : 'all';
-          const target = sepIdx !== -1 ? payloadStr.slice(sepIdx + 1).trim() : payloadStr;
-          if (!res.writableEnded) {
-            res.write(`event: ui_sync\ndata: ${JSON.stringify({ scope, target })}\n\n`);
-          }
-          emit({ type: 'ui_sync', scope, target });
-        } else if (trimmed.startsWith('[ACTION_PLAN]')) {
-          const rawJson = trimmed.replace(/^\[ACTION_PLAN\]\s*/, '').trim();
-          try {
-            const planObj = JSON.parse(rawJson);
-            if (!res.writableEnded) {
-              res.write(`event: action_plan\ndata: ${JSON.stringify(planObj)}\n\n`);
-            }
-            emit({ type: 'action_plan', ...planObj });
-          } catch (_) {}
-        } else if (trimmed.startsWith('[SUGGESTIONS]')) {
-          const rawJson = trimmed.replace(/^\[SUGGESTIONS\]\s*/, '').trim();
-          try {
-            const sugArr = JSON.parse(rawJson);
-            if (Array.isArray(sugArr)) {
-              if (!res.writableEnded) {
-                res.write(`event: suggestions\ndata: ${JSON.stringify({ suggestions: sugArr })}\n\n`);
-              }
-              emit({ type: 'suggestions', suggestions: sugArr });
-            }
-          } catch (_) {}
-        } else {
-          kept.push(pl);
-        }
-      }
-      cleanText = kept.join('\n');
+    // Kirim hanya baris yang utuh: marker [SUGGESTIONS] / [ACTION_PLAN] tidak pernah terpotong.
+    let nlIdx = stdoutBuffer.indexOf('\n');
+    while (nlIdx !== -1) {
+      const line = stdoutBuffer.slice(0, nlIdx);
+      stdoutBuffer = stdoutBuffer.slice(nlIdx + 1);
+      handleStdoutLine(line);
+      nlIdx = stdoutBuffer.indexOf('\n');
     }
 
-    fullOutput += cleanText;
-    if (cleanText) {
-      if (!firstTokenEmitted) {
-        firstTokenEmitted = true;
-        emitStatus('Menyusun jawaban');
+    // Sisa baris panjang tanpa newline tetap streaming, kecuali bagian yang mirip awal marker.
+    if (stdoutBuffer.length > 600) {
+      const cut = safeStdoutCut();
+      if (cut > 0) {
+        const safe = stdoutBuffer.slice(0, cut);
+        stdoutBuffer = stdoutBuffer.slice(cut);
+        emitDeltaText(safe);
       }
-      emit({ type: 'delta', text: cleanText });
     }
   });
 
@@ -2502,6 +2532,10 @@ async function handleChat(req, res) {
   proc.on('exit', (code) => {
     stopChatTimers();
     if (activeChatProc === proc) activeChatProc = null;
+    if (stdoutBuffer) {
+      handleStdoutLine(stdoutBuffer);
+      stdoutBuffer = '';
+    }
 
     const cleanStdout = stripAnsi(fullOutput)
       .split(/\r?\n/)
