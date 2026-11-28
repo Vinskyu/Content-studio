@@ -129,7 +129,8 @@ data class StudioMediaFile(
     val relativePath: String,
     val sizeBytes: Long,
     val updatedAt: Long,
-    val streamUrl: String
+    val streamUrl: String,
+    val thumbUrl: String = "",
 )
 
 data class ActionPlanCardData(
@@ -2348,7 +2349,8 @@ object LinuxRuntimeManager {
                             relativePath = it.optString("relativePath"),
                             sizeBytes = it.optLong("sizeBytes", 0L),
                             updatedAt = it.optLong("updatedAt", 0L),
-                            streamUrl = it.optString("streamUrl")
+                            streamUrl = it.optString("streamUrl"),
+                            thumbUrl = it.optString("thumbUrl")
                         )
                     )
                 }
@@ -2368,6 +2370,40 @@ object LinuxRuntimeManager {
             "$BRIDGE_BASE_URL$streamUrl"
         }
     }
+
+    fun getFullThumbUrl(media: StudioMediaFile): String {
+        val thumb = media.thumbUrl.ifBlank { media.streamUrl }
+        return getFullMediaUrl(thumb)
+    }
+
+    suspend fun deleteStudioMediaFiles(relativePaths: List<String>): Boolean =
+        withContext(Dispatchers.IO) {
+            if (relativePaths.isEmpty()) return@withContext false
+            try {
+                val conn = (URL("$BRIDGE_BASE_URL/api/media/delete").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 10000
+                    readTimeout = 60000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                }
+                val pathsArr = JSONArray()
+                relativePaths.forEach { pathsArr.put(it) }
+                val body = JSONObject().apply {
+                    put("paths", pathsArr)
+                }.toString()
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+                if (conn.responseCode != 200) {
+                    false
+                } else {
+                    val txt = conn.inputStream.bufferedReader().use { it.readText() }
+                    val obj = JSONObject(txt)
+                    obj.optBoolean("ok", false) && obj.optJSONArray("failed")?.length() == 0
+                }
+            } catch (e: Exception) {
+                false
+            }
+        }
 
     fun resolveUriToLocalPath(context: Context, uri: Uri): String? {
         return try {

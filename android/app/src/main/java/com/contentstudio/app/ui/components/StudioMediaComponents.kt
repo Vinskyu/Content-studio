@@ -1,19 +1,12 @@
 package com.contentstudio.app.ui.components
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.net.Uri
-import android.util.LruCache
 import android.widget.VideoView
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,34 +19,47 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
-private val mediaThumbCache = LruCache<String, Bitmap>(24)
+private val MediaCanvas = Color(0xFF0B0C0E)
+private val MediaSurface = Color(0xFF15171C)
+private val MediaActive = Color(0xFF1E2128)
+private val MediaPrimary = Color(0xFFF2F4F8)
+private val MediaMuted = Color(0xFF8A919E)
+private val MediaDanger = Color(0xFFD96B6B)
+
+private fun mediaCategoryLabel(category: String): String = when (category) {
+    "render" -> "RENDER"
+    "scene" -> "SCENE"
+    "asset" -> "ASSET"
+    "audio" -> "AUDIO"
+    "doc" -> "DOC"
+    else -> "FILE"
+}
 
 @Composable
 fun StudioMediaThumbnail(
@@ -61,111 +67,102 @@ fun StudioMediaThumbnail(
     fullUrl: String,
     modifier: Modifier = Modifier
 ) {
-    when (media.type) {
-        "image" -> {
-            AsyncImage(
-                model = fullUrl,
-                contentDescription = media.name,
-                contentScale = ContentScale.Crop,
-                modifier = modifier
-            )
-        }
-        "video" -> {
-            var bitmap by remember(fullUrl) { mutableStateOf<Bitmap?>(mediaThumbCache.get(fullUrl)) }
-            LaunchedEffect(fullUrl) {
-                if (bitmap == null) {
-                    val bmp = withContext(Dispatchers.IO) {
-                        val r = MediaMetadataRetriever()
-                        try {
-                            r.setDataSource(fullUrl, emptyMap())
-                            r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                        } catch (_: Exception) {
-                            null
-                        } finally {
-                            try { r.release() } catch (_: Exception) {}
-                        }
-                    }
-                    if (bmp != null) {
-                        mediaThumbCache.put(fullUrl, bmp)
-                        bitmap = bmp
-                    }
-                }
+    Box(modifier = modifier) {
+        when (media.type) {
+            "image", "video" -> {
+                AsyncImage(
+                    model = fullUrl,
+                    contentDescription = media.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MediaActive)
+                )
             }
-            Box(modifier = modifier) {
-                val bmp = bitmap
-                if (bmp != null) {
-                    Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = media.name,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color(0xFF1E2128)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(text = "MP4", color = Color(0xFF8A919E), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                    }
-                }
+            "audio" -> {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(36.dp)
-                        .background(Color(0x66000000), RoundedCornerShape(18.dp)),
+                        .fillMaxSize()
+                        .background(MediaActive),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.PlayArrow,
-                        contentDescription = "Play",
-                        tint = Color(0xFFF2F4F8),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Text(
-                    text = "MP4",
-                    color = Color(0xFFF2F4F8),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(4.dp)
-                        .background(Color(0x99000000), RoundedCornerShape(3.dp))
-                        .padding(horizontal = 3.dp, vertical = 1.dp)
-                )
-            }
-        }
-        "audio" -> {
-            Box(
-                modifier = modifier.background(Color(0xFF1E2128)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
                         imageVector = Icons.Outlined.GraphicEq,
                         contentDescription = media.name,
-                        tint = Color(0xFF8A919E),
+                        tint = MediaMuted,
                         modifier = Modifier.size(28.dp)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = media.name,
-                        color = Color(0xFFF2F4F8),
-                        fontSize = 10.sp,
-                        maxLines = 2
                     )
                 }
             }
+            else -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MediaActive),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = media.name, color = MediaMuted, fontSize = 10.sp, maxLines = 2)
+                }
+            }
         }
-        else -> {
+
+        if (media.type == "video") {
             Box(
-                modifier = modifier.background(Color(0xFF1E2128)),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(34.dp)
+                    .background(Color(0x55000000), RoundedCornerShape(17.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(text = media.name, color = Color(0xFF8A919E), fontSize = 10.sp, maxLines = 2)
+                Icon(
+                    imageVector = Icons.Outlined.PlayArrow,
+                    contentDescription = "Play",
+                    tint = MediaPrimary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Text(
+                text = "MP4",
+                color = MediaPrimary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .background(Color(0x99000000), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 3.dp, vertical = 1.dp)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, Color(0xE6050608))
+                    )
+                )
+                .padding(start = 6.dp, end = 6.dp, top = 16.dp, bottom = 5.dp)
+        ) {
+            Column {
+                Text(
+                    text = media.name,
+                    color = MediaPrimary,
+                    fontSize = 9.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(1.dp))
+                Text(
+                    text = mediaCategoryLabel(media.category),
+                    color = MediaMuted,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
             }
         }
     }
@@ -175,8 +172,12 @@ fun StudioMediaThumbnail(
 fun StudioMediaPlayerDialog(
     media: com.contentstudio.app.runtime.StudioMediaFile,
     fullUrl: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onDelete: ((com.contentstudio.app.runtime.StudioMediaFile) -> Unit)? = null
 ) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    val deleteAction = onDelete
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -184,7 +185,7 @@ fun StudioMediaPlayerDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF0B0C0E))
+                .background(MediaCanvas)
         ) {
             IconButton(
                 onClick = onDismiss,
@@ -192,11 +193,11 @@ fun StudioMediaPlayerDialog(
                     .align(Alignment.TopEnd)
                     .padding(12.dp)
             ) {
-                Icon(imageVector = Icons.Outlined.Close, contentDescription = "Close", tint = Color(0xFFF2F4F8))
+                Icon(imageVector = Icons.Outlined.Close, contentDescription = "Close", tint = MediaPrimary)
             }
+
             when (media.type) {
                 "video" -> {
-                    val context = LocalContext.current
                     AndroidView(
                         factory = { ctx ->
                             VideoView(ctx).apply {
@@ -239,7 +240,7 @@ fun StudioMediaPlayerDialog(
                         modifier = Modifier.align(Alignment.Center),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(text = media.name, color = Color(0xFFF2F4F8), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text(text = media.name, color = MediaPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(16.dp))
                         IconButton(onClick = {
                             if (isPlaying) {
@@ -253,16 +254,76 @@ fun StudioMediaPlayerDialog(
                             Icon(
                                 imageVector = if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
                                 contentDescription = "Play/Pause",
-                                tint = Color(0xFFF2F4F8),
+                                tint = MediaPrimary,
                                 modifier = Modifier.size(48.dp)
                             )
                         }
                     }
                 }
                 else -> {
-                    Text(text = media.name, color = Color(0xFFF2F4F8), modifier = Modifier.align(Alignment.Center))
+                    Text(text = media.name, color = MediaPrimary, modifier = Modifier.align(Alignment.Center))
+                }
+            }
+
+            if (onDelete != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .background(MediaDanger, RoundedCornerShape(8.dp))
+                            .clickable { showDeleteConfirm = true }
+                            .padding(horizontal = 20.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = "Delete",
+                            color = MediaCanvas,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
         }
+    }
+
+    if (showDeleteConfirm && deleteAction != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            containerColor = MediaSurface,
+            shape = RoundedCornerShape(10.dp),
+            title = {
+                Text(text = "Hapus file ini?", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MediaPrimary)
+            },
+            text = {
+                Text(text = media.name, fontSize = 12.sp, color = MediaMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            },
+            confirmButton = {
+                Box(
+                    modifier = Modifier
+                        .background(MediaDanger, RoundedCornerShape(6.dp))
+                        .clickable {
+                            showDeleteConfirm = false
+                            deleteAction.invoke(media)
+                        }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(text = "Hapus", color = MediaCanvas, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                Box(
+                    modifier = Modifier
+                        .background(MediaActive, RoundedCornerShape(6.dp))
+                        .clickable { showDeleteConfirm = false }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(text = "Batal", color = MediaPrimary, fontSize = 12.sp)
+                }
+            }
+        )
     }
 }

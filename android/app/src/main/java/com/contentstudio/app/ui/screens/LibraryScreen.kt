@@ -4,8 +4,12 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -25,10 +29,12 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Refresh
@@ -65,6 +71,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -106,7 +113,7 @@ private val LibMatteBg = Color(0xFF0B0C0E)
 private val LibMatteCard = Color(0xFF15171C)
 private val LibMatteElevated = Color(0xFF1E2128)
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun LibraryScreen(
     modifier: Modifier = Modifier
@@ -123,6 +130,9 @@ fun LibraryScreen(
     val studioMedia = remember { mutableStateListOf<com.contentstudio.app.runtime.StudioMediaFile>() }
     var selectedMediaFilter by remember { mutableStateOf("All") }
     var selectedStudioMedia by remember { mutableStateOf<com.contentstudio.app.runtime.StudioMediaFile?>(null) }
+    var mediaSelectionMode by remember { mutableStateOf(false) }
+    val selectedMediaPaths = remember { mutableStateListOf<String>() }
+    var pendingMediaDelete by remember { mutableStateOf<List<String>>(emptyList()) }
 
     LaunchedEffect(activeTab) {
         if (activeTab == "media") {
@@ -130,6 +140,12 @@ fun LibraryScreen(
             studioMedia.addAll(LinuxRuntimeManager.fetchStudioMediaIndex())
         }
     }
+
+    fun exitMediaSelection() {
+        mediaSelectionMode = false
+        selectedMediaPaths.clear()
+    }
+
     val assets = remember { mutableStateListOf<LibraryAssetItem>() }
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
     var assetToUse by remember { mutableStateOf<LibraryAssetItem?>(null) }
@@ -138,13 +154,15 @@ fun LibraryScreen(
     // Stock Media & BYOK state
     var showStockSheet by remember { mutableStateOf(false) }
 
-    val libHasOverlay = showStockSheet || assetToDelete != null || assetToUse != null || selectedStudioMedia != null
+    val libHasOverlay = showStockSheet || assetToDelete != null || assetToUse != null ||
+        selectedStudioMedia != null || mediaSelectionMode
     BackHandler(enabled = libHasOverlay) {
         when {
             showStockSheet -> showStockSheet = false
             assetToDelete != null -> assetToDelete = null
             assetToUse != null -> assetToUse = null
             selectedStudioMedia != null -> selectedStudioMedia = null
+            mediaSelectionMode -> exitMediaSelection()
         }
     }
     var stockSheetTab by remember { mutableIntStateOf(0) } // 0: Search, 1: URL Download
@@ -182,6 +200,20 @@ fun LibraryScreen(
 
     var isBusy by remember { mutableStateOf(false) }
     var actionStatus by remember { mutableStateOf<String?>(null) }
+
+    fun deleteStudioMedia(paths: List<String>) {
+        if (paths.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            val ok = LinuxRuntimeManager.deleteStudioMediaFiles(paths)
+            val list = LinuxRuntimeManager.fetchStudioMediaIndex()
+            withContext(Dispatchers.Main) {
+                studioMedia.clear()
+                studioMedia.addAll(list)
+                exitMediaSelection()
+                actionStatus = if (ok) "${paths.size} file dihapus" else "Sebagian file gagal dihapus"
+            }
+        }
+    }
 
     fun loadMediaConfig() {
         scope.launch(Dispatchers.IO) {
@@ -890,7 +922,7 @@ fun LibraryScreen(
             }
             else -> {
                 // MEDIA TAB: visual gallery (self-contained)
-                val mediaFilters = listOf("All", "Renders", "Videos", "Images", "Audio")
+                val mediaFilters = listOf("All", "Renders", "Videos", "Images", "Audio", "Docs")
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -899,7 +931,8 @@ fun LibraryScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
+                            .padding(horizontal = 16.dp)
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         mediaFilters.forEach { f ->
@@ -908,7 +941,10 @@ fun LibraryScreen(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(if (sel) LibMatteElevated else Color.Transparent)
-                                    .clickable { selectedMediaFilter = f }
+                                    .clickable {
+                                        selectedMediaFilter = f
+                                        exitMediaSelection()
+                                    }
                                     .padding(horizontal = 10.dp, vertical = 6.dp)
                             ) {
                                 Text(
@@ -921,13 +957,65 @@ fun LibraryScreen(
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
+
+                    if (mediaSelectionMode) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(LibMatteElevated)
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${selectedMediaPaths.size} dipilih",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(5.dp))
+                                        .background(LibMatteCard)
+                                        .clickable { exitMediaSelection() }
+                                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                                ) {
+                                    Text(text = "Batal", fontSize = 11.sp, color = TextPrimary)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(5.dp))
+                                        .background(StudioDangerRed)
+                                        .clickable {
+                                            if (selectedMediaPaths.isNotEmpty()) {
+                                                pendingMediaDelete = selectedMediaPaths.toList()
+                                            }
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "Hapus (${selectedMediaPaths.size})",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = LibMatteBg
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
                     val filteredMedia = studioMedia.filter { m ->
                         when (selectedMediaFilter) {
                             "Renders" -> m.category == "render"
                             "Videos" -> m.type == "video"
                             "Images" -> m.type == "image"
                             "Audio" -> m.type == "audio"
-                            else -> true
+                            "Docs" -> m.type == "doc"
+                            else -> m.type == "video" || m.type == "image" || m.type == "audio"
                         }
                     }
                     if (filteredMedia.isEmpty()) {
@@ -938,7 +1026,57 @@ fun LibraryScreen(
                                 .padding(24.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(text = "No media found.", fontSize = 13.sp, color = TextMuted)
+                            Text(
+                                text = if (selectedMediaFilter == "Docs") "No documents found." else "No media found.",
+                                fontSize = 13.sp,
+                                color = TextMuted
+                            )
+                        }
+                    } else if (selectedMediaFilter == "Docs") {
+                        LazyColumn(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            contentPadding = PaddingValues(bottom = 32.dp)
+                        ) {
+                            items(filteredMedia) { media ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(LibMatteCard)
+                                        .clickable { selectedStudioMedia = media }
+                                        .padding(horizontal = 10.dp, vertical = 9.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = media.name,
+                                            fontSize = 12.sp,
+                                            color = TextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = media.relativePath,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            color = TextMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Text(
+                                        text = "${(media.sizeBytes / 1024L).coerceAtLeast(1L)} KB",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                            }
                         }
                     } else {
                         LazyVerticalGrid(
@@ -952,19 +1090,61 @@ fun LibraryScreen(
                             contentPadding = PaddingValues(bottom = 32.dp)
                         ) {
                             items(filteredMedia) { media ->
-                                val fullUrl = LinuxRuntimeManager.getFullMediaUrl(media.streamUrl)
+                                val isSelected = selectedMediaPaths.contains(media.relativePath)
                                 Box(
                                     modifier = Modifier
                                         .aspectRatio(1f)
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(LibMatteCard)
-                                        .clickable { selectedStudioMedia = media }
+                                        .combinedClickable(
+                                            onClick = {
+                                                if (mediaSelectionMode) {
+                                                    if (isSelected) {
+                                                        selectedMediaPaths.remove(media.relativePath)
+                                                    } else {
+                                                        selectedMediaPaths.add(media.relativePath)
+                                                    }
+                                                    if (selectedMediaPaths.isEmpty()) {
+                                                        mediaSelectionMode = false
+                                                    }
+                                                } else {
+                                                    selectedStudioMedia = media
+                                                }
+                                            },
+                                            onLongClick = {
+                                                mediaSelectionMode = true
+                                                if (!selectedMediaPaths.contains(media.relativePath)) {
+                                                    selectedMediaPaths.add(media.relativePath)
+                                                }
+                                            }
+                                        )
                                 ) {
                                     StudioMediaThumbnail(
                                         media = media,
-                                        fullUrl = fullUrl,
+                                        fullUrl = LinuxRuntimeManager.getFullThumbUrl(media),
                                         modifier = Modifier.fillMaxSize()
                                     )
+                                    if (mediaSelectionMode) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(6.dp)
+                                                .size(18.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isSelected) TextPrimary else Color(0x88000000))
+                                                .border(1.dp, if (isSelected) TextPrimary else TextMuted, CircleShape),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Outlined.Check,
+                                                    contentDescription = "Selected",
+                                                    tint = LibMatteBg,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1371,7 +1551,60 @@ fun LibraryScreen(
         StudioMediaPlayerDialog(
             media = media,
             fullUrl = fullUrl,
-            onDismiss = { selectedStudioMedia = null }
+            onDismiss = { selectedStudioMedia = null },
+            onDelete = { target ->
+                selectedStudioMedia = null
+                deleteStudioMedia(listOf(target.relativePath))
+            }
+        )
+    }
+
+    if (pendingMediaDelete.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { pendingMediaDelete = emptyList() },
+            containerColor = SurfaceCard,
+            shape = RoundedCornerShape(10.dp),
+            title = {
+                Text(
+                    text = "Hapus ${pendingMediaDelete.size} file?",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Text(
+                    text = "File akan dihapus permanen dari penyimpanan proyek.",
+                    fontSize = 12.sp,
+                    color = TextMuted
+                )
+            },
+            confirmButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(StudioDangerRed)
+                        .clickable {
+                            val targets = pendingMediaDelete
+                            pendingMediaDelete = emptyList()
+                            deleteStudioMedia(targets)
+                        }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(text = "Hapus", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = LibMatteBg)
+                }
+            },
+            dismissButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(LibMatteElevated)
+                        .clickable { pendingMediaDelete = emptyList() }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(text = "Batal", fontSize = 12.sp, color = TextPrimary)
+                }
+            }
         )
     }
 

@@ -5,9 +5,12 @@ import android.media.MediaPlayer
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -46,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -68,6 +72,7 @@ import com.contentstudio.app.ui.theme.StudioBg
 import com.contentstudio.app.ui.theme.StudioBorder
 import com.contentstudio.app.ui.theme.StudioCard
 import com.contentstudio.app.ui.theme.StudioDangerBg
+import com.contentstudio.app.ui.theme.StudioDangerRed
 import com.contentstudio.app.ui.theme.StudioDangerText
 import com.contentstudio.app.ui.theme.StudioPrimary
 import com.contentstudio.app.ui.theme.StudioPrimaryButton
@@ -99,6 +104,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -128,7 +134,7 @@ data class SceneItem(
     var beatRole: String = "Beat",
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ProjectBoardScreen(
     workspaceName: String,
@@ -152,6 +158,10 @@ fun ProjectBoardScreen(
     var showCopilotSheet by remember { mutableStateOf(false) }
     val projectMedia = remember { mutableStateListOf<com.contentstudio.app.runtime.StudioMediaFile>() }
     var selectedProjectMedia by remember { mutableStateOf<com.contentstudio.app.runtime.StudioMediaFile?>(null) }
+    var assetFilter by remember { mutableStateOf("All") }
+    var mediaSelectionMode by remember { mutableStateOf(false) }
+    val selectedMediaPaths = remember { mutableStateListOf<String>() }
+    var pendingMediaDelete by remember { mutableStateOf<List<String>>(emptyList()) }
     var copilotText by remember { mutableStateOf("") }
 
     // Project state
@@ -190,6 +200,29 @@ fun ProjectBoardScreen(
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    fun exitMediaSelection() {
+        mediaSelectionMode = false
+        selectedMediaPaths.clear()
+    }
+
+    fun deleteProjectMedia(paths: List<String>) {
+        if (paths.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            val ok = LinuxRuntimeManager.deleteStudioMediaFiles(paths)
+            val refreshed = LinuxRuntimeManager.fetchStudioMediaIndex(project = workspaceName)
+            withContext(Dispatchers.Main) {
+                projectMedia.clear()
+                projectMedia.addAll(refreshed)
+                exitMediaSelection()
+                if (ok) {
+                    statusMessage = "${paths.size} file dihapus"
+                } else {
+                    errorMessage = "Sebagian file gagal dihapus"
+                }
+            }
+        }
+    }
+
     // Modals
     var showFilesModal by remember { mutableStateOf(false) }
     var showLibraryPickerForScene by remember { mutableStateOf<Int?>(null) }
@@ -201,6 +234,7 @@ fun ProjectBoardScreen(
             showLibraryPickerForScene != null -> showLibraryPickerForScene = null
             activeAudioPickingType != null -> activeAudioPickingType = null
             selectedProjectMedia != null -> selectedProjectMedia = null
+            mediaSelectionMode -> exitMediaSelection()
             else -> onBack()
         }
     }
@@ -1341,39 +1375,215 @@ fun ProjectBoardScreen(
                     ) {
                         val filters = listOf("All", "Videos", "Images", "Audio", "Renders", "Docs")
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             filters.forEach { f ->
-                                val sel = (f == "All") // placeholder filter state not tracked; keep simple
+                                val sel = assetFilter == f
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(if (sel) StudioSurfaceElevated else StudioBg)
-                                        .clickable { }
+                                        .clickable {
+                                            assetFilter = f
+                                            exitMediaSelection()
+                                        }
                                         .padding(horizontal = 8.dp, vertical = 6.dp)
                                 ) {
-                                    Text(text = f, fontSize = 11.sp, color = TextPrimary)
+                                    Text(
+                                        text = f,
+                                        fontSize = 11.sp,
+                                        color = if (sel) TextPrimary else TextMuted
+                                    )
                                 }
                             }
                         }
+
                         Spacer(modifier = Modifier.height(8.dp))
-                        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                            columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(3),
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(projectMedia) { media ->
-                                val fullUrl = LinuxRuntimeManager.getFullMediaUrl(media.streamUrl)
-                                Box(
-                                    modifier = Modifier
-                                        .aspectRatio(1f)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(StudioSurface)
-                                        .clickable { selectedProjectMedia = media }
-                                ) {
-                                    StudioMediaThumbnail(media = media, fullUrl = fullUrl, modifier = Modifier.fillMaxSize())
+
+                        if (mediaSelectionMode) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(StudioSurfaceElevated)
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${selectedMediaPaths.size} dipilih",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(5.dp))
+                                            .background(StudioSurface)
+                                            .clickable { exitMediaSelection() }
+                                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                                    ) {
+                                        Text(text = "Batal", fontSize = 11.sp, color = TextPrimary)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(5.dp))
+                                            .background(StudioDangerRed)
+                                            .clickable {
+                                                if (selectedMediaPaths.isNotEmpty()) {
+                                                    pendingMediaDelete = selectedMediaPaths.toList()
+                                                }
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                                    ) {
+                                        Text(
+                                            text = "Hapus (${selectedMediaPaths.size})",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = StudioBg
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        val filteredProjectMedia = projectMedia.filter { m ->
+                            when (assetFilter) {
+                                "Videos" -> m.type == "video"
+                                "Images" -> m.type == "image"
+                                "Audio" -> m.type == "audio"
+                                "Renders" -> m.category == "render"
+                                "Docs" -> m.type == "doc"
+                                else -> m.type == "video" || m.type == "image" || m.type == "audio"
+                            }
+                        }
+
+                        if (filteredProjectMedia.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (assetFilter == "Docs") "No documents found." else "No media found.",
+                                    fontSize = 12.sp,
+                                    color = TextMuted
+                                )
+                            }
+                        } else if (assetFilter == "Docs") {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                contentPadding = PaddingValues(bottom = 24.dp)
+                            ) {
+                                items(filteredProjectMedia) { media ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(StudioSurface)
+                                            .clickable { selectedProjectMedia = media }
+                                            .padding(horizontal = 10.dp, vertical = 9.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = media.name,
+                                                fontSize = 12.sp,
+                                                color = TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = media.relativePath,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 9.sp,
+                                                color = TextMuted,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Text(
+                                            text = "${(media.sizeBytes / 1024L).coerceAtLeast(1L)} KB",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            color = TextMuted
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(3),
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                contentPadding = PaddingValues(bottom = 24.dp)
+                            ) {
+                                items(filteredProjectMedia) { media ->
+                                    val isSelected = selectedMediaPaths.contains(media.relativePath)
+                                    Box(
+                                        modifier = Modifier
+                                            .aspectRatio(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(StudioSurface)
+                                            .combinedClickable(
+                                                onClick = {
+                                                    if (mediaSelectionMode) {
+                                                        if (isSelected) {
+                                                            selectedMediaPaths.remove(media.relativePath)
+                                                        } else {
+                                                            selectedMediaPaths.add(media.relativePath)
+                                                        }
+                                                        if (selectedMediaPaths.isEmpty()) {
+                                                            mediaSelectionMode = false
+                                                        }
+                                                    } else {
+                                                        selectedProjectMedia = media
+                                                    }
+                                                },
+                                                onLongClick = {
+                                                    mediaSelectionMode = true
+                                                    if (!selectedMediaPaths.contains(media.relativePath)) {
+                                                        selectedMediaPaths.add(media.relativePath)
+                                                    }
+                                                }
+                                            )
+                                    ) {
+                                        StudioMediaThumbnail(
+                                            media = media,
+                                            fullUrl = LinuxRuntimeManager.getFullThumbUrl(media),
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                        if (mediaSelectionMode) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(6.dp)
+                                                    .size(18.dp)
+                                                    .clip(CircleShape)
+                                                    .background(if (isSelected) StudioPrimary else Color(0x88000000))
+                                                    .border(1.dp, if (isSelected) StudioPrimary else TextMuted, CircleShape),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                if (isSelected) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Check,
+                                                        contentDescription = "Selected",
+                                                        tint = StudioBg,
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1904,7 +2114,64 @@ fun ProjectBoardScreen(
     if (selectedProjectMedia != null) {
         val media = selectedProjectMedia!!
         val fullUrl = LinuxRuntimeManager.getFullMediaUrl(media.streamUrl)
-        StudioMediaPlayerDialog(media = media, fullUrl = fullUrl, onDismiss = { selectedProjectMedia = null })
+        StudioMediaPlayerDialog(
+            media = media,
+            fullUrl = fullUrl,
+            onDismiss = { selectedProjectMedia = null },
+            onDelete = { target ->
+                selectedProjectMedia = null
+                deleteProjectMedia(listOf(target.relativePath))
+            }
+        )
+    }
+
+    if (pendingMediaDelete.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { pendingMediaDelete = emptyList() },
+            containerColor = StudioSurface,
+            shape = RoundedCornerShape(10.dp),
+            title = {
+                Text(
+                    text = "Hapus ${pendingMediaDelete.size} file?",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                Text(
+                    text = "File akan dihapus permanen dari penyimpanan proyek.",
+                    fontSize = 12.sp,
+                    color = TextMuted
+                )
+            },
+            confirmButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(StudioDangerRed)
+                        .clickable {
+                            val targets = pendingMediaDelete
+                            pendingMediaDelete = emptyList()
+                            deleteProjectMedia(targets)
+                        }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(text = "Hapus", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = StudioBg)
+                }
+            },
+            dismissButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(StudioSurfaceElevated)
+                        .clickable { pendingMediaDelete = emptyList() }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(text = "Batal", fontSize = 12.sp, color = TextPrimary)
+                }
+            }
+        )
     }
 
 

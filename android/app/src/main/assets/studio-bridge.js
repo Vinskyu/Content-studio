@@ -1407,6 +1407,20 @@ function mediaCategoryForRel(rel) {
   return 'asset';
 }
 
+// Prioritas saat ada salinan identik (nama + ukuran sama) di subfolder berbeda.
+function mediaCategoryPriority(category) {
+  if (category === 'render') return 0;
+  if (category === 'scene') return 1;
+  if (category === 'asset') return 2;
+  if (category === 'audio') return 3;
+  return 4;
+}
+
+const IGNORED_MEDIA_DIRS = new Set(['tmp', '__pycache__', 'qa_frames', 'thumbs']);
+const THUMB_DIR = path.join(CONTENT_STUDIO_DIR, '.cache', 'thumbs');
+const thumbInflight = new Map();
+const MEDIA_DELETE_ROOTS = ['workspaces', 'library', 'assets'];
+
 function scanMediaFiles(projectFilter) {
   const items = [];
   const cleanProject = projectFilter ? path.basename(String(projectFilter).trim()) : '';
@@ -1434,10 +1448,31 @@ function scanMediaFiles(projectFilter) {
     walkMedia(root.base, root.base, root.project, items);
   }
 
-  // If project filter, also ensure only that project's workspace included (already filtered above).
+  // Deduplikasi: satu item per path kanonik, lalu buang salinan identik
+  // (nama + ukuran sama persis) dalam scope proyek yang sama, dengan
+  // prioritas renders/ > scenes/ > assets/.
+  const seenPaths = new Set();
+  const bySignature = new Map();
+  for (const item of items) {
+    if (seenPaths.has(item.relativePath)) continue;
+    seenPaths.add(item.relativePath);
+    const signature = `${item.project}|${item.name}|${item.sizeBytes}`;
+    const prev = bySignature.get(signature);
+    if (!prev) {
+      bySignature.set(signature, item);
+      continue;
+    }
+    const prevRank = mediaCategoryPriority(prev.category);
+    const nextRank = mediaCategoryPriority(item.category);
+    if (nextRank < prevRank || (nextRank === prevRank && item.updatedAt > prev.updatedAt)) {
+      bySignature.set(signature, item);
+    }
+  }
+
   // Sort newest first
-  items.sort((a, b) => b.updatedAt - a.updatedAt);
-  return items;
+  const deduped = Array.from(bySignature.values());
+  deduped.sort((a, b) => b.updatedAt - a.updatedAt);
+  return deduped;
 }
 
 function walkMedia(currentDir, baseDir, project, items) {
@@ -1447,6 +1482,7 @@ function walkMedia(currentDir, baseDir, project, items) {
     if (ent.name.startsWith('.')) continue;
     const full = path.join(currentDir, ent.name);
     if (ent.isDirectory()) {
+      if (IGNORED_MEDIA_DIRS.has(ent.name.toLowerCase())) continue;
       walkMedia(full, baseDir, project, items);
     } else if (ent.isFile()) {
       const ext = path.extname(ent.name).toLowerCase();
@@ -1466,6 +1502,7 @@ function walkMedia(currentDir, baseDir, project, items) {
         streamRel = full.replace(/\\/g, '/');
       }
       const id = crypto.createHash('md5').update(full).digest('hex');
+      const streamUrl = '/api/media/stream?path=' + encodeURIComponent(streamRel);
       items.push({
         id,
         name: ent.name,
@@ -1475,7 +1512,10 @@ function walkMedia(currentDir, baseDir, project, items) {
         relativePath: streamRel,
         sizeBytes: stat.size,
         updatedAt: stat.mtimeMs,
-        streamUrl: '/api/media/stream?path=' + encodeURIComponent(streamRel),
+        streamUrl,
+        thumbUrl: type === 'video'
+          ? '/api/media/thumb?path=' + encodeURIComponent(streamRel)
+          : (type === 'image' ? streamUrl : ''),
       });
     }
   }
@@ -1562,6 +1602,194 @@ function handleMediaStream(req, res, urlObj) {
   res.setHeader('Content-Length', total);
   const stream = fs.createReadStream(full);
   stream.pipe(res);
+}
+
+function resolveFfmpegBin() {
+  const candidates = [
+    path.join(PREFIX_DIR, 'bin', 'ffmpeg'),
+    '/data/user/0/com.agy/files/usr/bin/ffmpeg',
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'ffmpeg';
+}
+
+function thumbCachePathFor(fullPath, mtimeMs) {
+  const hash = crypto
+    .createHash('md5')
+    .update(`${fullPath}:${Math.round(mtimeMs || 0)}`)
+    .digest('hex');
+  return path.join(THUMB_DIR, `${hash}.jpg`);
+}
+
+function sendJpegFile(res, filePath) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    res.writeHead(200, {
+      'Content-Type': 'image/jpeg',
+      'Content-Length': buf.length,
+      'Cache-Control': 'public, max-age=86400',
+    });
+    res.end(buf);
+  } catch (_) {
+    res.statusCode = 404;
+    res.end('Not found');
+  }
+}
+
+// Ambil satu frame video lewat ffmpeg. JSON keyframes pada AV1/fade-in sering
+// menghasilkan kotak hitam, jadi detik ke-1 dipakai dulu lalu fallback ke 0.
+function extractVideoThumb(fullPath, outPath) {
+  const bin = resolveFfmpegBin();
+  const seekSteps = ['00:00:01', '00:00:00'];
+
+  return new Promise((resolve) => {
+    function attempt(idx) {
+      if (idx >= seekSteps.length) return resolve(false);
+      const args = [
+        '-hide_banner', '-loglevel', 'error', '-y',
+        '-ss', seekSteps[idx],
+        '-i', fullPath,
+        '-frames:v', '1',
+        '-vf', 'scale=360:-1',
+        '-q:v', '5',
+        outPath,
+      ];
+      execFile(bin, args, { timeout: 20000 }, (err) => {
+        let ok = false;
+        try {
+          ok = !err && fs.existsSync(outPath) && fs.statSync(outPath).size > 0;
+        } catch (_) {
+          ok = false;
+        }
+        if (ok) return resolve(true);
+        try {
+          if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+        } catch (_) {}
+        attempt(idx + 1);
+      });
+    }
+    attempt(0);
+  });
+}
+
+async function handleMediaThumb(req, res, urlObj) {
+  const rel = urlObj.searchParams.get('path');
+  const full = resolveSafeMediaPath(rel);
+  if (!full) {
+    res.statusCode = 403;
+    res.end('Forbidden');
+    return;
+  }
+
+  const type = mediaTypeForExt(path.extname(full).toLowerCase());
+  if (type === 'image') {
+    return handleMediaStream(req, res, urlObj);
+  }
+  if (type !== 'video') {
+    res.statusCode = 415;
+    res.end('Unsupported media type');
+    return;
+  }
+
+  let stat = null;
+  try {
+    stat = fs.statSync(full);
+  } catch (_) {
+    res.statusCode = 404;
+    res.end('Not found');
+    return;
+  }
+
+  const cachePath = thumbCachePathFor(full, stat.mtimeMs);
+  try {
+    if (fs.existsSync(cachePath) && fs.statSync(cachePath).size > 0) {
+      return sendJpegFile(res, cachePath);
+    }
+  } catch (_) {}
+
+  try {
+    fs.mkdirSync(THUMB_DIR, { recursive: true });
+  } catch (_) {}
+
+  let pending = thumbInflight.get(cachePath);
+  if (!pending) {
+    pending = extractVideoThumb(full, cachePath).finally(() => thumbInflight.delete(cachePath));
+    thumbInflight.set(cachePath, pending);
+  }
+
+  const ok = await pending;
+  if (!ok || !fs.existsSync(cachePath)) {
+    res.statusCode = 500;
+    res.end('Gagal membuat thumbnail video');
+    return;
+  }
+  return sendJpegFile(res, cachePath);
+}
+
+function resolveDeletableMediaPath(relPath) {
+  if (!relPath) return null;
+  let decoded;
+  try {
+    decoded = decodeURIComponent(String(relPath));
+  } catch (_) {
+    decoded = String(relPath);
+  }
+  decoded = decoded.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!decoded || decoded.includes('..') || decoded.includes('\0')) return null;
+
+  const baseResolved = path.resolve(CONTENT_STUDIO_DIR);
+  const full = path.resolve(baseResolved, decoded);
+  if (full === baseResolved || !full.startsWith(baseResolved + path.sep)) return null;
+
+  const topDir = decoded.split('/')[0];
+  if (!MEDIA_DELETE_ROOTS.includes(topDir)) return null;
+
+  try {
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
+  } catch (_) {
+    return null;
+  }
+  return { full, rel: path.relative(baseResolved, full).replace(/\\/g, '/') };
+}
+
+async function handleMediaDelete(req, res) {
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (_) {
+    return sendJson(res, 400, { ok: false, error: 'JSON tidak valid', deleted: [], failed: [] });
+  }
+
+  const paths = Array.isArray(body.paths) ? body.paths : [];
+  if (paths.length === 0) {
+    return sendJson(res, 400, { ok: false, error: 'Daftar paths kosong', deleted: [], failed: [] });
+  }
+
+  const deleted = [];
+  const failed = [];
+
+  for (const rawPath of paths) {
+    const target = resolveDeletableMediaPath(rawPath);
+    if (!target) {
+      failed.push({ path: String(rawPath), error: 'Path tidak diizinkan' });
+      continue;
+    }
+    try {
+      try {
+        const st = fs.statSync(target.full);
+        const cache = thumbCachePathFor(target.full, st.mtimeMs);
+        if (fs.existsSync(cache)) fs.unlinkSync(cache);
+      } catch (_) {}
+      fs.unlinkSync(target.full);
+      deleted.push(target.rel);
+    } catch (e) {
+      failed.push({ path: String(rawPath), error: e.message });
+    }
+  }
+
+  return sendJson(res, 200, { ok: failed.length === 0, deleted, failed });
 }
 
 // ── Auth Handlers ───────────────────────────────────────────────────────────
@@ -3564,6 +3792,25 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && pathname === '/api/media/stream') {
     return handleMediaStream(req, res, urlObj);
+  }
+
+  if (req.method === 'GET' && pathname === '/api/media/thumb') {
+    handleMediaThumb(req, res, urlObj).catch((err) => {
+      try {
+        res.statusCode = 500;
+        res.end(`Gagal membuat thumbnail: ${err.message}`);
+      } catch (_) {}
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/media/delete') {
+    handleMediaDelete(req, res).catch(() => {
+      try {
+        sendJson(res, 500, { ok: false, error: 'Gagal menghapus media', deleted: [], failed: [] });
+      } catch (_) {}
+    });
+    return;
   }
 
   return sendJson(res, 404, { status: 'error', error: 'Endpoint tidak ditemukan' });
