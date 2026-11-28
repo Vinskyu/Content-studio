@@ -166,16 +166,6 @@ fun LibraryScreen(
     val selectedMediaPaths = remember { mutableStateListOf<String>() }
     var pendingMediaDelete by remember { mutableStateOf<List<String>>(emptyList()) }
 
-    LaunchedEffect(activeTab) {
-        if (activeTab == "media") {
-            refreshGalleryTree()
-        } else if (activeTab == "channels") {
-            refreshChannels()
-        } else if (activeTab == "templates") {
-            refreshTemplates()
-        }
-    }
-
     fun exitMediaSelection() {
         mediaSelectionMode = false
         selectedMediaPaths.clear()
@@ -314,7 +304,7 @@ fun LibraryScreen(
             val ok = LinuxRuntimeManager.downloadMedia(
                 url = item.downloadUrl,
                 filename = item.title.take(40),
-                project = selectedProjectFolder?.name ?: activeWorkspace,
+                project = selectedProjectFolder?.projectName ?: activeWorkspace,
                 audioOnly = (item.type == "audio")
             )
             withContext(Dispatchers.Main) {
@@ -354,7 +344,7 @@ fun LibraryScreen(
             val ok = LinuxRuntimeManager.downloadMedia(
                 url = url,
                 filename = "",
-                project = selectedProjectFolder?.name ?: activeWorkspace,
+                project = selectedProjectFolder?.projectName ?: activeWorkspace,
                 audioOnly = isAudioOnlyDownload,
                 start = startTimestampInput.trim(),
                 end = endTimestampInput.trim()
@@ -477,6 +467,16 @@ fun LibraryScreen(
         refreshTemplates()
         loadWorkspaces()
         loadMediaConfig()
+    }
+
+    LaunchedEffect(activeTab) {
+        if (activeTab == "media") {
+            refreshGalleryTree()
+        } else if (activeTab == "channels") {
+            refreshChannels()
+        } else if (activeTab == "templates") {
+            refreshTemplates()
+        }
     }
 
     // Auto-refresh on UI sync event
