@@ -1951,7 +1951,8 @@ object LinuxRuntimeManager {
             val c = (URL("$BRIDGE_BASE_URL/chat").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 5000
-                readTimeout = 180000
+                // Streaming /chat: heartbeat SSE tiap 15 detik, batas tunggu 10 menit (bukan 120-140 detik).
+                readTimeout = 600000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "text/event-stream")

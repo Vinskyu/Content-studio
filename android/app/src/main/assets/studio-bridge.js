@@ -2262,6 +2262,25 @@ async function handleChat(req, res) {
 
   emitStatus('Menghubungkan engine lokal');
 
+  // Heartbeat SSE: koneksi Android tidak boleh putus karena idle (120-140 detik) saat agent bekerja.
+  const heartbeatTimer = setInterval(() => {
+    if (!res.writableEnded) {
+      try { res.write(': keep-alive\n\n'); } catch (_) {}
+    }
+  }, 15000);
+  if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+
+  // Batas waktu proses child minimal 10 menit (600000 ms) untuk operator.py / CLI berat.
+  const CHAT_PROCESS_TIMEOUT_MS = 600000;
+  let chatWatchdogTimer = null;
+  const stopChatTimers = () => {
+    clearInterval(heartbeatTimer);
+    if (chatWatchdogTimer) {
+      clearTimeout(chatWatchdogTimer);
+      chatWatchdogTimer = null;
+    }
+  };
+
   // Susun instruksi dengan konteks dapur produksi, channel, dan workspace project
   const activeWorkspace = session.workspace || st.active_workspace || '';
   emitStatus('Memuat konteks proyek & skill', activeWorkspace || '');
@@ -2361,6 +2380,13 @@ async function handleChat(req, res) {
     cwd: workingDir,
   });
   activeChatProc = proc;
+
+  chatWatchdogTimer = setTimeout(() => {
+    if (activeChatProc === proc) {
+      emitStatus('Batas waktu proses tercapai (10 menit)', 'menghentikan proses');
+      killProcessSafely(proc);
+    }
+  }, CHAT_PROCESS_TIMEOUT_MS);
 
   let fullOutput = '';
   let errOutput = '';
@@ -2464,6 +2490,7 @@ async function handleChat(req, res) {
   }
 
   const onClientClose = () => {
+    stopChatTimers();
     if (activeChatProc === proc) {
       killProcessSafely(proc);
       activeChatProc = null;
@@ -2473,6 +2500,7 @@ async function handleChat(req, res) {
   res.once('close', onClientClose);
 
   proc.on('exit', (code) => {
+    stopChatTimers();
     if (activeChatProc === proc) activeChatProc = null;
 
     const cleanStdout = stripAnsi(fullOutput)
@@ -2533,6 +2561,7 @@ async function handleChat(req, res) {
   });
 
   proc.on('error', (err) => {
+    stopChatTimers();
     if (activeChatProc === proc) activeChatProc = null;
     const cleanMsg = stripAnsi(err.message);
     emit({ type: 'error', text: `Gagal menjalankan Antigravity: ${cleanMsg}` });

@@ -554,7 +554,7 @@ def execute_local_tool(name: str, args: Dict[str, Any], session: Dict[str, Any])
         if "BRIDGE_PORT" not in env:
             env["BRIDGE_PORT"] = os.environ.get("PORT", "18950")
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+            proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
             for line in proc.stderr.splitlines():
                 l_str = line.strip()
                 if l_str.startswith("[STEP]") or l_str.startswith("[UI_SYNC]"):
@@ -683,6 +683,10 @@ PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
      [ACTION_PLAN] {{"title": "...", "steps": ["...", "..."], "approvePrompt": "Lanjutkan eksekusi rencana ini sekarang"}}
    - Di akhir setiap jawaban, sertakan 2-3 rekomendasi langkah lanjutan ringkas (maks 4-5 kata per saran):
      [SUGGESTIONS] ["Saran 1", "Saran 2", "Saran 3"]
+6. KUNCI BAHASA: SELALU merespons dalam Bahasa Indonesia yang ringkas, langsung ke inti, dan natural mengikuti bahasa pengguna. DILARANG berpindah ke Bahasa Inggris di tengah percakapan.
+7. MEKANIK VS OBJEK REFERENSI: Saat pengguna memberi referensi konten (video/link/deskripsi), ambil CARA KERJA-nya: pola struktur, ritme/pacing, dan format produksi. DILARANG menyalin mentah objek/topik referensi kecuali pengguna memang meminta topik tersebut.
+8. ADAPTASI KONDISI NYATA: Jika pengguna meminta "buat berdasarkan kondisi", langsung sesuaikan dengan alat/aset yang tersedia di ContentStudio (tanpa kamera/rekaman tangan) secara cerdas dan ringkas, tanpa memaksa pengguna menjelaskan ulang hal dasar konten.
+9. EKSEKUSI SEKUENSIAL: DILARANG memicu banyak subagent atau aksi berat secara paralel (misalnya 4-5 generate gambar sekaligus) karena membuat proses hang. Jalankan bertahap satu per satu dan WAJIB laporkan progres nyata setiap aksi dengan print("[STEP] ...", file=sys.stderr, flush=True).
 """
 
     # 4. Susun pesan percakapan

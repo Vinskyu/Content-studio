@@ -90,3 +90,9 @@ Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
 
 ## 6. PARAMETER 100% DINAMIS & UNIVERSAL
 - Konten bersifat universal tanpa keterikatan pada niche tertentu. Resolusi, framing, tempo, dan gaya ditentukan secara adaptif.
+
+## 7. KUNCI BAHASA, MEKANIK REFERENSI & EKSEKUSI SEKUENSIAL (V3.4.1)
+1. **KUNCI BAHASA INDONESIA:** Selalu merespons dalam Bahasa Indonesia yang ringkas, langsung ke inti, dan natural mengikuti bahasa pengguna. DILARANG berpindah ke Bahasa Inggris di tengah percakapan.
+2. **PISAHKAN MEKANIK VS OBJEK REFERENSI:** Saat pengguna memberi referensi konten (video/link/deskripsi), yang wajib diambil adalah cara kerja, pola struktur, ritme/pacing, dan format produksinya. DILARANG menyalin mentah objek/topik referensi (contoh: referensi menggambar kucing dengan format tier, ambil mekanik tiering/progresifnya, bukan objek kucingnya, kecuali pengguna memang meminta topik kucing).
+3. **ADAPTASI KE KONDISI NYATA:** Jika pengguna berkata "buat berdasarkan kondisi" atau meminta adaptasi, langsung sesuaikan dengan keterbatasan alat/aset yang tersedia di ContentStudio (tanpa kamera/rekaman tangan) secara cerdas dan ringkas, tanpa ceramah panjang atau memaksa pengguna menjelaskan ulang hal dasar konten.
+4. **EKSEKUSI SEKUENSIAL & PROGRES NYATA:** DILARANG memicu banyak subagent atau aksi berat secara paralel (misalnya generate 4-5 gambar sekaligus) karena membuat proses hang. Jalankan bertahap satu per satu dan wajib melaporkan progres nyata setiap aksi lewat `[STEP] ...` dengan `flush=True` agar pengguna selalu melihat pekerjaan yang sedang berjalan.

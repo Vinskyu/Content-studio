@@ -642,43 +642,7 @@ fun ChatScreen(
             }
         }
 
-        // 3. MODE SELECTOR BAR
-        val modeList = listOf(
-            "director" to "Director",
-            "scriptwriter" to "Script",
-            "researcher" to "Research",
-            "fast" to "Fast"
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 2.dp)
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            modeList.forEach { (mKey, mTitle) ->
-                val isSelected = (chatMode == mKey)
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (isSelected) MatteElevated else MatteSurface)
-                        .clickable { ChatController.setChatMode(mKey) }
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = mTitle,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (isSelected) StudioPrimaryText else TextMuted
-                    )
-                }
-            }
-        }
-
-        // 4. MODERN COMPOSER PRO
+        // 3. MODERN COMPOSER PRO
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1550,7 +1514,7 @@ fun ChatScreen(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(4.dp))
-                                    .background(if (isSelected) StudioSage else MatteElevated)
+                                    .background(if (isSelected) MatteElevated else MatteSurface)
                                     .clickable { newMemoryCategory = cat }
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
@@ -1559,7 +1523,7 @@ fun ChatScreen(
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Medium,
-                                    color = if (isSelected) Color(0xFF0B0C0E) else TextMuted
+                                    color = if (isSelected) TextPrimary else TextMuted
                                 )
                             }
                         }

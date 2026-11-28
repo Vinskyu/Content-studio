@@ -18,6 +18,26 @@ object ChatController {
     private var activeJob: Job? = null
     private val sendLock = Any()
 
+    /**
+     * Sanitasi defensif terakhir sebelum teks agent disimpan/ditampilkan:
+     * buang baris [SUGGESTIONS] / [ACTION_PLAN] beserta pecahan JSON yang bocor
+     * akibat marker terpotong di tengah chunk jaringan.
+     */
+    private fun sanitizeAgentText(raw: String): String {
+        if (raw.isBlank()) return raw
+        var text = raw
+        for (marker in listOf("[SUGGESTIONS]", "[ACTION_PLAN]")) {
+            text = text.split('\n')
+                .filterNot { it.trim().startsWith(marker) }
+                .joinToString("\n")
+        }
+        val remnant = Regex("^[^\"\\[\\]{}]{0,80}\"[^\"\\n]*\"(\\s*,\\s*\"[^\"\\n]*\")*\\s*\\]\\s*$")
+        text = text.split('\n')
+            .filterNot { remnant.matches(it.trim()) }
+            .joinToString("\n")
+        return text.trim()
+    }
+
     private val _messages = MutableStateFlow<List<ChatMessageItem>>(emptyList())
     val messages: StateFlow<List<ChatMessageItem>> = _messages.asStateFlow()
 
@@ -505,7 +525,7 @@ object ChatController {
                 },
                 onDelta = { delta ->
                     responseBuilder.append(delta)
-                    val textSoFar = responseBuilder.toString()
+                    val textSoFar = sanitizeAgentText(responseBuilder.toString())
                     val currentList = _messages.value.toMutableList()
                     val idx = currentList.indexOfLast { it.id == assistantId }
                     if (idx != -1) {
@@ -521,7 +541,9 @@ object ChatController {
                     lastFailedPrompt = null
                     val durationMs = (System.currentTimeMillis() - startMs).coerceAtLeast(0L)
                     val recordedSteps = _thinkingSteps.value
-                    val resolved = if (finalText.isNotBlank()) finalText else responseBuilder.toString()
+                    val resolved = sanitizeAgentText(
+                        if (finalText.isNotBlank()) finalText else responseBuilder.toString()
+                    )
                     val effectiveSuggestions = if (receivedSuggestions.isNotEmpty()) {
                         receivedSuggestions
                     } else if (workspace.isNullOrBlank()) {
@@ -549,7 +571,7 @@ object ChatController {
                 },
                 onError = { err ->
                     activeConnection = null
-                    val textSoFar = responseBuilder.toString()
+                    val textSoFar = sanitizeAgentText(responseBuilder.toString())
                     val currentList = _messages.value.toMutableList()
                     val idx = currentList.indexOfLast { it.id == assistantId }
                     if (idx != -1) {
