@@ -657,7 +657,13 @@ def direct_chat(provider: str, model: str, handoff: Dict[str, Any], user_prompt:
             payload["tool_choice"] = "auto"
 
     if effort in ("low", "medium", "high"):
-        payload["reasoning_effort"] = effort
+        if provider == "gemini":
+            if "2.5-pro" in model or ("2.5-flash" in model and "lite" not in model):
+                payload.setdefault("generationConfig", {})["thinkingConfig"] = {
+                    "thinkingBudget": {"low": 1024, "medium": 4096, "high": 8192}[effort]
+                }
+        else:
+            payload["reasoning_effort"] = effort
 
     steps: List[str] = []
     total_tokens = 0
