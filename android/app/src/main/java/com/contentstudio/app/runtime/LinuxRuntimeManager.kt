@@ -152,6 +152,67 @@ data class ChatMessageItem(
     val actionPlan: ActionPlanCardData? = null,
     val suggestions: List<String> = emptyList(),
     val isPinned: Boolean = false,
+    val hubMeta: HubMeta? = null,
+)
+
+data class HubMeta(
+    val mode: String = "auto",
+    val taskType: String = "",
+    val provider: String = "",
+    val model: String = "",
+    val multimodal: Boolean = false,
+    val tokens: Int = 0,
+    val latencyMs: Long = 0L,
+    val switchedFrom: String = "",
+)
+
+data class HubModelOption(
+    val id: String,
+    val label: String,
+    val multimodal: Boolean = false,
+    val tools: Boolean = false,
+    val reasoning: Boolean = false,
+    val coding: Boolean = false,
+    val speed: String = "fast",
+)
+
+data class HubProviderInfo(
+    val id: String,
+    val label: String,
+    val configured: Boolean,
+    val kind: String,
+    val models: List<HubModelOption> = emptyList(),
+)
+
+data class HubQuotaInfo(
+    val provider: String = "",
+    val status: String = "ok",
+    val percent: Float = 0f,
+    val label: String = "",
+    val used: Int = 0,
+    val limit: Int = 0,
+    val unit: String = "",
+    val requestsToday: Int = 0,
+    val requestsMonth: Int = 0,
+    val tokensToday: Int = 0,
+    val tokensMonth: Int = 0,
+)
+
+data class HubSettingsSnapshot(
+    val activeProvider: String = "auto",
+    val activeModel: String = "smart-auto",
+    val effort: String = "medium",
+    val autoFallback: Boolean = true,
+    val keysMasked: Map<String, String> = emptyMap(),
+    val configured: Map<String, Boolean> = emptyMap(),
+    val customBaseUrl: String = "",
+    val customModel: String = "",
+    val customKeyMasked: String = "",
+    val customMultimodal: Boolean = false,
+    val cloudflareAccountId: String = "",
+    val providers: List<HubProviderInfo> = emptyList(),
+    val quota: Map<String, HubQuotaInfo> = emptyMap(),
+    val lastSync: String = "",
 )
 
 data class ExtensionSkillItem(
@@ -1928,13 +1989,169 @@ object LinuxRuntimeManager {
         }
     }
 
+    // ── Unified Agent Hub V3.7 API ──────────────
+
+    private fun parseHubModel(obj: JSONObject): HubModelOption {
+        val caps = obj.optJSONObject("capabilities") ?: JSONObject()
+        return HubModelOption(
+            id = obj.optString("id", ""),
+            label = obj.optString("label", obj.optString("id", "")),
+            multimodal = caps.optBoolean("multimodal", false),
+            tools = caps.optBoolean("tools", false),
+            reasoning = caps.optBoolean("reasoning", false),
+            coding = caps.optBoolean("coding", false),
+            speed = caps.optString("speed", "fast"),
+        )
+    }
+
+    private fun parseHubProvider(obj: JSONObject): HubProviderInfo {
+        val modelsArr = obj.optJSONArray("models")
+        val models = mutableListOf<HubModelOption>()
+        if (modelsArr != null) {
+            for (i in 0 until modelsArr.length()) {
+                val m = modelsArr.optJSONObject(i) ?: continue
+                models.add(parseHubModel(m))
+            }
+        }
+        return HubProviderInfo(
+            id = obj.optString("id", ""),
+            label = obj.optString("label", obj.optString("id", "")),
+            configured = obj.optBoolean("configured", false),
+            kind = obj.optString("kind", "direct"),
+            models = models,
+        )
+    }
+
+    private fun parseHubQuota(obj: JSONObject): HubQuotaInfo {
+        return HubQuotaInfo(
+            provider = obj.optString("provider", ""),
+            status = obj.optString("status", "ok"),
+            percent = obj.optDouble("percent", 0.0).toFloat(),
+            label = obj.optString("label", ""),
+            used = obj.optInt("used", 0),
+            limit = obj.optInt("limit", 0),
+            unit = obj.optString("unit", ""),
+            requestsToday = obj.optInt("requests_today", 0),
+            requestsMonth = obj.optInt("requests_month", 0),
+            tokensToday = obj.optInt("tokens_today", 0),
+            tokensMonth = obj.optInt("tokens_month", 0),
+        )
+    }
+
+    private fun parseHubSnapshot(obj: JSONObject): HubSettingsSnapshot {
+        val providersArr = obj.optJSONArray("providers")
+        val providers = mutableListOf<HubProviderInfo>()
+        if (providersArr != null) {
+            for (i in 0 until providersArr.length()) {
+                providersArr.optJSONObject(i)?.let { providers.add(parseHubProvider(it)) }
+            }
+        }
+        val quotaObj = obj.optJSONObject("quota") ?: JSONObject()
+        val quota = mutableMapOf<String, HubQuotaInfo>()
+        quotaObj.keys().forEach { key ->
+            quotaObj.optJSONObject(key)?.let { quota[key] = parseHubQuota(it) }
+        }
+        val maskedObj = obj.optJSONObject("keys_masked") ?: JSONObject()
+        val masked = mutableMapOf<String, String>()
+        maskedObj.keys().forEach { key -> masked[key] = maskedObj.optString(key, "") }
+        val configuredObj = obj.optJSONObject("configured") ?: JSONObject()
+        val configured = mutableMapOf<String, Boolean>()
+        configuredObj.keys().forEach { key -> configured[key] = configuredObj.optBoolean(key, false) }
+        val custom = obj.optJSONObject("custom") ?: JSONObject()
+        return HubSettingsSnapshot(
+            activeProvider = obj.optString("active_provider", "auto"),
+            activeModel = obj.optString("active_model", "smart-auto"),
+            effort = obj.optString("reasoning_effort", "medium"),
+            autoFallback = obj.optBoolean("auto_fallback", true),
+            keysMasked = masked,
+            configured = configured,
+            customBaseUrl = custom.optString("base_url", ""),
+            customModel = custom.optString("model", ""),
+            customKeyMasked = custom.optString("api_key", ""),
+            customMultimodal = custom.optBoolean("multimodal", false),
+            cloudflareAccountId = obj.optString("cloudflare_account_id", ""),
+            providers = providers,
+            quota = quota,
+            lastSync = obj.optString("last_sync", ""),
+        )
+    }
+
+    suspend fun getHubModels(): HubSettingsSnapshot? = withContext(Dispatchers.IO) {
+        try {
+            parseHubSnapshot(httpRequest("GET", "/api/models", timeoutMs = 90000))
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun getHubSettings(): HubSettingsSnapshot? = withContext(Dispatchers.IO) {
+        try {
+            parseHubSnapshot(httpRequest("GET", "/api/settings/providers", timeoutMs = 90000))
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveHubSettings(payload: JSONObject): JSONObject {
+        return try {
+            httpRequest("POST", "/api/settings/providers", payload.toString(), timeoutMs = 45000)
+        } catch (e: Exception) {
+            JSONObject().put("status", "error").put("error", e.message ?: "Gagal menyimpan")
+        }
+    }
+
+    suspend fun refreshHubCatalog(): JSONObject = withContext(Dispatchers.IO) {
+        try {
+            httpRequest("POST", "/api/models/refresh", "{}", timeoutMs = 120000)
+        } catch (e: Exception) {
+            JSONObject().put("status", "error").put("error", e.message ?: "Sinkronisasi gagal")
+        }
+    }
+
+    suspend fun uploadHubAttachment(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
+        try {
+            var name = "lampiran_${System.currentTimeMillis()}"
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0 && cursor.moveToFirst()) {
+                        name = cursor.getString(idx) ?: name
+                    }
+                }
+            } catch (_: Exception) {}
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+            if (bytes.isEmpty() || bytes.size > 25 * 1024 * 1024) return@withContext null
+            val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "lampiran" }
+            val conn = (URL("$BRIDGE_BASE_URL/api/upload-attachment").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 5000
+                readTimeout = 90000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/octet-stream")
+                setRequestProperty("X-File-Name", safeName)
+            }
+            conn.outputStream.use { it.write(bytes) }
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: "{}"
+            val obj = JSONObject(text)
+            if (code in 200..299) obj.optString("path", "").ifBlank { null } else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     fun sendChatStream(
         sessionId: String,
         message: String,
         workspace: String? = null,
         mode: String? = "director",
+        provider: String = "auto",
+        model: String = "smart-auto",
+        effort: String = "medium",
         attachments: List<String> = emptyList(),
         onConnectionCreated: ((HttpURLConnection) -> Unit)? = null,
+        onMeta: ((HubMeta) -> Unit)? = null,
         onStatus: (String) -> Unit,
         onThinking: ((kind: String, text: String) -> Unit)? = null,
         onUiSync: ((scope: String, target: String) -> Unit)? = null,
@@ -1955,6 +2172,10 @@ object LinuxRuntimeManager {
                 if (!mode.isNullOrBlank()) {
                     put("mode", mode)
                 }
+                put("hub", true)
+                put("provider", provider.ifBlank { "auto" })
+                if (model.isNotBlank() && model != "smart-auto") put("model", model)
+                put("effort", effort)
                 if (attachments.isNotEmpty()) {
                     val arr = JSONArray()
                     attachments.forEach { arr.put(it) }
@@ -2029,6 +2250,19 @@ object LinuxRuntimeManager {
                                             steps = stepsList,
                                             approvePrompt = approvePrompt,
                                             status = "pending"
+                                        )
+                                    )
+                                } else if (currentEvent == "meta" || type == "meta") {
+                                    onMeta?.invoke(
+                                        HubMeta(
+                                            mode = obj.optString("mode", "auto"),
+                                            taskType = obj.optString("taskType", ""),
+                                            provider = obj.optString("provider", ""),
+                                            model = obj.optString("model", ""),
+                                            multimodal = obj.optBoolean("multimodal", false),
+                                            tokens = obj.optInt("tokens", 0),
+                                            latencyMs = obj.optLong("latencyMs", 0L),
+                                            switchedFrom = obj.optString("switchedFrom", ""),
                                         )
                                     )
                                 } else if (currentEvent == "suggestions" || type == "suggestions") {

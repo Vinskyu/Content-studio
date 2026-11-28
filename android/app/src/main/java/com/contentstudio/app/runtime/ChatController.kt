@@ -72,6 +72,34 @@ object ChatController {
     private val _chatMode = MutableStateFlow("director")
     val chatMode: StateFlow<String> = _chatMode.asStateFlow()
 
+    private val _hubProvider = MutableStateFlow("auto")
+    val hubProvider: StateFlow<String> = _hubProvider.asStateFlow()
+
+    private val _hubModel = MutableStateFlow("smart-auto")
+    val hubModel: StateFlow<String> = _hubModel.asStateFlow()
+
+    private val _hubEffort = MutableStateFlow("medium")
+    val hubEffort: StateFlow<String> = _hubEffort.asStateFlow()
+
+    private val _hubQuotaStatus = MutableStateFlow("ok")
+    val hubQuotaStatus: StateFlow<String> = _hubQuotaStatus.asStateFlow()
+
+    fun setHubQuotaStatus(status: String) {
+        _hubQuotaStatus.value = status.ifBlank { "ok" }
+    }
+
+    fun setHubSelection(provider: String, model: String = "smart-auto", effort: String = "medium") {
+        _hubProvider.value = provider.ifBlank { "auto" }.lowercase()
+        _hubModel.value = model.ifBlank { "smart-auto" }
+        _hubEffort.value = effort.ifBlank { "medium" }.lowercase()
+    }
+
+    fun applyHubSnapshot(provider: String, model: String, effort: String) {
+        _hubProvider.value = provider.ifBlank { "auto" }
+        _hubModel.value = model.ifBlank { "smart-auto" }
+        _hubEffort.value = effort.ifBlank { "medium" }
+    }
+
     private val _uiSyncEvents = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 16)
     val uiSyncEvents: SharedFlow<Pair<String, String>> = _uiSyncEvents.asSharedFlow()
 
@@ -202,6 +230,19 @@ object ChatController {
         if (isInitialized) return
         isInitialized = true
         refreshSessions()
+        scope.launch {
+            LinuxRuntimeManager.getHubSettings()?.let { snap ->
+                applyHubSnapshot(snap.activeProvider, snap.activeModel, snap.effort)
+                val quota = if (snap.activeProvider == "auto") {
+                    snap.quota.values.firstOrNull { it.status == "exhausted" }
+                        ?: snap.quota.values.firstOrNull { it.status == "warning" }
+                        ?: snap.quota.values.firstOrNull()
+                } else {
+                    snap.quota[snap.activeProvider]
+                }
+                setHubQuotaStatus(quota?.status ?: "ok")
+            }
+        }
     }
 
     fun clearError() {
@@ -456,6 +497,9 @@ object ChatController {
         val currentAttachments = _pendingAttachments.value
         _pendingAttachments.value = emptyList()
         val activeMode = _chatMode.value
+        val activeProvider = _hubProvider.value
+        val activeModel = _hubModel.value
+        val activeEffort = _hubEffort.value
         val startMs = System.currentTimeMillis()
         _thinkingStartTimeMs.value = startMs
         _thinkingSteps.value = emptyList()
@@ -503,13 +547,26 @@ object ChatController {
             val sid = _activeSessionId.value
             var receivedActionPlan: ActionPlanCardData? = null
             var receivedSuggestions: List<String> = emptyList()
+            var receivedMeta: HubMeta? = null
 
             LinuxRuntimeManager.sendChatStream(
                 sessionId = sid,
                 message = cleanPrompt,
                 workspace = workspace,
                 mode = activeMode,
+                provider = activeProvider,
+                model = activeModel,
+                effort = activeEffort,
                 attachments = currentAttachments,
+                onMeta = { meta ->
+                    receivedMeta = meta
+                    val currentList = _messages.value.toMutableList()
+                    val idx = currentList.indexOfLast { it.id == assistantId }
+                    if (idx != -1) {
+                        currentList[idx] = currentList[idx].copy(hubMeta = meta)
+                        _messages.value = currentList
+                    }
+                },
                 onConnectionCreated = { conn ->
                     activeConnection = conn
                 },
@@ -585,7 +642,8 @@ object ChatController {
                             processSteps = recordedSteps,
                             processDurationMs = durationMs,
                             actionPlan = receivedActionPlan,
-                            suggestions = effectiveSuggestions
+                            suggestions = effectiveSuggestions,
+                            hubMeta = receivedMeta
                         )
                         _messages.value = currentList
                     }

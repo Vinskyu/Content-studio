@@ -89,6 +89,7 @@ fun MainStudioScreen(
     var activeProject by remember { mutableStateOf<String?>(null) }
     var isQuickVoiceOpen by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showProviderSettings by remember { mutableStateOf(false) }
 
     val isStreaming by ChatController.isStreaming.collectAsState()
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
@@ -104,6 +105,7 @@ fun MainStudioScreen(
 
     BackHandler {
         when {
+            showProviderSettings -> showProviderSettings = false
             showSettingsSheet -> showSettingsSheet = false
             isQuickVoiceOpen -> isQuickVoiceOpen = false
             activeProject != null -> activeProject = null
@@ -269,7 +271,8 @@ fun MainStudioScreen(
                                                 activeRoom = StudioRoom.PROJECTS
                                             }
                                         },
-                                        onNavigateToExtensions = { activeRoom = StudioRoom.EXTENSIONS }
+                                        onNavigateToExtensions = { activeRoom = StudioRoom.EXTENSIONS },
+                                        onOpenSettings = { showSettingsSheet = true }
                                     )
                                     StudioRoom.LIBRARY -> LibraryScreen()
                                     StudioRoom.EXTENSIONS -> ExtensionsScreen()
@@ -350,9 +353,59 @@ fun MainStudioScreen(
                     )
                 }
 
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MatteElevated)
+                        .clickable {
+                            showSettingsSheet = false
+                            showProviderSettings = true
+                        }
+                        .padding(horizontal = 14.dp, vertical = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.AutoAwesome,
+                            contentDescription = null,
+                            tint = StudioSage,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "AI Providers & API Keys",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "Kelola 12 provider, auto-pindah, dan kuota",
+                                fontSize = 9.sp,
+                                color = TextMuted
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Atur",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(6.dp))
             }
         }
+    }
+
+    if (showProviderSettings) {
+        ProviderSettingsDialog(onDismiss = { showProviderSettings = false })
     }
 }
 

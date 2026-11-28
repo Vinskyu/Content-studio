@@ -122,6 +122,7 @@ import com.contentstudio.app.runtime.ChatController
 import com.contentstudio.app.runtime.ChatMessageItem
 import com.contentstudio.app.runtime.LinuxRuntimeManager
 import com.contentstudio.app.ui.components.StudioMarkdownText
+import com.contentstudio.app.ui.components.StudioModelPickerSheet
 import com.contentstudio.app.ui.components.StudioThinkingBlock
 import androidx.activity.compose.BackHandler
 import com.contentstudio.app.runtime.MemoryEntry
@@ -158,12 +159,20 @@ private val MatteSurface = Color(0xFF15171C)
 private val MatteElevated = Color(0xFF1E2128)
 private val MatteDivider = Color(0xFF262A33)
 
+private fun prettyModelName(raw: String): String {
+    val base = raw.substringAfterLast('/').replace('_', ' ').replace('-', ' ').trim()
+    return base.split(' ').filter { it.isNotBlank() }.joinToString(" ") { part ->
+        if (part.any { it.isDigit() } || part.length <= 2) part else part.replaceFirstChar { it.uppercase() }
+    }.ifBlank { raw }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     modifier: Modifier = Modifier,
     onOpenBoard: () -> Unit = {},
-    onNavigateToExtensions: () -> Unit = {}
+    onNavigateToExtensions: () -> Unit = {},
+    onOpenSettings: () -> Unit = {}
 ) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -181,11 +190,15 @@ fun ChatScreen(
     val draftText by ChatController.draftText.collectAsState()
     val pendingAttachments by ChatController.pendingAttachments.collectAsState()
     val draftPrompt by ChatController.draftPrompt.collectAsState()
+    val hubProvider by ChatController.hubProvider.collectAsState()
+    val hubModel by ChatController.hubModel.collectAsState()
+    val hubQuotaStatus by ChatController.hubQuotaStatus.collectAsState()
 
     val projectsList = remember { mutableStateListOf<WorkspaceSummary>() }
     var showProjectSheet by remember { mutableStateOf(false) }
     var showHistorySheet by remember { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
     var editMessageTarget by remember { mutableStateOf<Pair<Int, String>?>(null) }
     var editDialogText by remember { mutableStateOf("") }
     var scriptSavedToast by remember { mutableStateOf<String?>(null) }
@@ -209,12 +222,13 @@ fun ChatScreen(
 
     val listState = rememberLazyListState()
 
-    val chatHasOverlay = showProjectSheet || showHistorySheet || showToolsSheet || showMentionPicker || showAddMemoryDialog || editMessageTarget != null || previewMediaTarget != null
+    val chatHasOverlay = showProjectSheet || showHistorySheet || showToolsSheet || showModelPicker || showMentionPicker || showAddMemoryDialog || editMessageTarget != null || previewMediaTarget != null
     BackHandler(enabled = chatHasOverlay) {
         when {
             showProjectSheet -> showProjectSheet = false
             showHistorySheet -> showHistorySheet = false
             showToolsSheet -> showToolsSheet = false
+            showModelPicker -> showModelPicker = false
             showMentionPicker -> showMentionPicker = false
             showAddMemoryDialog -> showAddMemoryDialog = false
             editMessageTarget != null -> editMessageTarget = null
@@ -244,12 +258,19 @@ fun ChatScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            val localPath = LinuxRuntimeManager.copyUriToAttachmentCache(context, uri)
-            if (localPath != null) {
-                ChatController.addAttachment(localPath)
-            } else {
-                val label = uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { uri.toString() } ?: uri.toString()
-                ChatController.addAttachment(label)
+            scope.launch {
+                val uploaded = withContext(Dispatchers.IO) {
+                    LinuxRuntimeManager.uploadHubAttachment(context, uri)
+                }
+                val localPath = uploaded ?: withContext(Dispatchers.IO) {
+                    LinuxRuntimeManager.copyUriToAttachmentCache(context, uri)
+                }
+                if (localPath != null) {
+                    ChatController.addAttachment(localPath)
+                } else {
+                    val label = uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { uri.toString() } ?: uri.toString()
+                    ChatController.addAttachment(label)
+                }
             }
         }
     }
@@ -377,13 +398,60 @@ fun ChatScreen(
                         color = if (activeWorkspace.isNotBlank()) TextPrimary else TextSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 160.dp)
+                        modifier = Modifier.widthIn(max = 96.dp)
                     )
                     Icon(
                         imageVector = Icons.Outlined.ExpandMore,
                         contentDescription = "Switch Project",
                         tint = TextMuted,
                         modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            // Pil indikator model aktif: Auto Smart atau model manual + kuota
+            val modelLabel = if (hubProvider == "auto") "Auto · Smart" else {
+                if (hubModel.isBlank() || hubModel == "smart-auto") hubProvider.uppercase()
+                else prettyModelName(hubModel)
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (hubProvider == "auto") StudioSage.copy(alpha = 0.16f) else MatteElevated)
+                    .clickable { showModelPicker = true }
+                    .padding(horizontal = 9.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when (hubQuotaStatus) {
+                                    "exhausted" -> StudioDangerRed
+                                    "warning" -> Color(0xFFFBBF24)
+                                    else -> StudioSage
+                                }
+                            )
+                    )
+                    Text(
+                        text = modelLabel,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (hubProvider == "auto") StudioSage else TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 96.dp)
+                    )
+                    Icon(
+                        imageVector = Icons.Outlined.ExpandMore,
+                        contentDescription = "Pilih model",
+                        tint = TextMuted,
+                        modifier = Modifier.size(13.dp)
                     )
                 }
             }
@@ -942,24 +1010,33 @@ fun ChatScreen(
                                 )
                             }
 
-                            // Mode & Tools Pill
+                            // Model picker pill (Auto Smart atau model manual)
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(MatteElevated)
-                                    .clickable { showToolsSheet = true }
+                                    .clickable { showModelPicker = true }
                                     .padding(horizontal = 10.dp, vertical = 6.dp)
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(5.dp)
+                                            .clip(CircleShape)
+                                            .background(if (hubProvider == "auto") StudioSage else StudioAccent)
+                                    )
                                     Text(
-                                        text = "${chatMode.replaceFirstChar { it.uppercase() }} ⌄",
-                                        fontSize = 12.sp,
+                                        text = if (hubProvider == "auto") "Auto ⌄" else "${prettyModelName(hubModel)} ⌄",
+                                        fontSize = 11.sp,
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.Medium,
-                                        color = TextSecondary
+                                        color = TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 96.dp)
                                     )
                                 }
                             }
@@ -1037,6 +1114,13 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showModelPicker) {
+        StudioModelPickerSheet(
+            onDismiss = { showModelPicker = false },
+            onOpenSettings = onOpenSettings
+        )
     }
 
     // ── MODAL SHEET: PROJECT SWITCHER ────────────────────────────────────────
@@ -1673,10 +1757,10 @@ private fun GuidedEmptyState(
     onSelectAction: (String) -> Unit
 ) {
     val actions = listOf(
-        "Riset Ide & Niche" to "Bantu saya riset ide konten dan niche yang potensial untuk video pendek.",
-        "Buat Project Baru" to "Buatkan project baru rasio 9:16 dan siapkan struktur project.json.",
-        "Tulis / Revisi Naskah" to "Tuliskan naskah voiceover singkat 30-45 detik dengan hook kuat di 3 detik pertama.",
-        "Siapkan Visual & Scene" to "Pecah naskah menjadi daftar scene lengkap dengan prompt visual yang jelas."
+        "Bedah Referensi Video" to "Bedah referensi video ini: hook 3 detik pertama, pacing, gaya visual, dan pola retensi yang bisa saya tiru.",
+        "Buat Proyek Short atau Long" to "Buatkan project baru, tentukan short atau long-form, lalu siapkan plan.json dan struktur scene-nya.",
+        "Analisis Gambar atau Screenshot" to "Analisis gambar atau screenshot yang saya lampirkan: komposisi, warna, teks, dan peluang ide kontennya.",
+        "Cek Status Kuota" to "Tampilkan status kuota harian dan bulanan semua provider, lalu rekomendasikan provider paling aman untuk tugas berikutnya."
     )
 
     Column(
@@ -2024,6 +2108,28 @@ private fun AgentMessageView(
                     }
                 }
             }
+        }
+
+        val meta = message.hubMeta
+        if (!message.isStreaming && meta != null) {
+            val taskLabel = when (meta.taskType) {
+                "multimodal_visual" -> "Visual"
+                "deep_creative" -> "Riset"
+                "pipeline_execution" -> "Produksi"
+                "complex_agent" -> "Agen"
+                "fast_chat" -> "Cepat"
+                else -> meta.taskType.ifBlank { "Chat" }
+            }
+            val modeLabel = if (meta.mode == "auto") "Auto ($taskLabel)" else meta.provider
+            val latency = String.format(Locale.US, "%.1fs", meta.latencyMs / 1000.0)
+            val switchNote = if (meta.switchedFrom.isNotBlank()) " · Auto-pindah -> ${meta.switchedFrom}" else ""
+            Text(
+                text = "$modeLabel · ${prettyModelName(meta.model)} · $latency$switchNote",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 9.sp,
+                color = TextMuted,
+                modifier = Modifier.padding(top = 1.dp)
+            )
         }
 
         if (!message.isStreaming && message.text.isNotBlank()) {

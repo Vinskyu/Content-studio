@@ -1031,11 +1031,17 @@ def execute_command(
     input_text: str,
     attached_files: List[str] = [],
     event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    mode: str = "director"
+    mode: str = "director",
+    provider: str = "auto",
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
+    session_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Pintu masuk interaktif utama yang dipanggil oleh bridge.run_console:
-    Mendukung instruksi natural language (Autonomous Agent) maupun perintah cepat ('/').
+    Pintu masuk interaktif utama:
+    - Perintah cepat '/' tetap ditangani lokal tanpa token.
+    - Instruksi natural language didelegasikan ke Unified Agent Hub V3.7
+      (smart router, context handoff, quota tracker, auto-fallback).
     """
     session = load_session()
     text = (input_text or "").strip()
@@ -1043,28 +1049,78 @@ def execute_command(
     if text.startswith("/"):
         return handle_slash_command(text, session, event_callback)
 
-    return execute_autonomous_agent(
-        user_prompt=text,
-        attached_files=attached_files,
-        session=session,
-        event_callback=event_callback,
-        mode=mode
-    )
+    from engine.llm_hub import run_agent_turn
+    workspace = session.get("active_workspace", "default")
+    try:
+        hub_res = run_agent_turn(
+            user_prompt=text,
+            workspace=workspace,
+            session_id=session_id,
+            attachments=attached_files,
+            provider=provider or "auto",
+            model=model,
+            effort=effort,
+            mode=mode,
+            event_callback=event_callback,
+        )
+        return {
+            "status": "ok",
+            "mode": "agent",
+            "active_workspace": workspace,
+            "reply": hub_res.get("reply") or "Instruksi telah diproses sepenuhnya.",
+            "steps": hub_res.get("steps") or [],
+            "action_cards": [],
+            "meta": hub_res.get("meta") or {},
+            "provider": hub_res.get("provider"),
+            "model": hub_res.get("model"),
+            "logs": ["Dieksekusi via Unified Agent Hub V3.7."],
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "mode": "agent",
+            "active_workspace": workspace,
+            "reply": f"[ERR] Agent Hub gagal: {exc}",
+            "steps": [],
+            "action_cards": [],
+            "logs": [f"[ERR] {exc}"],
+        }
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ContentStudio Autonomous CLI Agent")
+    parser = argparse.ArgumentParser(description="ContentStudio Autonomous CLI Agent V3.7")
     parser.add_argument("prompt", nargs="?", default="", help="Instruksi untuk agen atau perintah '/'")
-    parser.add_argument("--file", action="append", default=[], help="Lampiran file media")
+    parser.add_argument("--file", "--attachments", dest="file", action="append", default=[], help="Lampiran file media")
     parser.add_argument("--mode", default="director", choices=["director", "scriptwriter", "researcher", "fast"], help="Mode agen AI")
+    parser.add_argument("--provider", default="auto", help="Provider aktif atau 'auto'")
+    parser.add_argument("--model", default=None, help="Model ID (opsional)")
+    parser.add_argument("--effort", default=None, choices=["low", "medium", "high"], help="Kedalaman reasoning")
+    parser.add_argument("--session-id", default=None, help="ID sesi untuk context handoff")
+    parser.add_argument("--workspace", default=None, help="Workspace/proyek aktif")
+    parser.add_argument("--hub-chat", action="store_true", help="Mode bridge: cetak jawaban final polos ke stdout")
     parser.add_argument("--bridge-port", default=None, help="Port server studio-bridge lokal")
     args = parser.parse_args()
 
     if args.bridge_port:
         os.environ["BRIDGE_PORT"] = args.bridge_port
+    if args.workspace:
+        sess = load_session()
+        sess["active_workspace"] = args.workspace
+        save_session(sess)
 
     if args.prompt:
-        res = execute_command(args.prompt, args.file, mode=args.mode)
-        print(json.dumps(res, indent=2, ensure_ascii=False))
+        res = execute_command(
+            args.prompt, args.file, mode=args.mode, provider=args.provider,
+            model=args.model, effort=args.effort, session_id=args.session_id,
+        )
+        if args.hub_chat:
+            # Bridge membaca stdout sebagai delta; marker progres tetap di stderr.
+            if res.get("status") == "ok":
+                print(res.get("reply") or "")
+            else:
+                print(res.get("reply") or "[ERR] Agent Hub gagal")
+                sys.exit(1)
+        else:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
     else:
         print("ContentStudio Autonomous CLI Agent Ready.")
         print(f"Active Workspace: {load_session().get('active_workspace')}")

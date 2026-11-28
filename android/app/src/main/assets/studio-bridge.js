@@ -2607,7 +2607,242 @@ async function executeRenderPipeline(cleanWs, proj, options, job) {
   }
 }
 
+
+// ── Unified Agent Hub V3.7 helpers ──────────────────────────────────────────
+
+function studioPythonEnv() {
+  return {
+    ...getAntigravityEnv(false),
+    CONTENTSTUDIO_ROOT: CONTENT_STUDIO_DIR,
+    PYTHONPATH: CONTENT_STUDIO_DIR,
+  };
+}
+
+function runStudioPython(args, timeoutMs = 60000) {
+  return new Promise((resolve, reject) => {
+    execFileAsync(resolvePythonBin(), args, {
+      cwd: CONTENT_STUDIO_DIR,
+      env: studioPythonEnv(),
+      timeout: timeoutMs,
+      maxBuffer: 12 * 1024 * 1024,
+    }).then((out) => {
+      try {
+        resolve(JSON.parse((out.stdout || '').trim()));
+      } catch (e) {
+        reject(new Error((out.stdout || out.stderr || 'Output bukan JSON').slice(0, 400)));
+      }
+    }).catch((err) => {
+      reject(new Error(String(err.stderr || err.message || 'Python gagal').slice(0, 400)));
+    });
+  });
+}
+
+function buildHubCatalog() {
+  return runStudioPython(['engine/provider_config.py', 'models', '--full'], 45000)
+    .then((catalog) => runStudioPython(['engine/usage_tracker.py', 'status'], 45000)
+      .then((usage) => ({ catalog, usage })));
+}
+
+function readRawBody(req, limitBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > limitBytes) {
+        reject(new Error('Ukuran lampiran melebihi batas'));
+        try { req.destroy(); } catch (_) {}
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 // ── Chat Stream Handler (Connected to ContentStudio Kitchen) ────────────────
+
+
+// ── Unified Agent Hub Chat (V3.7): operator.py → llm_hub.py ────────────────
+
+async function handleHubChat(req, res, body, userMsg) {
+  const chatMode = String(body.mode || 'director').toLowerCase();
+  const attachments = Array.isArray(body.attachments) ? body.attachments.map(String).filter(Boolean) : [];
+  const provider = String(body.provider || 'auto').toLowerCase();
+  const model = body.model ? String(body.model) : '';
+  const effort = body.effort ? String(body.effort) : '';
+  const requestedSession = String(body.session_id || body.sessionId || '').trim();
+
+  const reqWs = body.workspace ? path.basename(String(body.workspace).trim()) : '';
+  let session = requestedSession ? loadSession(requestedSession) : null;
+  if (!session) {
+    session = ensureActiveSession(reqWs);
+  } else if (reqWs && session.workspace !== reqWs) {
+    session.workspace = reqWs;
+  }
+
+  const st = readState();
+  st.active_session_id = session.id;
+  if (reqWs) st.active_workspace = reqWs;
+  writeState(st);
+
+  session.messages.push({ role: 'user', content: userMsg, timestamp: Date.now() });
+  if (session.title === 'Sesi Baru' && session.messages.length === 1) {
+    session.title = userMsg.slice(0, 45).trim() || 'Sesi Baru';
+  }
+  session.updated_at = Date.now();
+  saveSession(session);
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  function emit(obj) {
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    }
+  }
+
+  function emitStatus(step, detail = '', kind = 'step') {
+    const label = detail ? `${step} (${detail})` : step;
+    emit({ type: 'status', kind, text: label, step, detail });
+  }
+
+  emitStatus('Menyiapkan Agent Hub');
+
+  const heartbeatTimer = setInterval(() => {
+    if (!res.writableEnded) {
+      try { res.write(': keep-alive\n\n'); } catch (_) {}
+    }
+  }, 15000);
+  if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+
+  const activeWorkspace = session.workspace || st.active_workspace || '';
+  const args = ['engine/operator.py', '--hub-chat', userMsg, '--mode', chatMode,
+    '--provider', provider || 'auto', '--session-id', session.id];
+  if (model) args.push('--model', model);
+  if (effort) args.push('--effort', effort);
+  if (activeWorkspace) args.push('--workspace', activeWorkspace);
+  for (const file of attachments) args.push('--file', file);
+
+  const proc = spawn(resolvePythonBin(), args, {
+    cwd: CONTENT_STUDIO_DIR,
+    env: studioPythonEnv(),
+  });
+  activeChatProc = proc;
+
+  const CHAT_PROCESS_TIMEOUT_MS = 900000;
+  let watchdog = setTimeout(() => {
+    if (activeChatProc === proc) {
+      emitStatus('Batas waktu proses tercapai', 'menghentikan proses', 'error');
+      try { proc.kill('SIGTERM'); } catch (_) {}
+    }
+  }, CHAT_PROCESS_TIMEOUT_MS);
+  if (typeof watchdog.unref === 'function') watchdog.unref();
+
+  let stdoutText = '';
+  let stderrBuffer = '';
+  let stderrAll = '';
+  let metaSent = null;
+
+  function stopTimers() {
+    clearInterval(heartbeatTimer);
+    if (watchdog) {
+      clearTimeout(watchdog);
+      watchdog = null;
+    }
+  }
+
+  function handleStderrLine(rawLine) {
+    const line = stripAnsi(rawLine).trim();
+    if (!line) return;
+    if (line.startsWith('[META]')) {
+      const rawJson = line.replace(/^\[META\]\s*/, '').trim();
+      try {
+        const meta = JSON.parse(rawJson);
+        metaSent = meta;
+        if (!res.writableEnded) {
+          res.write(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`);
+        }
+        emit({ type: 'meta', ...meta });
+      } catch (_) {}
+      return;
+    }
+    if (line.startsWith('[THINK]')) {
+      const thought = line.replace(/^\[THINK\]\s*/, '').slice(0, 220);
+      if (thought) emitStatus(thought, '', 'thought');
+      return;
+    }
+    if (line.startsWith('[STEP]')) {
+      const step = line.replace(/^\[STEP\]\s*/, '').slice(0, 180);
+      if (step) emitStatus(step, '', 'step');
+      return;
+    }
+    if (line.startsWith('[ERR]')) {
+      emitStatus(line.replace(/^\[ERR\]\s*/, '').slice(0, 220), '', 'error');
+    }
+  }
+
+  proc.stdout.on('data', (chunk) => {
+    const text = stripAnsi(chunk.toString('utf8'));
+    if (!text) return;
+    stdoutText += text;
+    emit({ type: 'delta', text });
+  });
+
+  proc.stderr.on('data', (chunk) => {
+    const text = stripAnsi(chunk.toString('utf8'));
+    stderrAll += text;
+    stderrBuffer += text;
+    const lines = stderrBuffer.split(/\r?\n/);
+    stderrBuffer = lines.pop() || '';
+    for (const line of lines) handleStderrLine(line);
+  });
+
+  function cleanup() {
+    stopTimers();
+    if (activeChatProc === proc) activeChatProc = null;
+  }
+  const onClose = () => {
+    stopTimers();
+    if (activeChatProc === proc) {
+      try { proc.kill('SIGTERM'); } catch (_) {}
+      activeChatProc = null;
+    }
+  };
+  req.once('close', onClose);
+  res.once('close', onClose);
+
+  proc.on('exit', (code) => {
+    cleanup();
+    if (stderrBuffer) handleStderrLine(stderrBuffer);
+    const finalReply = stripAnsi(stdoutText).trim();
+    const errTail = cleanStderr(stderrAll).split('\n').slice(-4).join(' ').slice(0, 500);
+
+    if (code === 0 && finalReply) {
+      session.messages.push({ role: 'assistant', content: finalReply, timestamp: Date.now(), meta: metaSent });
+      session.updated_at = Date.now();
+      saveSession(session);
+      emit({ type: 'done', text: finalReply, session_id: session.id, meta: metaSent });
+    } else {
+      const fallback = finalReply || errTail || `Agent Hub keluar dengan kode ${code}`;
+      session.messages.push({ role: 'assistant', content: fallback, timestamp: Date.now() });
+      session.updated_at = Date.now();
+      saveSession(session);
+      emit({ type: 'error', text: fallback, session_id: session.id });
+    }
+    if (!res.writableEnded) res.end();
+  });
+
+  proc.on('error', (err) => {
+    cleanup();
+    emit({ type: 'error', text: `Gagal menjalankan Agent Hub: ${stripAnsi(err.message)}` });
+    if (!res.writableEnded) res.end();
+  });
+}
 
 async function handleChat(req, res) {
   let body;
@@ -2620,6 +2855,14 @@ async function handleChat(req, res) {
   const userMsg = String(body.message || '').trim();
   if (!userMsg) {
     return sendJson(res, 400, { status: 'error', error: 'Pesan kosong' });
+  }
+
+  // V3.7: semua percakapan baru memakai Unified Agent Hub (auto router + handoff).
+  const hubRequested = body.hub === true || body.hub === 'true' ||
+    ['auto', 'gemini', 'groq', 'mistral', 'zai', 'cohere', 'nvidia', 'sambanova',
+      'cloudflare', 'openrouter', 'antigravity', 'cline', 'custom'].includes(String(body.provider || '').toLowerCase());
+  if (hubRequested) {
+    return handleHubChat(req, res, body, userMsg);
   }
 
   const chatMode = String(body.mode || 'director').toLowerCase();
@@ -3692,6 +3935,95 @@ const server = http.createServer(async (req, res) => {
       writeState(st);
     }
     return sendJson(res, 200, { status: 'ok', deleted: id });
+  }
+
+
+  // ── Unified Agent Hub Endpoints (V3.7) ────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/api/models') {
+    try {
+      const { catalog, usage } = await buildHubCatalog();
+      return sendJson(res, 200, {
+        status: 'ok',
+        auto: { provider: 'auto', label: 'Auto (Terbaik per Tugas)' },
+        active_provider: catalog.active_provider,
+        active_model: catalog.active_model,
+        reasoning_effort: catalog.reasoning_effort,
+        auto_fallback: catalog.auto_fallback,
+        fallback_order: catalog.fallback_order,
+        providers: catalog.providers,
+        quota: usage.providers || {},
+        usage_day: usage.day || '',
+        usage_month: usage.month || '',
+        last_sync: usage.last_sync || '',
+      });
+    } catch (e) {
+      return sendJson(res, 500, { status: 'error', error: e.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/models/refresh') {
+    try {
+      const result = await runStudioPython(['engine/usage_tracker.py', 'refresh'], 90000);
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 500, { status: 'error', error: e.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/settings/providers') {
+    try {
+      const settings = await runStudioPython(['engine/provider_config.py', 'settings'], 30000);
+      const { catalog, usage } = await buildHubCatalog();
+      return sendJson(res, 200, {
+        status: 'ok', ...settings, providers: catalog.providers,
+        quota: usage.providers || {}, last_sync: usage.last_sync || '',
+      });
+    } catch (e) {
+      return sendJson(res, 500, { status: 'error', error: e.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/settings/providers') {
+    let body;
+    try { body = await readJsonBody(req); } catch (_) { return sendJson(res, 400, { status: 'error', error: 'JSON tidak valid' }); }
+    try {
+      const saved = await runStudioPython(
+        ['engine/provider_config.py', 'save-settings', '--json', JSON.stringify(body)], 30000);
+      return sendJson(res, 200, { status: 'ok', ...saved });
+    } catch (e) {
+      return sendJson(res, 500, { status: 'error', error: e.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/upload-attachment') {
+    const rawName = String(req.headers['x-file-name'] || query.name || 'lampiran');
+    const baseName = path.basename(rawName).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80) || 'lampiran';
+    const ext = path.extname(baseName).toLowerCase();
+    const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.heic', '.mp4', '.mov', '.mkv', '.webm', '.avi'];
+    if (!allowed.includes(ext)) {
+      return sendJson(res, 400, { status: 'error', error: 'Format lampiran tidak didukung' });
+    }
+    try {
+      const buf = await readRawBody(req, 25 * 1024 * 1024);
+      if (!buf || buf.length === 0) {
+        return sendJson(res, 400, { status: 'error', error: 'File kosong' });
+      }
+      const attachDir = path.join(WORKSPACES_DIR, '_attachments');
+      fs.mkdirSync(attachDir, { recursive: true });
+      const stored = `${Date.now()}_${baseName}`;
+      const fullPath = path.join(attachDir, stored);
+      fs.writeFileSync(fullPath, buf);
+      return sendJson(res, 200, {
+        status: 'ok',
+        path: fullPath,
+        relative_path: path.join('workspaces', '_attachments', stored),
+        name: baseName,
+        kind: ['.mp4', '.mov', '.mkv', '.webm', '.avi'].includes(ext) ? 'video' : 'image',
+        size: buf.length,
+      });
+    } catch (e) {
+      return sendJson(res, 500, { status: 'error', error: e.message });
+    }
   }
 
   // ── Chat Endpoints ────────────────────────────────────────────────────────
