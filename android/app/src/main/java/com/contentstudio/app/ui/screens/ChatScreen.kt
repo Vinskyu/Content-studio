@@ -348,7 +348,6 @@ fun ChatScreen(
         modifier = modifier
             .fillMaxSize()
             .background(MatteCanvas)
-            .imePadding()
     ) {
         // 1. SINGLE SLIM TOP BAR (52.dp)
         Row(
@@ -737,6 +736,7 @@ fun ChatScreen(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .imePadding()
                 .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
             Column(
@@ -934,7 +934,7 @@ fun ChatScreen(
                             Box(modifier = Modifier.fillMaxWidth()) {
                                 if (draftText.isEmpty()) {
                                     Text(
-                                        text = "Tulis pesan, ketik '/', atau '@'...",
+                                        text = "Tulis instruksi...",
                                         fontSize = 14.sp,
                                         color = TextMuted
                                     )
@@ -1771,18 +1771,12 @@ private fun GuidedEmptyState(
         horizontalAlignment = Alignment.Start
     ) {
         Text(
-            text = "What are we creating?",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextPrimary
+            text = "Mau buat konten apa?",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = TextSecondary
         )
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = "Pilih langkah cepat atau tulis instruksi langsung di bawah.",
-            fontSize = 13.sp,
-            color = TextMuted
-        )
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             actions.forEach { (title, prompt) ->

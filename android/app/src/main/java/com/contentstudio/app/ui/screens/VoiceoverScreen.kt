@@ -453,7 +453,7 @@ fun VoiceoverScreen(
                     var foundName: String? = null
                     if (arr != null) {
                         for (i in 0 until arr.length()) {
-                            val obj = arr.getJSONObject(i)
+                            val obj = arr.optJSONObject(i) ?: continue
                             if (obj.optString("id") == chanId) {
                                 foundName = obj.optString("name", "")
                                 foundVp = obj.optJSONObject("dna")?.optJSONObject("voice_profile")
@@ -534,7 +534,7 @@ fun VoiceoverScreen(
                             val list = mutableListOf<String>()
                             if (arr != null) {
                                 for (i in 0 until arr.length()) {
-                                    val nm = arr.getJSONObject(i).optString("name", "")
+                                    val nm = arr.optJSONObject(i)?.optString("name", "") ?: ""
                                     if (nm.isNotBlank()) list.add(nm)
                                 }
                             }

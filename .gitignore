@@ -33,3 +33,6 @@ scratch/
 
 # Local build toolchain (JDK/Android SDK)
 .toolchain/
+
+# User config & keys
+config/providers.json

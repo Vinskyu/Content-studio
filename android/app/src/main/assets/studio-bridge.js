@@ -1309,16 +1309,48 @@ function deleteWorkspace(rawName) {
   if (wsPath !== baseWsDir && !wsPath.startsWith(baseWsDir + path.sep)) {
     throw new Error('Akses direktori di luar workspaces dilarang');
   }
-  if (!fs.existsSync(wsPath) || !fs.statSync(wsPath).isDirectory()) {
-    throw new Error(`Workspace "${cleanName}" tidak ditemukan`);
+  if (fs.existsSync(wsPath)) {
+    fs.rmSync(wsPath, { recursive: true, force: true });
   }
-  fs.rmSync(wsPath, { recursive: true, force: true });
+
+  // Bersihkan entri terkait di library/topic_history.json
+  const topicPath = path.join(LIBRARY_DIR, 'topic_history.json');
+  if (fs.existsSync(topicPath)) {
+    try {
+      const rawTopics = JSON.parse(fs.readFileSync(topicPath, 'utf8'));
+      if (Array.isArray(rawTopics)) {
+        const filtered = rawTopics.filter(t => (t.project || t.workspace) !== cleanName);
+        fs.writeFileSync(topicPath, JSON.stringify(filtered, null, 2), 'utf8');
+      } else if (rawTopics && Array.isArray(rawTopics.history)) {
+        rawTopics.history = rawTopics.history.filter(t => (t.project || t.workspace) !== cleanName);
+        fs.writeFileSync(topicPath, JSON.stringify(rawTopics, null, 2), 'utf8');
+      }
+    } catch (_) {}
+  }
+
+  // Bersihkan sessions yang merujuk workspace ini di library/sessions/
+  if (fs.existsSync(SESSIONS_DIR)) {
+    try {
+      const sessionFiles = fs.readdirSync(SESSIONS_DIR);
+      for (const sf of sessionFiles) {
+        if (!sf.endsWith('.json')) continue;
+        const sfPath = path.join(SESSIONS_DIR, sf);
+        try {
+          const sess = JSON.parse(fs.readFileSync(sfPath, 'utf8'));
+          if (sess.workspace === cleanName) {
+            fs.unlinkSync(sfPath);
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
   const st = readState();
   if (st.active_workspace === cleanName) {
     st.active_workspace = '';
     writeState(st);
   }
-  return { deleted: cleanName };
+  return { deleted: cleanName, workspaces: listWorkspaces() };
 }
 
 function scanWorkspaceFiles(wsName) {
@@ -1548,10 +1580,234 @@ function resolveSafeMediaPath(relPath) {
   return null;
 }
 
+function buildGalleryTree() {
+  const MEDIA_EXTS = new Set(['.mp4', '.mov', '.mkv', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.wav', '.m4a']);
+  const VIDEO_EXTS = new Set(['.mp4', '.mov', '.mkv']);
+  const AUDIO_EXTS = new Set(['.mp3', '.wav', '.m4a']);
+  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+  const JUNK_DIRS = new Set(['_attachments', 'cache', 'tmp', 'temp', 'segments', 'contact_sheet', '.git', '__pycache__']);
+  const RAW_SUBDIRS = new Set(['assets', 'raw', 'clips', 'audio', 'images']);
+  const FINISHED_SUBDIRS = new Set(['output', 'exports', 'final', 'renders']);
+
+  function getMediaType(ext) {
+    if (VIDEO_EXTS.has(ext)) return 'video';
+    if (AUDIO_EXTS.has(ext)) return 'audio';
+    if (IMAGE_EXTS.has(ext)) return 'image';
+    return null;
+  }
+
+  function isJunkFile(fname) {
+    const lower = fname.toLowerCase();
+    if (lower.startsWith('seg_') || lower.startsWith('temp_') || lower.startsWith('thumb_') || lower.startsWith('preview_tmp') || lower.startsWith('.')) {
+      return true;
+    }
+    const ext = path.extname(lower);
+    if (!MEDIA_EXTS.has(ext)) return true;
+    return false;
+  }
+
+  const projects = [];
+
+  if (fs.existsSync(WORKSPACES_DIR)) {
+    let wsEntries = [];
+    try { wsEntries = fs.readdirSync(WORKSPACES_DIR, { withFileTypes: true }); } catch (_) {}
+    for (const we of wsEntries) {
+      if (!we.isDirectory()) continue;
+      if (we.name.startsWith('.') || we.name === '_attachments') continue;
+      const projFolder = we.name;
+      const projDir = path.join(WORKSPACES_DIR, projFolder);
+
+      let projTitle = projFolder;
+      const projJsonPath = path.join(projDir, 'project.json');
+      let updatedAt = 0;
+      if (fs.existsSync(projJsonPath)) {
+        try {
+          const pj = JSON.parse(fs.readFileSync(projJsonPath, 'utf8'));
+          projTitle = pj.title || pj.name || projFolder;
+          updatedAt = pj.updated_at || pj.updatedAt || 0;
+        } catch (_) {}
+      }
+      try {
+        const stat = fs.statSync(projDir);
+        if (!updatedAt) updatedAt = stat.mtimeMs;
+      } catch (_) {}
+
+      const finished = [];
+      const raw = [];
+
+      function scanDir(dir, relPath) {
+        let entries = [];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+        for (const ent of entries) {
+          if (ent.name.startsWith('.')) continue;
+          const full = path.join(dir, ent.name);
+          const entRel = relPath ? `${relPath}/${ent.name}` : ent.name;
+          if (ent.isDirectory()) {
+            const dirLower = ent.name.toLowerCase();
+            if (JUNK_DIRS.has(dirLower)) continue;
+            scanDir(full, entRel);
+          } else if (ent.isFile()) {
+            if (isJunkFile(ent.name)) continue;
+            const ext = path.extname(ent.name).toLowerCase();
+            const type = getMediaType(ext);
+            if (!type) continue;
+            let stat;
+            try { stat = fs.statSync(full); } catch (_) { continue; }
+            const relToStudio = path.relative(CONTENT_STUDIO_DIR, full).replace(/\\/g, '/');
+            const streamUrl = `/api/media/stream?path=${encodeURIComponent(relToStudio)}`;
+            const thumbUrl = type === 'video'
+              ? `/api/media/thumb?path=${encodeURIComponent(relToStudio)}`
+              : (type === 'image' ? streamUrl : '');
+
+            const item = {
+              id: crypto.createHash('md5').update(full).digest('hex'),
+              name: ent.name,
+              path: relToStudio,
+              fullPath: full,
+              type,
+              size: stat.size,
+              modifiedAt: stat.mtimeMs,
+              streamUrl,
+              thumbUrl,
+            };
+
+            const topDir = entRel.includes('/') ? entRel.split('/')[0].toLowerCase() : '';
+            const isFinalNamed = ent.name.toLowerCase().startsWith('final') ||
+                                 ent.name.toLowerCase().startsWith('export_') ||
+                                 ent.name.toLowerCase().startsWith('render_') ||
+                                 ent.name.toLowerCase() === 'final.mp4';
+            if (FINISHED_SUBDIRS.has(topDir) || (!topDir && isFinalNamed && type === 'video')) {
+              finished.push(item);
+            } else {
+              raw.push(item);
+            }
+          }
+        }
+      }
+
+      scanDir(projDir, '');
+
+      finished.sort((a, b) => b.modifiedAt - a.modifiedAt);
+      raw.sort((a, b) => b.modifiedAt - a.modifiedAt);
+
+      const coverThumb = (finished[0] && finished[0].thumbUrl) ||
+                         (raw.find(r => r.thumbUrl) && raw.find(r => r.thumbUrl).thumbUrl) ||
+                         '';
+
+      projects.push({
+        projectId: projFolder,
+        projectName: projTitle,
+        updatedAt: updatedAt || Date.now(),
+        coverThumb,
+        finishedCount: finished.length,
+        rawCount: raw.length,
+        finished,
+        raw,
+      });
+    }
+  }
+
+  projects.sort((a, b) => b.updatedAt - a.updatedAt);
+
+  const general = [];
+  const libMediaDir = path.join(LIBRARY_DIR, 'media');
+  const targetLib = fs.existsSync(libMediaDir) ? libMediaDir : LIBRARY_DIR;
+  if (fs.existsSync(targetLib)) {
+    function scanLib(dir) {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+      for (const ent of entries) {
+        if (ent.name.startsWith('.')) continue;
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) {
+          if (['sessions'].includes(ent.name.toLowerCase())) continue;
+          scanLib(full);
+        } else if (ent.isFile()) {
+          if (isJunkFile(ent.name)) continue;
+          const ext = path.extname(ent.name).toLowerCase();
+          const type = getMediaType(ext);
+          if (!type) continue;
+          let stat;
+          try { stat = fs.statSync(full); } catch (_) { continue; }
+          const relToStudio = path.relative(CONTENT_STUDIO_DIR, full).replace(/\\/g, '/');
+          const streamUrl = `/api/media/stream?path=${encodeURIComponent(relToStudio)}`;
+          const thumbUrl = type === 'video'
+            ? `/api/media/thumb?path=${encodeURIComponent(relToStudio)}`
+            : (type === 'image' ? streamUrl : '');
+          general.push({
+            id: crypto.createHash('md5').update(full).digest('hex'),
+            name: ent.name,
+            path: relToStudio,
+            fullPath: full,
+            type,
+            size: stat.size,
+            modifiedAt: stat.mtimeMs,
+            streamUrl,
+            thumbUrl,
+          });
+        }
+      }
+    }
+    scanLib(targetLib);
+    general.sort((a, b) => b.modifiedAt - a.modifiedAt);
+  }
+
+  return { projects, general };
+}
+
 function handleMediaIndex(req, res, urlObj) {
-  const project = urlObj.searchParams.get('project') || '';
-  const items = scanMediaFiles(project);
-  return sendJson(res, 200, { items });
+  const tree = buildGalleryTree();
+  const flat = [];
+  for (const p of tree.projects) {
+    for (const f of p.finished) {
+      flat.push({
+        id: f.id,
+        name: f.name,
+        type: f.type,
+        category: 'render',
+        project: p.projectId,
+        relativePath: f.path,
+        sizeBytes: f.size,
+        updatedAt: f.modifiedAt,
+        streamUrl: f.streamUrl,
+        thumbUrl: f.thumbUrl,
+      });
+    }
+    for (const r of p.raw) {
+      flat.push({
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        category: 'asset',
+        project: p.projectId,
+        relativePath: r.path,
+        sizeBytes: r.size,
+        updatedAt: r.modifiedAt,
+        streamUrl: r.streamUrl,
+        thumbUrl: r.thumbUrl,
+      });
+    }
+  }
+  for (const g of tree.general) {
+    flat.push({
+      id: g.id,
+      name: g.name,
+      type: g.type,
+      category: 'general',
+      project: '',
+      relativePath: g.path,
+      sizeBytes: g.size,
+      updatedAt: g.modifiedAt,
+      streamUrl: g.streamUrl,
+      thumbUrl: g.thumbUrl,
+    });
+  }
+  return sendJson(res, 200, {
+    status: 'ok',
+    projects: tree.projects,
+    general: tree.general,
+    items: flat,
+  });
 }
 
 function handleMediaStream(req, res, urlObj) {
@@ -1789,7 +2045,8 @@ async function handleMediaDelete(req, res) {
     }
   }
 
-  return sendJson(res, 200, { ok: failed.length === 0, deleted, failed });
+  const tree = buildGalleryTree();
+  return sendJson(res, 200, { ok: failed.length === 0, deleted, failed, ...tree });
 }
 
 // ── Auth Handlers ───────────────────────────────────────────────────────────
@@ -2668,9 +2925,12 @@ function readRawBody(req, limitBytes) {
 
 async function handleHubChat(req, res, body, userMsg) {
   const chatMode = String(body.mode || 'director').toLowerCase();
-  const attachments = Array.isArray(body.attachments) ? body.attachments.map(String).filter(Boolean) : [];
-  const provider = String(body.provider || 'auto').toLowerCase();
-  const model = body.model ? String(body.model) : '';
+  let provider = String(body.provider || 'auto').toLowerCase();
+  let model = body.model ? String(body.model) : '';
+  if (provider === 'auto' || !provider) {
+    provider = 'auto';
+    model = 'smart-auto';
+  }
   const effort = body.effort ? String(body.effort) : '';
   const requestedSession = String(body.session_id || body.sessionId || '').trim();
 
@@ -2857,10 +3117,8 @@ async function handleChat(req, res) {
     return sendJson(res, 400, { status: 'error', error: 'Pesan kosong' });
   }
 
-  // V3.7: semua percakapan baru memakai Unified Agent Hub (auto router + handoff).
-  const hubRequested = body.hub === true || body.hub === 'true' ||
-    ['auto', 'gemini', 'groq', 'mistral', 'zai', 'cohere', 'nvidia', 'sambanova',
-      'cloudflare', 'openrouter', 'antigravity', 'cline', 'custom'].includes(String(body.provider || '').toLowerCase());
+  // V3.8: Semua percakapan memakai Unified Agent Hub (Auto router + live verification).
+  const hubRequested = true;
   if (hubRequested) {
     return handleHubChat(req, res, body, userMsg);
   }
@@ -3938,10 +4196,14 @@ const server = http.createServer(async (req, res) => {
   }
 
 
-  // ── Unified Agent Hub Endpoints (V3.7) ────────────────────────────────────
+  // ── Unified Agent Hub Endpoints (V3.8) ────────────────────────────────────
   if (req.method === 'GET' && pathname === '/api/models') {
     try {
       const { catalog, usage } = await buildHubCatalog();
+      const verifiedProviders = (catalog.providers || []).filter((p) => {
+        if (p.id === 'antigravity') return true;
+        return Array.isArray(p.models) && p.models.length > 0;
+      });
       return sendJson(res, 200, {
         status: 'ok',
         auto: { provider: 'auto', label: 'Auto (Terbaik per Tugas)' },
@@ -3950,7 +4212,7 @@ const server = http.createServer(async (req, res) => {
         reasoning_effort: catalog.reasoning_effort,
         auto_fallback: catalog.auto_fallback,
         fallback_order: catalog.fallback_order,
-        providers: catalog.providers,
+        providers: verifiedProviders,
         quota: usage.providers || {},
         usage_day: usage.day || '',
         usage_month: usage.month || '',
@@ -3958,6 +4220,25 @@ const server = http.createServer(async (req, res) => {
       });
     } catch (e) {
       return sendJson(res, 500, { status: 'error', error: e.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/settings/providers/test') {
+    let body;
+    try { body = await readJsonBody(req); } catch (_) { return sendJson(res, 400, { ok: false, error: 'JSON tidak valid' }); }
+    const provider = String(body.provider || '').toLowerCase().trim();
+    const key = String(body.api_key || body.key || '').trim();
+    const baseUrl = String(body.base_url || '').trim();
+    const modelId = String(body.model_id || body.model || '').trim();
+    const args = ['engine/provider_config.py', 'test-provider', '--provider', provider];
+    if (key) args.push('--key', key);
+    if (baseUrl) args.push('--base-url', baseUrl);
+    if (modelId) args.push('--model-id', modelId);
+    try {
+      const result = await runStudioPython(args, 30000);
+      return sendJson(res, 200, result);
+    } catch (e) {
+      return sendJson(res, 200, { ok: false, error: e.message || 'Gagal memverifikasi provider' });
     }
   }
 
@@ -4150,8 +4431,8 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { status: 'ok', mcp });
   }
 
-  // ── Media Indexer & Streamer Endpoints (V3.5) ──────────────────────────────
-  if (req.method === 'GET' && pathname === '/api/media/index') {
+  // ── Media Indexer & Streamer Endpoints (V3.8) ──────────────────────────────
+  if (req.method === 'GET' && (pathname === '/api/gallery/tree' || pathname === '/api/media' || pathname === '/api/media/index')) {
     return handleMediaIndex(req, res, urlObj);
   }
 
@@ -4169,13 +4450,29 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && pathname === '/api/media/delete') {
+  if ((req.method === 'POST' && pathname === '/api/media/delete') || (req.method === 'DELETE' && pathname === '/api/media')) {
     handleMediaDelete(req, res).catch(() => {
       try {
         sendJson(res, 500, { ok: false, error: 'Gagal menghapus media', deleted: [], failed: [] });
       } catch (_) {}
     });
     return;
+  }
+
+  // ── Projects API Alias (V3.8) ─────────────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/api/projects') {
+    return sendJson(res, 200, { status: 'ok', projects: listWorkspaces() });
+  }
+
+  const projApiDeleteMatch = pathname.match(/^\/api\/projects\/([^\/]+)$/);
+  if (req.method === 'DELETE' && projApiDeleteMatch) {
+    const wsName = decodeURIComponent(projApiDeleteMatch[1]);
+    try {
+      const result = deleteWorkspace(wsName);
+      return sendJson(res, 200, { status: 'ok', ...result });
+    } catch (e) {
+      return sendJson(res, 400, { status: 'error', error: e.message || 'Gagal menghapus proyek' });
+    }
   }
 
   return sendJson(res, 404, { status: 'error', error: 'Endpoint tidak ditemukan' });

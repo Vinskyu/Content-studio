@@ -150,7 +150,7 @@ fun WorkspaceScreen(
             val arr = res.optJSONArray("channels") ?: return@launch
             val list = mutableListOf<ChannelProfile>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 val dnaObj = obj.optJSONObject("dna")
                 val traitsList = mutableListOf<String>()
                 if (dnaObj != null) {
@@ -196,12 +196,12 @@ fun WorkspaceScreen(
             val arr = res.optJSONArray("patterns") ?: return@launch
             val list = mutableListOf<PatternItem>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 val beatsArr = obj.optJSONArray("beats")
                 val beats = mutableListOf<PatternBeat>()
                 if (beatsArr != null) {
                     for (j in 0 until beatsArr.length()) {
-                        val b = beatsArr.getJSONObject(j)
+                        val b = beatsArr.optJSONObject(j) ?: continue
                         beats.add(
                             PatternBeat(
                                 role = b.optString("role", "Beat"),
@@ -234,7 +234,7 @@ fun WorkspaceScreen(
             val arr = res.optJSONArray("workspaces") ?: return@launch
             val list = mutableListOf<WorkspaceSummary>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 val proj = obj.optJSONObject("project")
                 val chanId = proj?.optString("channel_id", "") ?: ""
                 val aspect = proj?.optString("aspect_ratio", "9:16") ?: "9:16"
@@ -271,7 +271,7 @@ fun WorkspaceScreen(
             val arr = res.optJSONArray("files") ?: return@launch
             val list = mutableListOf<WorkspaceFileItem>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 list.add(
                     WorkspaceFileItem(
                         name = obj.optString("name"),
@@ -410,100 +410,101 @@ fun WorkspaceScreen(
             .fillMaxSize()
             .background(BgDark)
     ) {
-        // ACTION BAR: + New Project & Quick Voice
+        // 1. TOP BAR 52.dp
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(52.dp)
                 .background(Color(0xFF0B0C0E))
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFF2F4F8))
-                    .clickable {
-                        newProjectName = ""
-                        selectedChannelForProject = ""
-                        projectCreateError = null
-                        showCreateProjectDialog = true
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Add,
-                        contentDescription = null,
-                        tint = Color(0xFF0B0C0E),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = "New Project",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF0B0C0E)
-                    )
-                }
-            }
+            Text(
+                text = "Proyek",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFF2F4F8)
+            )
 
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF15171C))
-                    .clickable {
-                        onOpenQuickVoice?.invoke() ?: onNavigateToVoice?.invoke()
-                    },
-                contentAlignment = Alignment.Center
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF1E2128))
+                        .clickable {
+                            onOpenQuickVoice?.invoke() ?: onNavigateToVoice?.invoke()
+                        }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.GraphicEq,
-                        contentDescription = null,
-                        tint = Color(0xFFF2F4F8),
-                        modifier = Modifier.size(16.dp)
-                    )
                     Text(
-                        text = "Quick Voice",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 13.sp,
+                        text = "Voice",
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color(0xFFF2F4F8)
                     )
                 }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFF2F4F8))
+                        .clickable {
+                            newProjectName = ""
+                            selectedChannelForProject = ""
+                            projectCreateError = null
+                            showCreateProjectDialog = true
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Add,
+                            contentDescription = null,
+                            tint = Color(0xFF0B0C0E),
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "Baru",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF0B0C0E)
+                        )
+                    }
+                }
             }
         }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(Color(0xFF23262F))
+        )
 
         // STATUS BANNER
         if (!actionStatus.isNullOrBlank()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SurfaceCard)
-                    .border(1.dp, BorderSubtle, RoundedCornerShape(0.dp))
+                    .background(Color(0xFF15171C))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = actionStatus ?: "",
-                    fontFamily = FontFamily.Default,
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
             }
         }
 
-        // CONTENT SECTION (100% Pure Projects)
+        // CONTENT SECTION
         if (workspaces.isEmpty()) {
             Column(
                 modifier = Modifier
@@ -515,8 +516,8 @@ fun WorkspaceScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(56.dp)
-                        .clip(RoundedCornerShape(14.dp))
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(Color(0xFF15171C)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -524,22 +525,20 @@ fun WorkspaceScreen(
                         imageVector = Icons.Outlined.VideoLibrary,
                         contentDescription = null,
                         tint = Color(0xFF8A919E),
-                        modifier = Modifier.size(26.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "No projects yet",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 15.sp,
+                    text = "Belum ada proyek",
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFFF2F4F8)
                 )
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Tap + New Project or ask Agent to start.",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 13.sp,
+                    text = "Ketuk + Baru untuk membuat proyek.",
+                    fontSize = 12.sp,
                     color = Color(0xFF8A919E)
                 )
             }
@@ -549,163 +548,146 @@ fun WorkspaceScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 32.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 32.dp)
             ) {
                 items(workspaces) { ws ->
                     val isActive = ws.name == activeWorkspace
-                    val matchedChannel = channels.find { it.id == ws.channelId }
-                    val stageIdx = when (ws.stage.lowercase(Locale.US)) {
-                        "voice", "audio" -> 1
-                        "visual", "scenes" -> 2
-                        "export", "render", "done" -> 3
-                        else -> 0
+                    val stageLabel = when (ws.stage.lowercase(Locale.US)) {
+                        "voice", "audio" -> "Voice"
+                        "visual", "scenes" -> "Visual"
+                        "export", "render", "done" -> "Render"
+                        else -> "Naskah"
                     }
-                    val stageNames = listOf("Script", "Voice", "Visual", "Export")
 
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
-                            .background(if (isActive) Color(0xFF1E2128) else Color(0xFF15171C))
-                            .clickable {
-                                LinuxRuntimeManager.setActiveWorkspace(ws.name)
-                                onOpenProject?.invoke(ws.name) ?: run {
-                                    selectedProjectForBoard = ws.name
-                                }
-                            }
-                            .padding(14.dp)
+                            .background(Color(0xFF15171C))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        // Baris 1: Judul Proyek & Status
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f, fill = false)
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f)
                             ) {
                                 Text(
                                     text = ws.name,
-                                    fontFamily = FontFamily.Monospace,
                                     fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFF2F4F8)
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFF2F4F8),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 if (isActive) {
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(4.dp))
-                                            .background(BadgeGreenBg)
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            .background(Color(0xFF102619))
+                                            .padding(horizontal = 5.dp, vertical = 1.dp)
                                     ) {
                                         Text(
-                                            text = "Active",
-                                            fontFamily = FontFamily.Monospace,
+                                            text = "Aktif",
                                             fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = BadgeGreenText
+                                            fontWeight = FontWeight.Medium,
+                                            color = Color(0xFF34D399)
                                         )
                                     }
                                 }
                             }
 
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFF1E2128))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
-                                StudioBadge(text = ws.aspectRatio, isAccent = true)
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .clickable { workspaceToDelete = ws },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Delete,
-                                        contentDescription = "Delete",
-                                        tint = StudioDangerRed,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
+                                Text(
+                                    text = stageLabel,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF8A919E)
+                                )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        // Baris 2: Info (Rasio & Jumlah File)
+                        Text(
+                            text = "${ws.aspectRatio} · ${ws.filesCount} file aset",
+                            fontSize = 11.sp,
+                            color = Color(0xFF8A919E)
+                        )
 
+                        // Baris 3: Tiga Tombol Aksi (Buka, Co-Pilot, Hapus)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            stageNames.forEachIndexed { idx, stageName ->
-                                val isDoneOrActive = idx <= stageIdx
-                                val dotColor = if (isDoneOrActive) StudioSage else Color(0xFF8A919E)
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .clip(CircleShape)
-                                            .background(dotColor)
-                                    )
-                                    Text(
-                                        text = stageName,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isDoneOrActive) FontWeight.Medium else FontWeight.Normal,
-                                        color = if (isDoneOrActive) Color(0xFFF2F4F8) else Color(0xFF8A919E)
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (matchedChannel != null) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(Color(0xFF1E2128))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = matchedChannel.name,
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 10.sp,
-                                        color = TextSecondary
-                                    )
-                                }
-                            } else if (ws.channelId.isNotBlank()) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(Color(0xFF1E2128))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "Unlinked",
-                                        fontFamily = FontFamily.Default,
-                                        fontSize = 10.sp,
-                                        color = Color(0xFF8A919E)
-                                    )
-                                }
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF1E2128))
+                                    .clickable {
+                                        LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                        onOpenProject?.invoke(ws.name) ?: run {
+                                            selectedProjectForBoard = ws.name
+                                        }
+                                    }
+                                    .padding(vertical = 7.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Buka",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFF2F4F8)
+                                )
                             }
 
-                            Text(
-                                text = "${ws.filesCount} files",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                color = Color(0xFF8A919E)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF1E2128))
+                                    .clickable {
+                                        LinuxRuntimeManager.setActiveWorkspace(ws.name)
+                                        onNavigateToAgent?.invoke()
+                                    }
+                                    .padding(vertical = 7.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Co-Pilot",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFF2F4F8)
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF2A1417))
+                                    .clickable { workspaceToDelete = ws }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = "Hapus",
+                                    tint = StudioDangerRed,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
                         }
                     }
                 }

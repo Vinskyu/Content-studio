@@ -42,44 +42,38 @@ TASK_LABELS = {
 # pertama yang memenuhi kapabilitas.
 TASK_PRIORITIES: Dict[str, List[Dict[str, Any]]] = {
     "multimodal_visual": [
-        {"provider": "gemini", "models": ["gemini-2.5-flash", "gemini-2.5-pro"]},
-        {"provider": "zai", "models": ["glm-4.6v-flash"]},
-        {"provider": "mistral", "models": ["mistral-small-latest", "mistral-large-latest"]},
-        {"provider": "antigravity", "models": ["gemini-4-neon", "gemini-4-hydrogen"]},
+        {"provider": "gemini", "models": []},
+        {"provider": "antigravity", "models": ["default"]},
         {"provider": "openrouter", "models": []},
-        {"provider": "cline", "models": []},
+        {"provider": "custom", "models": []},
     ],
     "deep_creative": [
-        {"provider": "nvidia", "models": ["deepseek-ai/deepseek-v4.1-flash", "deepseek-ai/deepseek-r1"]},
-        {"provider": "sambanova", "models": ["DeepSeek-V3.2"]},
-        {"provider": "gemini", "models": ["gemini-2.5-pro"]},
-        {"provider": "antigravity", "models": ["gemini-4-neon", "claude-sonnet-5.5"]},
-        {"provider": "cloudflare", "models": ["@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"]},
-        {"provider": "cohere", "models": ["command-a-03-2025"]},
-        {"provider": "cline", "models": []},
+        {"provider": "gemini", "models": []},
+        {"provider": "groq", "models": []},
+        {"provider": "openrouter", "models": []},
+        {"provider": "antigravity", "models": ["default"]},
+        {"provider": "custom", "models": []},
     ],
     "pipeline_execution": [
-        {"provider": "gemini", "models": ["gemini-2.5-flash"]},
-        {"provider": "mistral", "models": ["mistral-large-latest", "mistral-small-latest"]},
-        {"provider": "groq", "models": ["llama-3.3-70b-versatile"]},
-        {"provider": "antigravity", "models": ["gemini-4-hydrogen"]},
-        {"provider": "cline", "models": []},
-        {"provider": "zai", "models": ["glm-4.7-flash"]},
+        {"provider": "antigravity", "models": ["default"]},
+        {"provider": "gemini", "models": []},
+        {"provider": "groq", "models": []},
+        {"provider": "openrouter", "models": []},
+        {"provider": "custom", "models": []},
     ],
     "complex_agent": [
-        {"provider": "antigravity", "models": []},
-        {"provider": "cline", "models": []},
-        {"provider": "mistral", "models": ["codestral-latest"]},
-        {"provider": "nvidia", "models": ["deepseek-ai/deepseek-v4.1-flash", "deepseek-ai/deepseek-r1"]},
-        {"provider": "gemini", "models": ["gemini-2.5-pro"]},
+        {"provider": "antigravity", "models": ["default"]},
+        {"provider": "gemini", "models": []},
+        {"provider": "groq", "models": []},
+        {"provider": "openrouter", "models": []},
+        {"provider": "custom", "models": []},
     ],
     "fast_chat": [
-        {"provider": "groq", "models": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"]},
-        {"provider": "gemini", "models": ["gemini-2.5-flash-lite"]},
-        {"provider": "zai", "models": ["glm-4.7-flash"]},
-        {"provider": "sambanova", "models": ["Meta-Llama-3.3-70B-Instruct"]},
         {"provider": "groq", "models": []},
         {"provider": "gemini", "models": []},
+        {"provider": "openrouter", "models": []},
+        {"provider": "antigravity", "models": ["default"]},
+        {"provider": "custom", "models": []},
     ],
 }
 
@@ -293,14 +287,16 @@ def select_best_route(task_profile: Dict[str, Any], catalog: Dict[str, Any],
                 break
 
     if not candidates:
-        return {
-            "provider": None,
-            "model": None,
-            "fallback_chain": [],
-            "task_type": task_type,
-            "label": task_profile.get("label") or TASK_LABELS.get(task_type),
-            "profile": task_profile,
+        antigravity_provider = providers.get("antigravity") or {"id": "antigravity", "label": "Antigravity (Bawaan)", "kind": "cli", "configured": True, "models": [{"id": "default", "label": "Antigravity (Bawaan)", "capabilities": {"multimodal": True, "tools": True, "reasoning": False, "speed": "fast"}}]}
+        route = _route_for(antigravity_provider, ["default"], task_profile) or {
+            "provider": "antigravity",
+            "provider_label": "Antigravity (Bawaan)",
+            "kind": "cli",
+            "model": "default",
+            "model_label": "Antigravity (Bawaan)",
+            "capabilities": {"multimodal": True, "tools": True, "reasoning": False, "speed": "fast"},
         }
+        candidates.append(route)
 
     best = candidates[0]
     return {

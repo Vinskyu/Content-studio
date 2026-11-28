@@ -876,18 +876,27 @@ def _resolve_route(provider: str, model: Optional[str], effort: str,
                 f"{route.get('provider')}/{route.get('model')} (terbaik & kuota aman)."
             )
             return route
-        # Tidak ada provider terkonfigurasi: tetap coba provider aktif manual.
-        provider = cfg.get("active_provider") or "groq"
-        model = None
+        provider = "antigravity"
+        model = "default"
 
     configured = pc.is_configured(provider, cfg)
-    chosen_model = model or (
-        cfg.get("active_model") if cfg.get("active_provider") == provider and cfg.get("active_model") != "smart-auto"
-        else None
-    )
+    if not configured and provider != "antigravity":
+        provider = "antigravity"
+        chosen_model = "default"
+        configured = True
+    else:
+        chosen_model = model or (
+            cfg.get("active_model") if cfg.get("active_provider") == provider and cfg.get("active_model") != "smart-auto"
+            else None
+        )
     model_info = pc.get_model(provider, chosen_model, cfg)
     if not model_info:
-        raise HubError(0, f"Model untuk {provider} tidak tersedia", provider)
+        if provider != "antigravity":
+            provider = "antigravity"
+            model_info = pc.get_model("antigravity", "default", cfg)
+            configured = True
+        if not model_info:
+            raise HubError(0, f"Model untuk {provider} tidak tersedia", provider)
     profile = tr.classify_task(user_prompt, attachments, {"active_project": workspace})
     return {
         "provider": provider,

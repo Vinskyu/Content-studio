@@ -133,6 +133,40 @@ data class StudioMediaFile(
     val thumbUrl: String = "",
 )
 
+data class GalleryFileItem(
+    val id: String,
+    val name: String,
+    val path: String,
+    val fullPath: String = "",
+    val type: String, // "video" | "image" | "audio"
+    val size: Long = 0L,
+    val modifiedAt: Long = 0L,
+    val streamUrl: String = "",
+    val thumbUrl: String = "",
+)
+
+data class GalleryProjectFolder(
+    val projectId: String,
+    val projectName: String,
+    val updatedAt: Long = 0L,
+    val coverThumb: String = "",
+    val finishedCount: Int = 0,
+    val rawCount: Int = 0,
+    val finished: List<GalleryFileItem> = emptyList(),
+    val raw: List<GalleryFileItem> = emptyList(),
+)
+
+data class GalleryGeneralFolder(
+    val name: String = "Koleksi Umum",
+    val count: Int = 0,
+    val items: List<GalleryFileItem> = emptyList(),
+)
+
+data class GalleryTreeResult(
+    val projects: List<GalleryProjectFolder> = emptyList(),
+    val general: GalleryGeneralFolder = GalleryGeneralFolder(),
+)
+
 data class ActionPlanCardData(
     val title: String,
     val goal: String = "",
@@ -738,6 +772,11 @@ object LinuxRuntimeManager {
                     ZipInputStream(input).use { zis ->
                         var entry = zis.nextEntry
                         while (entry != null) {
+                            if (entry.name.startsWith("workspaces/") || entry.name.startsWith("library/") || entry.name.startsWith("config/")) {
+                                zis.closeEntry()
+                                entry = zis.nextEntry
+                                continue
+                            }
                             val outFile = File(dest, entry.name)
                             if (entry.isDirectory) {
                                 outFile.mkdirs()
@@ -1432,7 +1471,7 @@ object LinuxRuntimeManager {
             val arr = res.optJSONArray("skills") ?: return emptyList()
             val list = mutableListOf<ExtensionSkillItem>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 list.add(
                     ExtensionSkillItem(
                         id = obj.optString("id"),
@@ -1455,7 +1494,7 @@ object LinuxRuntimeManager {
             val arr = res.optJSONArray("mcp") ?: return emptyList()
             val list = mutableListOf<ExtensionMcpItem>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 list.add(
                     ExtensionMcpItem(
                         id = obj.optString("id"),
@@ -1691,7 +1730,7 @@ object LinuxRuntimeManager {
                     val remainingRes = listWorkspaces()
                     val arr = remainingRes.optJSONArray("workspaces")
                     if (arr != null && arr.length() > 0) {
-                        _activeWorkspace.value = arr.getJSONObject(0).optString("name", "")
+                        _activeWorkspace.value = arr.optJSONObject(0)?.optString("name", "") ?: ""
                     } else {
                         _activeWorkspace.value = ""
                     }
@@ -2332,7 +2371,7 @@ object LinuxRuntimeManager {
                 val pList = mutableListOf<MemoryEntry>()
                 if (pArr != null) {
                     for (i in 0 until pArr.length()) {
-                        val m = pArr.getJSONObject(i)
+                        val m = pArr.optJSONObject(i) ?: continue
                         pList.add(
                             MemoryEntry(
                                 id = m.optString("id"),
@@ -2346,7 +2385,7 @@ object LinuxRuntimeManager {
                 val gList = mutableListOf<MemoryEntry>()
                 if (gArr != null) {
                     for (i in 0 until gArr.length()) {
-                        val m = gArr.getJSONObject(i)
+                        val m = gArr.optJSONObject(i) ?: continue
                         gList.add(
                             MemoryEntry(
                                 id = m.optString("id"),
@@ -2510,7 +2549,7 @@ object LinuxRuntimeManager {
                 val itemsArr = obj.optJSONArray("items") ?: JSONArray()
                 val list = mutableListOf<StockMediaItem>()
                 for (i in 0 until itemsArr.length()) {
-                    val it = itemsArr.getJSONObject(i)
+                    val it = itemsArr.optJSONObject(i) ?: continue
                     list.add(
                         StockMediaItem(
                             id = it.optString("id"),
@@ -2578,7 +2617,7 @@ object LinuxRuntimeManager {
                 val itemsArr = obj.optJSONArray("items") ?: JSONArray()
                 val list = mutableListOf<StudioMediaFile>()
                 for (i in 0 until itemsArr.length()) {
-                    val it = itemsArr.getJSONObject(i)
+                    val it = itemsArr.optJSONObject(i) ?: continue
                     list.add(
                         StudioMediaFile(
                             id = it.optString("id"),
@@ -2677,4 +2716,171 @@ object LinuxRuntimeManager {
 
     fun copyUriToAttachmentCache(context: Context, uri: Uri): String? =
         resolveUriToLocalPath(context, uri)
+
+    suspend fun fetchGalleryTree(): GalleryTreeResult = withContext(Dispatchers.IO) {
+        try {
+            val conn = URL("$BRIDGE_BASE_URL/api/gallery/tree").openConnection() as HttpURLConnection
+            conn.connectTimeout = 8000
+            conn.readTimeout = 25000
+            if (conn.responseCode == 200) {
+                val txt = conn.inputStream.bufferedReader().use { it.readText() }
+                val root = JSONObject(txt)
+                val projectsArr = root.optJSONArray("projects")
+                val projectsList = mutableListOf<GalleryProjectFolder>()
+                if (projectsArr != null) {
+                    for (i in 0 until projectsArr.length()) {
+                        val pObj = projectsArr.optJSONObject(i) ?: continue
+                        val finArr = pObj.optJSONArray("finished")
+                        val finList = mutableListOf<GalleryFileItem>()
+                        if (finArr != null) {
+                            for (j in 0 until finArr.length()) {
+                                val fObj = finArr.optJSONObject(j) ?: continue
+                                finList.add(
+                                    GalleryFileItem(
+                                        id = fObj.optString("id"),
+                                        name = fObj.optString("name"),
+                                        path = fObj.optString("path"),
+                                        fullPath = fObj.optString("fullPath"),
+                                        type = fObj.optString("type", "video"),
+                                        size = fObj.optLong("size", 0L),
+                                        modifiedAt = fObj.optLong("modifiedAt", 0L),
+                                        streamUrl = fObj.optString("streamUrl"),
+                                        thumbUrl = fObj.optString("thumbUrl")
+                                    )
+                                )
+                            }
+                        }
+                        val rawArr = pObj.optJSONArray("raw")
+                        val rawList = mutableListOf<GalleryFileItem>()
+                        if (rawArr != null) {
+                            for (j in 0 until rawArr.length()) {
+                                val rObj = rawArr.optJSONObject(j) ?: continue
+                                rawList.add(
+                                    GalleryFileItem(
+                                        id = rObj.optString("id"),
+                                        name = rObj.optString("name"),
+                                        path = rObj.optString("path"),
+                                        fullPath = rObj.optString("fullPath"),
+                                        type = rObj.optString("type", "video"),
+                                        size = rObj.optLong("size", 0L),
+                                        modifiedAt = rObj.optLong("modifiedAt", 0L),
+                                        streamUrl = rObj.optString("streamUrl"),
+                                        thumbUrl = rObj.optString("thumbUrl")
+                                    )
+                                )
+                            }
+                        }
+                        projectsList.add(
+                            GalleryProjectFolder(
+                                projectId = pObj.optString("projectId"),
+                                projectName = pObj.optString("projectName", pObj.optString("projectId")),
+                                updatedAt = pObj.optLong("updatedAt", 0L),
+                                coverThumb = pObj.optString("coverThumb"),
+                                finishedCount = pObj.optInt("finishedCount", finList.size),
+                                rawCount = pObj.optInt("rawCount", rawList.size),
+                                finished = finList,
+                                raw = rawList
+                            )
+                        )
+                    }
+                }
+                val genObj = root.optJSONObject("general")
+                val genItemsList = mutableListOf<GalleryFileItem>()
+                if (genObj != null) {
+                    val gArr = genObj.optJSONArray("items")
+                    if (gArr != null) {
+                        for (k in 0 until gArr.length()) {
+                            val gi = gArr.optJSONObject(k) ?: continue
+                            genItemsList.add(
+                                GalleryFileItem(
+                                    id = gi.optString("id"),
+                                    name = gi.optString("name"),
+                                    path = gi.optString("path"),
+                                    fullPath = gi.optString("fullPath"),
+                                    type = gi.optString("type", "video"),
+                                    size = gi.optLong("size", 0L),
+                                    modifiedAt = gi.optLong("modifiedAt", 0L),
+                                    streamUrl = gi.optString("streamUrl"),
+                                    thumbUrl = gi.optString("thumbUrl")
+                                )
+                            )
+                        }
+                    }
+                }
+                GalleryTreeResult(
+                    projects = projectsList,
+                    general = GalleryGeneralFolder(
+                        name = genObj?.optString("name", "Koleksi Umum") ?: "Koleksi Umum",
+                        count = genObj?.optInt("count", genItemsList.size) ?: genItemsList.size,
+                        items = genItemsList
+                    )
+                )
+            } else {
+                GalleryTreeResult()
+            }
+        } catch (e: Exception) {
+            GalleryTreeResult()
+        }
+    }
+
+    suspend fun deleteMediaFiles(paths: List<String>): Boolean = withContext(Dispatchers.IO) {
+        if (paths.isEmpty()) return@withContext false
+        try {
+            val conn = (URL("$BRIDGE_BASE_URL/api/media/delete").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 10000
+                readTimeout = 60000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val pathsArr = JSONArray()
+            paths.forEach { pathsArr.put(it) }
+            val body = JSONObject().apply {
+                put("paths", pathsArr)
+            }.toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            if (conn.responseCode != 200) {
+                false
+            } else {
+                val txt = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = JSONObject(txt)
+                obj.optBoolean("ok", false)
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun testProviderConnection(
+        provider: String,
+        apiKey: String,
+        baseUrl: String = "",
+        modelId: String = ""
+    ): JSONObject = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL("$BRIDGE_BASE_URL/api/settings/providers/test").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 10000
+                readTimeout = 40000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val body = JSONObject().apply {
+                put("provider", provider.trim().lowercase())
+                put("api_key", apiKey.trim())
+                if (baseUrl.isNotBlank()) put("base_url", baseUrl.trim())
+                if (modelId.isNotBlank()) put("model_id", modelId.trim())
+            }.toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val txt = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+            JSONObject(txt)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("ok", false)
+                put("error", e.message ?: "Koneksi gagal")
+            }
+        }
+    }
 }

@@ -55,19 +55,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 // ── Flat Matte Dark Color Palette (V3) ───────────────────────────────────────
-val StudioBg = Color(0xFF0B0C0E)
-val StudioSurface = Color(0xFF14161A)
-val StudioSurfaceElevated = Color(0xFF1D2026)
-val StudioBorder = Color(0xFF262A33)
+val StudioBg = StudioDesignSystem.BgCanvas
+val StudioSurface = StudioDesignSystem.BgSurface
+val StudioSurfaceElevated = StudioDesignSystem.BgElevated
+val StudioBorder = StudioDesignSystem.DividerSubtle
 
 val StudioPrimary = Color(0xFFF2F4F8)
 val StudioPrimaryText = Color(0xFF0B0C0E)
 
-val StudioSecondary = Color(0xFF1D2026)
+val StudioSecondary = StudioDesignSystem.BgElevated
 val StudioSecondaryText = Color(0xFFF2F4F8)
 
 val StudioDangerBg = Color(0xFF2A1417)
-val StudioDangerText = Color(0xFFF87171)
+val StudioDangerText = StudioDesignSystem.AccentDanger
 val StudioDangerRed = Color(0xFFD96B6B)
 
 val StudioAccent = Color(0xFF5E81AC)
@@ -76,9 +76,9 @@ val StudioSage = Color(0xFF67C28C)
 val StudioBadgeGreenBg = Color(0xFF102619)
 val StudioBadgeGreenText = Color(0xFF4ADE80)
 
-val TextPrimary = Color(0xFFF2F4F8)
-val TextSecondary = Color(0xFF8A919E)
-val TextMuted = Color(0xFF8A919E)
+val TextPrimary = StudioDesignSystem.TextPrimary
+val TextSecondary = StudioDesignSystem.TextSecondary
+val TextMuted = StudioDesignSystem.TextMuted
 
 // ── Smooth Organic Animation Helpers ────────────────────────────────────────
 

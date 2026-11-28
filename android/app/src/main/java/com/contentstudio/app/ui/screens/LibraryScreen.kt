@@ -121,10 +121,29 @@ fun LibraryScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
-    var activeTab by remember { mutableStateOf("channels") } // "channels", "templates", "media"
+    var activeTab by remember { mutableStateOf("media") } // "media" (Galeri), "channels", "templates"
 
-    // Media state
+    // Media state & 2-level Project Gallery
+    var galleryTree by remember { mutableStateOf<com.contentstudio.app.runtime.GalleryTreeResult?>(null) }
+    var selectedProjectFolder by remember { mutableStateOf<com.contentstudio.app.runtime.GalleryProjectFolder?>(null) }
+    var selectedFolderTab by remember { mutableStateOf("finished") }
+    var previewGalleryItem by remember { mutableStateOf<com.contentstudio.app.runtime.GalleryFileItem?>(null) }
+
+    fun refreshGalleryTree() {
+        scope.launch(Dispatchers.IO) {
+            val tree = LinuxRuntimeManager.fetchGalleryTree()
+            val list = LinuxRuntimeManager.fetchStudioMediaIndex()
+            withContext(Dispatchers.Main) {
+                galleryTree = tree
+                studioMedia.clear()
+                studioMedia.addAll(list)
+                selectedProjectFolder?.let { cur ->
+                    selectedProjectFolder = tree.projects.find { it.projectId == cur.projectId }
+                }
+            }
+        }
+    }
+
     var selectedCategory by remember { mutableStateOf("all") }
     var searchQuery by remember { mutableStateOf("") }
     val studioMedia = remember { mutableStateListOf<com.contentstudio.app.runtime.StudioMediaFile>() }
@@ -136,8 +155,11 @@ fun LibraryScreen(
 
     LaunchedEffect(activeTab) {
         if (activeTab == "media") {
-            studioMedia.clear()
-            studioMedia.addAll(LinuxRuntimeManager.fetchStudioMediaIndex())
+            refreshGalleryTree()
+        } else if (activeTab == "channels") {
+            refreshChannels()
+        } else if (activeTab == "templates") {
+            refreshTemplates()
         }
     }
 
@@ -155,9 +177,11 @@ fun LibraryScreen(
     var showStockSheet by remember { mutableStateOf(false) }
 
     val libHasOverlay = showStockSheet || assetToDelete != null || assetToUse != null ||
-        selectedStudioMedia != null || mediaSelectionMode
+        selectedStudioMedia != null || mediaSelectionMode || previewGalleryItem != null || selectedProjectFolder != null
     BackHandler(enabled = libHasOverlay) {
         when {
+            previewGalleryItem != null -> previewGalleryItem = null
+            selectedProjectFolder != null -> selectedProjectFolder = null
             showStockSheet -> showStockSheet = false
             assetToDelete != null -> assetToDelete = null
             assetToUse != null -> assetToUse = null
@@ -251,7 +275,7 @@ fun LibraryScreen(
             val arr = res.optJSONArray("assets") ?: return@launch
             val list = mutableListOf<LibraryAssetItem>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 list.add(
                     LibraryAssetItem(
                         name = obj.optString("name", ""),
@@ -289,7 +313,7 @@ fun LibraryScreen(
                 if (arr != null) {
                     val list = mutableListOf<LibraryAssetItem>()
                     for (i in 0 until arr.length()) {
-                        val obj = arr.getJSONObject(i)
+                        val obj = arr.optJSONObject(i) ?: continue
                         list.add(
                             LibraryAssetItem(
                                 name = obj.optString("name", ""),
@@ -342,7 +366,7 @@ fun LibraryScreen(
             val arr = res.optJSONArray("channels") ?: return@launch
             val list = mutableListOf<ChannelProfile>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 val dnaObj = obj.optJSONObject("dna")
                 val traitsArr = dnaObj?.optJSONArray("learned_traits")
                 val traits = mutableListOf<String>()
@@ -382,12 +406,12 @@ fun LibraryScreen(
             val arr = res.optJSONArray("patterns") ?: return@launch
             val list = mutableListOf<PatternItem>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 val beatsArr = obj.optJSONArray("beats")
                 val beats = mutableListOf<PatternBeat>()
                 if (beatsArr != null) {
                     for (j in 0 until beatsArr.length()) {
-                        val b = beatsArr.getJSONObject(j)
+                        val b = beatsArr.optJSONObject(j) ?: continue
                         beats.add(
                             PatternBeat(
                                 role = b.optString("role", "Beat"),
@@ -418,7 +442,7 @@ fun LibraryScreen(
             val arr = res.optJSONArray("workspaces") ?: return@launch
             val list = mutableListOf<WorkspaceSummary>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
                 list.add(
                     WorkspaceSummary(
                         name = obj.optString("name", ""),
@@ -568,7 +592,7 @@ fun LibraryScreen(
                     .padding(3.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                listOf("channels" to "Channels", "templates" to "Templates", "media" to "Media").forEach { (key, label) ->
+                listOf("media" to "Galeri", "channels" to "Channel DNA", "templates" to "Pola Ritme").forEach { (key, label) ->
                     val selected = activeTab == key
                     Box(
                         modifier = Modifier
@@ -921,104 +945,13 @@ fun LibraryScreen(
                 }
             }
             else -> {
-                // MEDIA TAB: visual gallery (self-contained)
-                val mediaFilters = listOf("All", "Renders", "Videos", "Images", "Audio", "Docs")
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        mediaFilters.forEach { f ->
-                            val sel = selectedMediaFilter == f
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (sel) LibMatteElevated else Color.Transparent)
-                                    .clickable {
-                                        selectedMediaFilter = f
-                                        exitMediaSelection()
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = f,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (sel) TextPrimary else TextMuted
-                                )
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
+                // ── 2-LEVEL PROJECT-ROOTED MEDIA GALLERY ──
+                if (selectedProjectFolder == null) {
+                    // LEVEL 1: FOLDER PROYEK
+                    val projects = galleryTree?.projects.orEmpty()
+                    val gen = galleryTree?.general
 
-                    if (mediaSelectionMode) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(LibMatteElevated)
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "${selectedMediaPaths.size} dipilih",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = TextPrimary
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(5.dp))
-                                        .background(LibMatteCard)
-                                        .clickable { exitMediaSelection() }
-                                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                                ) {
-                                    Text(text = "Batal", fontSize = 11.sp, color = TextPrimary)
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(5.dp))
-                                        .background(StudioDangerRed)
-                                        .clickable {
-                                            if (selectedMediaPaths.isNotEmpty()) {
-                                                pendingMediaDelete = selectedMediaPaths.toList()
-                                            }
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = "Hapus (${selectedMediaPaths.size})",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = LibMatteBg
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-
-                    val filteredMedia = studioMedia.filter { m ->
-                        when (selectedMediaFilter) {
-                            "Renders" -> m.category == "render"
-                            "Videos" -> m.type == "video"
-                            "Images" -> m.type == "image"
-                            "Audio" -> m.type == "audio"
-                            "Docs" -> m.type == "doc"
-                            else -> m.type == "video" || m.type == "image" || m.type == "audio"
-                        }
-                    }
-                    if (filteredMedia.isEmpty()) {
+                    if (projects.isEmpty() && (gen == null || gen.count == 0)) {
                         Box(
                             modifier = Modifier
                                 .weight(1f)
@@ -1027,126 +960,443 @@ fun LibraryScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = if (selectedMediaFilter == "Docs") "No documents found." else "No media found.",
+                                text = "Belum ada folder proyek",
                                 fontSize = 13.sp,
                                 color = TextMuted
                             )
                         }
-                    } else if (selectedMediaFilter == "Docs") {
-                        LazyColumn(
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                            contentPadding = PaddingValues(bottom = 32.dp)
+                                .padding(horizontal = 14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp)
                         ) {
-                            items(filteredMedia) { media ->
-                                Row(
+                            items(projects, key = { it.projectId }) { folder ->
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(6.dp))
+                                        .clip(RoundedCornerShape(8.dp))
                                         .background(LibMatteCard)
-                                        .clickable { selectedStudioMedia = media }
-                                        .padding(horizontal = 10.dp, vertical = 9.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .clickable {
+                                            selectedProjectFolder = folder
+                                            selectedFolderTab = "finished"
+                                        }
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(1.6f)
+                                            .background(LibMatteElevated),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (folder.coverThumb.isNotBlank()) {
+                                            AsyncImage(
+                                                model = LinuxRuntimeManager.getFullMediaUrl(folder.coverThumb),
+                                                contentDescription = folder.projectName,
+                                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Outlined.VideoLibrary,
+                                                contentDescription = null,
+                                                tint = TextMuted,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Column(modifier = Modifier.padding(10.dp)) {
                                         Text(
-                                            text = media.name,
-                                            fontSize = 12.sp,
+                                            text = folder.projectName,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
                                             color = TextPrimary,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
+                                        Spacer(modifier = Modifier.height(2.dp))
                                         Text(
-                                            text = media.relativePath,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 9.sp,
-                                            color = TextMuted,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            text = "${folder.finishedCount} Jadi · ${folder.rawCount} Bahan",
+                                            fontSize = 11.sp,
+                                            color = TextMuted
                                         )
                                     }
-                                    Text(
-                                        text = "${(media.sizeBytes / 1024L).coerceAtLeast(1L)} KB",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 9.sp,
-                                        color = TextMuted
-                                    )
                                 }
                             }
-                        }
-                    } else {
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(3),
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            contentPadding = PaddingValues(bottom = 32.dp)
-                        ) {
-                            items(filteredMedia) { media ->
-                                val isSelected = selectedMediaPaths.contains(media.relativePath)
-                                Box(
-                                    modifier = Modifier
-                                        .aspectRatio(1f)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(LibMatteCard)
-                                        .combinedClickable(
-                                            onClick = {
-                                                if (mediaSelectionMode) {
-                                                    if (isSelected) {
-                                                        selectedMediaPaths.remove(media.relativePath)
-                                                    } else {
-                                                        selectedMediaPaths.add(media.relativePath)
-                                                    }
-                                                    if (selectedMediaPaths.isEmpty()) {
-                                                        mediaSelectionMode = false
-                                                    }
-                                                } else {
-                                                    selectedStudioMedia = media
-                                                }
-                                            },
-                                            onLongClick = {
-                                                mediaSelectionMode = true
-                                                if (!selectedMediaPaths.contains(media.relativePath)) {
-                                                    selectedMediaPaths.add(media.relativePath)
-                                                }
+
+                            if (gen != null && gen.count > 0) {
+                                item(key = "general_folder") {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(LibMatteCard)
+                                            .clickable {
+                                                selectedProjectFolder = com.contentstudio.app.runtime.GalleryProjectFolder(
+                                                    projectId = "_general",
+                                                    projectName = gen.name,
+                                                    coverThumb = gen.items.firstOrNull { it.thumbUrl.isNotBlank() }?.thumbUrl ?: "",
+                                                    finishedCount = 0,
+                                                    rawCount = gen.count,
+                                                    finished = emptyList(),
+                                                    raw = gen.items
+                                                )
+                                                selectedFolderTab = "raw"
                                             }
-                                        )
-                                ) {
-                                    StudioMediaThumbnail(
-                                        media = media,
-                                        fullUrl = LinuxRuntimeManager.getFullThumbUrl(media),
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                    if (mediaSelectionMode) {
+                                    ) {
                                         Box(
                                             modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(6.dp)
-                                                .size(18.dp)
-                                                .clip(CircleShape)
-                                                .background(if (isSelected) TextPrimary else Color(0x88000000))
-                                                .border(1.dp, if (isSelected) TextPrimary else TextMuted, CircleShape),
+                                                .fillMaxWidth()
+                                                .aspectRatio(1.6f)
+                                                .background(LibMatteElevated),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            if (isSelected) {
-                                                Icon(
-                                                    imageVector = Icons.Outlined.Check,
-                                                    contentDescription = "Selected",
-                                                    tint = LibMatteBg,
-                                                    modifier = Modifier.size(12.dp)
-                                                )
-                                            }
+                                            Icon(
+                                                imageVector = Icons.Outlined.CollectionsBookmark,
+                                                contentDescription = null,
+                                                tint = TextMuted,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
+
+                                        Column(modifier = Modifier.padding(10.dp)) {
+                                            Text(
+                                                text = gen.name,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = "${gen.count} File umum",
+                                                fontSize = 11.sp,
+                                                color = TextMuted
+                                            )
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
+                } else {
+                    // LEVEL 2: DETAIL FOLDER PROYEK
+                    val folder = selectedProjectFolder!!
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    ) {
+                        // Header dengan tombol Back
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .padding(horizontal = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(LibMatteElevated)
+                                    .clickable { selectedProjectFolder = null },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Close,
+                                    contentDescription = "Kembali ke Folder",
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = folder.projectName,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${folder.finishedCount} Jadi · ${folder.rawCount} Bahan",
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+
+                        // Segmented Tab 2 Pilihan: Hasil Jadi vs Bahan Mentah
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(LibMatteCard)
+                                .padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf(
+                                "finished" to "Hasil Jadi (${folder.finishedCount})",
+                                "raw" to "Bahan Mentah (${folder.rawCount})"
+                            ).forEach { (tKey, label) ->
+                                val isSel = selectedFolderTab == tKey
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (isSel) LibMatteElevated else Color.Transparent)
+                                        .clickable { selectedFolderTab = tKey }
+                                        .padding(vertical = 7.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (isSel) TextPrimary else TextMuted
+                                    )
+                                }
+                            }
+                        }
+
+                        val itemsToShow = if (selectedFolderTab == "finished") folder.finished else folder.raw
+                        if (itemsToShow.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (selectedFolderTab == "finished") "Belum ada hasil render final" else "Belum ada aset bahan mentah",
+                                    fontSize = 13.sp,
+                                    color = TextMuted
+                                )
+                            }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp)
+                            ) {
+                                items(itemsToShow, key = { it.id }) { item ->
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(LibMatteCard)
+                                            .clickable { previewGalleryItem = item }
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .aspectRatio(1.2f)
+                                                .background(LibMatteElevated),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            when (item.type) {
+                                                "image", "video" -> {
+                                                    val url = LinuxRuntimeManager.getFullMediaUrl(item.thumbUrl.ifBlank { item.streamUrl })
+                                                    AsyncImage(
+                                                        model = url,
+                                                        contentDescription = item.name,
+                                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                                        modifier = Modifier.fillMaxSize()
+                                                    )
+                                                }
+                                                else -> {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.GraphicEq,
+                                                        contentDescription = item.name,
+                                                        tint = TextMuted,
+                                                        modifier = Modifier.size(24.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            if (item.type == "video") {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(28.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Color(0x88000000)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.PlayArrow,
+                                                        contentDescription = "Play",
+                                                        tint = TextPrimary,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Column(modifier = Modifier.padding(8.dp)) {
+                                            Text(
+                                                text = item.name,
+                                                fontSize = 12.sp,
+                                                color = TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = "${(item.size / 1024L).coerceAtLeast(1L)} KB · ${item.type.uppercase()}",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 9.sp,
+                                                color = TextMuted
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Preview modal untuk file galeri terpilih
+        if (previewGalleryItem != null) {
+            val item = previewGalleryItem!!
+            val fullUrl = LinuxRuntimeManager.getFullMediaUrl(item.streamUrl)
+            Dialog(
+                onDismissRequest = { previewGalleryItem = null },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(LibMatteBg)
+                ) {
+                    IconButton(
+                        onClick = { previewGalleryItem = null },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Outlined.Close, contentDescription = "Close", tint = TextPrimary)
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f, fill = false)
+                                .heightIn(max = 420.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(LibMatteElevated),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            when (item.type) {
+                                "video" -> {
+                                    AndroidView(
+                                        factory = { ctx ->
+                                            VideoView(ctx).apply {
+                                                setVideoURI(Uri.parse(fullUrl))
+                                                setOnPreparedListener { mp ->
+                                                    mp.isLooping = true
+                                                    start()
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                "image" -> {
+                                    AsyncImage(
+                                        model = fullUrl,
+                                        contentDescription = item.name,
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                else -> {
+                                    Icon(
+                                        imageVector = Icons.Outlined.GraphicEq,
+                                        contentDescription = item.name,
+                                        tint = TextMuted,
+                                        modifier = Modifier.size(56.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Text(
+                            text = item.name,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${item.path} · ${(item.size / 1024L).coerceAtLeast(1L)} KB",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = TextMuted
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            StudioSecondaryButton(
+                                text = "Hapus Permanen",
+                                onClick = {
+                                    scope.launch(Dispatchers.IO) {
+                                        val ok = LinuxRuntimeManager.deleteMediaFiles(listOf(item.path))
+                                        withContext(Dispatchers.Main) {
+                                            previewGalleryItem = null
+                                            refreshGalleryTree()
+                                            actionStatus = if (ok) "File dihapus permanen" else "Gagal menghapus file"
+                                        }
+                                    }
+                                },
+                                isDanger = true,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            StudioPrimaryButton(
+                                text = "Simpan ke Unduhan",
+                                onClick = {
+                                    scope.launch(Dispatchers.IO) {
+                                        val sourceFile = File(item.fullPath)
+                                        val res = LinuxRuntimeManager.exportFileToDownloads(context, sourceFile)
+                                        withContext(Dispatchers.Main) {
+                                            actionStatus = if (res.isSuccess) "Tersimpan di ${res.getOrNull()}" else "Gagal mengekspor file"
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
                         }
                     }
                 }

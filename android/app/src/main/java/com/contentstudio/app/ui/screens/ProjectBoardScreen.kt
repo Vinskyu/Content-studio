@@ -316,7 +316,7 @@ fun ProjectBoardScreen(
                     scenesList.clear()
                     if (arr != null) {
                         for (i in 0 until arr.length()) {
-                            val sc = arr.getJSONObject(i)
+                            val sc = arr.optJSONObject(i) ?: continue
                             scenesList.add(
                                 SceneItem(
                                     id = sc.optString("id", "scene_${i + 1}"),
@@ -1005,12 +1005,12 @@ fun ProjectBoardScreen(
                                         val list = mutableListOf<PatternItem>()
                                         if (arr != null) {
                                             for (i in 0 until arr.length()) {
-                                                val obj = arr.getJSONObject(i)
+                                                val obj = arr.optJSONObject(i) ?: continue
                                                 val bArr = obj.optJSONArray("beats")
                                                 val beats = mutableListOf<PatternBeat>()
                                                 if (bArr != null) {
                                                     for (j in 0 until bArr.length()) {
-                                                        val b = bArr.getJSONObject(j)
+                                                        val b = bArr.optJSONObject(j) ?: continue
                                                         beats.add(
                                                             PatternBeat(
                                                                 role = b.optString("role", "Beat"),
@@ -1307,7 +1307,7 @@ fun ProjectBoardScreen(
                                                             val list = mutableListOf<Pair<String, String>>()
                                                             if (arr != null) {
                                                                 for (i in 0 until arr.length()) {
-                                                                    val obj = arr.getJSONObject(i)
+                                                                    val obj = arr.optJSONObject(i) ?: continue
                                                                     val cat = obj.optString("category", "")
                                                                     val name = obj.optString("name", "")
                                                                     if (name.isNotBlank()) list.add(cat to name)

@@ -154,7 +154,7 @@ fun StudioModelPickerSheet(
                         color = PickerText
                     )
                     Text(
-                        text = "12 provider gratis dengan pelacakan kuota live",
+                        text = "Model AI aktif & verifikasi BYOK",
                         fontSize = 11.sp,
                         color = PickerMuted
                     )
@@ -311,7 +311,7 @@ fun StudioModelPickerSheet(
                 )
             }
 
-            snapshot?.providers?.forEach { provider ->
+            snapshot?.providers?.filter { it.id == "antigravity" || it.configured || it.models.isNotEmpty() }?.forEach { provider ->
                 ProviderCard(
                     provider = provider,
                     activeProvider = activeProvider,
@@ -329,6 +329,26 @@ fun StudioModelPickerSheet(
                         onDismiss()
                         onOpenSettings()
                     }
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(PickerActive)
+                    .clickable {
+                        onDismiss()
+                        onOpenSettings()
+                    }
+                    .padding(vertical = 11.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Atur API Key di Pengaturan",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = PickerText
                 )
             }
 

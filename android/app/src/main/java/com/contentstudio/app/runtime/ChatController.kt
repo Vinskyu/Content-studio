@@ -259,7 +259,7 @@ object ChatController {
                     val list = mutableListOf<ChatSessionSummary>()
                     if (arr != null) {
                         for (i in 0 until arr.length()) {
-                            val item = arr.getJSONObject(i)
+                            val item = arr.optJSONObject(i) ?: continue
                             val count = item.optInt("message_count", 0)
                             if (count > 0) {
                                 list.add(
@@ -302,7 +302,7 @@ object ChatController {
                         val list = mutableListOf<ChatMessageItem>()
                         if (msgsArr != null) {
                             for (i in 0 until msgsArr.length()) {
-                                val m = msgsArr.getJSONObject(i)
+                                val m = msgsArr.optJSONObject(i) ?: continue
                                 val role = m.optString("role", "user")
                                 val content = m.optString("content", "")
                                 list.add(
