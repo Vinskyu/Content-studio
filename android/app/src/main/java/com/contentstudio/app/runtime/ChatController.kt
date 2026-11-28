@@ -94,6 +94,10 @@ object ChatController {
         _hubEffort.value = effort.ifBlank { "medium" }.lowercase()
     }
 
+    fun setHubEffort(effort: String) {
+        _hubEffort.value = effort.ifBlank { "medium" }.lowercase()
+    }
+
     fun applyHubSnapshot(provider: String, model: String, effort: String) {
         _hubProvider.value = provider.ifBlank { "auto" }
         _hubModel.value = model.ifBlank { "smart-auto" }

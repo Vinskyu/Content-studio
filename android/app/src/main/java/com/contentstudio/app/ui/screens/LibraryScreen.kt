@@ -1745,17 +1745,16 @@ fun LibraryScreen(
                         Text("No projects available. Create a project first.", fontSize = 12.sp, color = ErrorCardText)
                     } else {
                         workspaces.forEach { ws ->
-                            val isActive = ws.name == activeWorkspace
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isActive) LibMatteElevated else LibMatteCard)
+                                    .background(LibMatteElevated)
                                     .clickable { copyAssetToTargetWorkspace(ws.name) }
                                     .padding(horizontal = 12.dp, vertical = 10.dp)
                             ) {
                                 Text(
-                                    text = if (isActive) "${ws.name} (Active)" else ws.name,
+                                    text = ws.name,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 12.sp,
                                     color = TextPrimary
