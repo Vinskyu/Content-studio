@@ -1035,7 +1035,8 @@ def execute_command(
     provider: str = "auto",
     model: Optional[str] = None,
     effort: Optional[str] = None,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    on_delta: Optional[Callable[[str], None]] = None
 ) -> Dict[str, Any]:
     """
     Pintu masuk interaktif utama:
@@ -1061,6 +1062,7 @@ def execute_command(
             model=model,
             effort=effort,
             mode=mode,
+            on_delta=on_delta,
             event_callback=event_callback,
         )
         return {
@@ -1108,16 +1110,33 @@ if __name__ == "__main__":
         save_session(sess)
 
     if args.prompt:
+        streamed = []
+
+        def _emit_delta(chunk: str) -> None:
+            if not chunk:
+                return
+            streamed.append(chunk)
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+
         res = execute_command(
             args.prompt, args.file, mode=args.mode, provider=args.provider,
             model=args.model, effort=args.effort, session_id=args.session_id,
+            on_delta=_emit_delta if args.hub_chat else None,
         )
         if args.hub_chat:
             # Bridge membaca stdout sebagai delta; marker progres tetap di stderr.
-            if res.get("status") == "ok":
-                print(res.get("reply") or "")
-            else:
-                print(res.get("reply") or "[ERR] Agent Hub gagal")
+            reply = res.get("reply") or ("" if res.get("status") == "ok" else "[ERR] Agent Hub gagal")
+            sent = "".join(streamed)
+            if not sent:
+                print(reply, end="", flush=True)
+            elif reply.strip() != sent.strip():
+                # Fallback/provider CLI tidak mengalirkan teks; kirim jawaban final.
+                if not reply.strip().startswith(sent.strip()):
+                    print("\n" + reply, end="", flush=True)
+                else:
+                    print(reply.strip()[len(sent.strip()):], end="", flush=True)
+            if res.get("status") != "ok":
                 sys.exit(1)
         else:
             print(json.dumps(res, indent=2, ensure_ascii=False))

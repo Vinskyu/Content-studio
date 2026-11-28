@@ -297,6 +297,216 @@ def _post_json(provider: str, url: str, headers: Dict[str, str],
         raise HubError(0, f"Respons bukan JSON valid: {body[:200]}", provider)
 
 
+def _post_sse(provider: str, url: str, headers: Dict[str, str],
+              payload: Dict[str, Any], timeout: float = 300.0):
+    """Baca Server-Sent Events dan hasilkan setiap objek JSON `data:`."""
+    data = json.dumps(payload).encode("utf-8")
+    send_headers = dict(headers)
+    send_headers["Accept"] = "text/event-stream"
+    req = urllib.request.Request(url, data=data, headers=send_headers, method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        try:
+            ut.update_from_headers(provider, _headers_to_dict(exc.headers))
+        except Exception:
+            pass
+        _raise_for_http(provider, exc)
+    except Exception as exc:
+        raise HubError(0, f"Koneksi gagal: {exc}", provider)
+    with resp:
+        try:
+            ut.update_from_headers(provider, _headers_to_dict(resp.headers))
+        except Exception:
+            pass
+        ctype = str(resp.headers.get("content-type") or "").lower()
+        if "text/event-stream" not in ctype:
+            body = resp.read().decode("utf-8", errors="replace")
+            try:
+                obj = json.loads(body)
+            except Exception:
+                raise HubError(0, f"Respons streaming tidak valid: {body[:200]}", provider)
+            if isinstance(obj, dict):
+                yield obj
+            return
+        for raw in resp:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            chunk = line[5:].strip()
+            if chunk == "[DONE]":
+                break
+            try:
+                obj = json.loads(chunk)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                yield obj
+
+
+class _StreamCleaner:
+    """Saring blok penalaran agar tidak bocor ke stdout saat streaming."""
+
+    OPEN = re.compile(r"<think(?:ing)?>", re.IGNORECASE)
+    CLOSE = re.compile(r"</think(?:ing)?>", re.IGNORECASE)
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.in_think = False
+        self.thoughts: List[str] = []
+
+    def feed(self, text: str) -> str:
+        self.buffer += str(text or "")
+        out: List[str] = []
+        while self.buffer:
+            if self.in_think:
+                match = self.CLOSE.search(self.buffer)
+                if not match:
+                    break
+                self.thoughts.append(self.buffer[:match.start()])
+                self.buffer = self.buffer[match.end():]
+                self.in_think = False
+                continue
+            match = self.OPEN.search(self.buffer)
+            if match:
+                out.append(self.buffer[:match.start()])
+                self.buffer = self.buffer[match.end():]
+                self.in_think = True
+                continue
+            keep = 0
+            for size in range(min(len(self.buffer), 10), 0, -1):
+                tail = self.buffer[-size:]
+                if "<think".startswith(tail) or "<thinking".startswith(tail):
+                    keep = size
+                    break
+            cut = len(self.buffer) - keep
+            if cut > 0:
+                out.append(self.buffer[:cut])
+            self.buffer = self.buffer[cut:] if keep else ""
+            break
+        return "".join(out)
+
+    def finish(self) -> str:
+        if self.in_think:
+            self.thoughts.append(self.buffer)
+            self.buffer = ""
+            return ""
+        tail = self.buffer
+        self.buffer = ""
+        return tail
+
+    def reasoning(self) -> str:
+        return "\n".join(t.strip() for t in self.thoughts if t.strip())
+
+
+def _stream_openai(url: str, headers: Dict[str, str], payload: Dict[str, Any],
+                   provider: str, on_delta: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
+    cleaner = _StreamCleaner()
+    content_parts: List[str] = []
+    reasoning_parts: List[str] = []
+    tool_map: Dict[int, Dict[str, Any]] = {}
+    tokens = 0
+    model = ""
+
+    def emit(chunk: str) -> None:
+        if not chunk:
+            return
+        content_parts.append(chunk)
+        if on_delta:
+            try:
+                on_delta(chunk)
+            except Exception:
+                pass
+
+    for event in _post_sse(provider, url, headers, payload):
+        model = str(event.get("model") or model)
+        usage = event.get("usage") or {}
+        if usage:
+            tokens = int(usage.get("total_tokens") or tokens)
+        for choice in event.get("choices") or []:
+            delta = choice.get("delta") or choice.get("message") or {}
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            if reasoning:
+                reasoning_parts.append(str(reasoning))
+            text = delta.get("content")
+            if isinstance(text, list):
+                text = " ".join(str(p.get("text") or "") for p in text if isinstance(p, dict))
+            if text:
+                emit(cleaner.feed(str(text)))
+            for call in delta.get("tool_calls") or []:
+                idx = int(call.get("index") or 0)
+                slot = tool_map.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                if call.get("id"):
+                    slot["id"] = str(call["id"])
+                fn = call.get("function") or {}
+                if fn.get("name"):
+                    slot["name"] = str(fn["name"])
+                if fn.get("arguments"):
+                    slot["arguments"] += str(fn["arguments"])
+    emit(cleaner.finish())
+    tool_calls = []
+    for idx in sorted(tool_map):
+        slot = tool_map[idx]
+        try:
+            args = json.loads(slot.get("arguments") or "{}")
+        except Exception:
+            args = {}
+        if slot.get("name"):
+            tool_calls.append({"id": slot.get("id") or f"call_{idx + 1}",
+                               "name": slot["name"], "arguments": args if isinstance(args, dict) else {}})
+    return {
+        "content": "".join(content_parts).strip(),
+        "reasoning": "\n".join(reasoning_parts) + (("\n" + cleaner.reasoning()) if cleaner.reasoning() else ""),
+        "tool_calls": tool_calls,
+        "tokens": tokens,
+        "model": model,
+    }
+
+
+def _stream_gemini(url: str, headers: Dict[str, str], payload: Dict[str, Any],
+                   on_delta: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
+    cleaner = _StreamCleaner()
+    content_parts: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+    tokens = 0
+    model = ""
+
+    def emit(chunk: str) -> None:
+        if not chunk:
+            return
+        content_parts.append(chunk)
+        if on_delta:
+            try:
+                on_delta(chunk)
+            except Exception:
+                pass
+
+    for event in _post_sse("gemini", url, headers, payload):
+        usage = event.get("usageMetadata") or {}
+        if usage:
+            tokens = int(usage.get("totalTokenCount") or tokens)
+        for cand in event.get("candidates") or []:
+            model = str(cand.get("modelVersion") or model)
+            for part in ((cand.get("content") or {}).get("parts") or []):
+                if isinstance(part.get("text"), str):
+                    emit(cleaner.feed(part["text"]))
+                fc = part.get("functionCall")
+                if isinstance(fc, dict):
+                    tool_calls.append({
+                        "id": f"gemini_{len(tool_calls) + 1}",
+                        "name": fc.get("name", ""),
+                        "arguments": fc.get("args") if isinstance(fc.get("args"), dict) else {},
+                    })
+    emit(cleaner.finish())
+    return {
+        "content": "".join(content_parts).strip(),
+        "reasoning": cleaner.reasoning(),
+        "tool_calls": tool_calls,
+        "tokens": tokens,
+        "model": model,
+    }
+
+
 def _parse_gemini_response(data: Dict[str, Any]) -> Dict[str, Any]:
     candidates = data.get("candidates") or []
     cand = candidates[0] if candidates else {}
@@ -442,8 +652,6 @@ def direct_chat(provider: str, model: str, handoff: Dict[str, Any], user_prompt:
         messages.extend(base_messages)
         messages.append({"role": "user", "content": vision["content"] if vision["images"] else user_prompt})
         payload = {"model": model, "messages": messages, "temperature": 0.7, "max_tokens": max_tokens}
-        if provider in ("groq", "mistral", "zai", "nvidia", "sambanova", "openrouter", "custom", "cloudflare", "cohere"):
-            payload["stream"] = False
         if tools:
             payload["tools"] = TOOL_SCHEMAS
             payload["tool_choice"] = "auto"
@@ -454,17 +662,29 @@ def direct_chat(provider: str, model: str, handoff: Dict[str, Any], user_prompt:
     steps: List[str] = []
     total_tokens = 0
     final_text = ""
+    streamed_all: List[str] = []
     loop_messages = payload.get("messages")
     loop_contents = payload.get("contents")
+    use_stream = on_delta is not None
 
     for iteration in range(MAX_LOOP):
-        url, headers = _endpoint(provider, model, cfg)
-        data = _post_json(provider, url, headers, payload)
-        if provider == "gemini":
-            parsed = _parse_gemini_response(data)
+        if use_stream:
+            url, headers = _endpoint(provider, model, cfg, stream=True)
+            if provider == "gemini":
+                parsed = _stream_gemini(url, headers, payload, on_delta=on_delta)
+            else:
+                payload["stream"] = True
+                parsed = _stream_openai(url, headers, payload, provider, on_delta=on_delta)
         else:
-            parsed = _parse_openai_response(data)
+            url, headers = _endpoint(provider, model, cfg)
+            data = _post_json(provider, url, headers, payload)
+            if provider == "gemini":
+                parsed = _parse_gemini_response(data)
+            else:
+                parsed = _parse_openai_response(data)
         total_tokens += int(parsed.get("tokens") or 0)
+        if use_stream and parsed.get("content"):
+            streamed_all.append(str(parsed["content"]))
         clean, thought = extract_reasoning(parsed.get("content") or "", parsed.get("reasoning") or "")
         if thought:
             for line in thought.splitlines()[:6]:
@@ -504,7 +724,9 @@ def direct_chat(provider: str, model: str, handoff: Dict[str, Any], user_prompt:
         if iteration == MAX_LOOP - 1:
             final_text = final_text or "Batas langkah tool tercapai. Lanjutkan dengan instruksi berikutnya."
 
-    if on_delta and final_text:
+    if use_stream and streamed_all:
+        final_text = "\n".join(part.strip() for part in streamed_all if part.strip()).strip()
+    if on_delta and not use_stream and final_text:
         on_delta(final_text)
     return {
         "content": final_text,
