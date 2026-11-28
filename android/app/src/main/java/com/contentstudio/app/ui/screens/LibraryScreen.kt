@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
@@ -90,6 +91,7 @@ import com.contentstudio.app.ui.theme.ActionSolidText
 import com.contentstudio.app.ui.theme.BadgeGreenText
 import com.contentstudio.app.ui.theme.ErrorCardBg
 import com.contentstudio.app.ui.theme.ErrorCardText
+import com.contentstudio.app.ui.theme.StudioDangerButton
 import com.contentstudio.app.ui.theme.StudioDangerRed
 import com.contentstudio.app.ui.theme.StudioPrimaryButton
 import com.contentstudio.app.ui.theme.StudioSage
@@ -1319,7 +1321,7 @@ fun LibraryScreen(
                                                 setVideoURI(Uri.parse(fullUrl))
                                                 setOnPreparedListener { mp ->
                                                     mp.isLooping = true
-                                                    start()
+                                                    mp.start()
                                                 }
                                             }
                                         },
@@ -1368,7 +1370,7 @@ fun LibraryScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            StudioSecondaryButton(
+                            StudioDangerButton(
                                 text = "Hapus Permanen",
                                 onClick = {
                                     scope.launch(Dispatchers.IO) {
@@ -1380,7 +1382,6 @@ fun LibraryScreen(
                                         }
                                     }
                                 },
-                                isDanger = true,
                                 modifier = Modifier.weight(1f)
                             )
 
