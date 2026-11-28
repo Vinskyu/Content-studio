@@ -42,6 +42,11 @@ def emit_step(message: str) -> None:
     sys.stderr.write(f"[STEP] {message}\n")
     sys.stderr.flush()
 
+def emit_think(message: str) -> None:
+    """Mencetak alur pikir ringkas ke stderr (tidak pernah ke stdout)."""
+    sys.stderr.write(f"[THINK] {message}\n")
+    sys.stderr.flush()
+
 def emit_ui_sync(scope: str, target: str) -> None:
     """Mencetak event sinkronisasi UI ke stderr agar layar Android otomatis me-refresh."""
     sys.stderr.write(f"[UI_SYNC] {scope}:{target}\n")
@@ -156,7 +161,9 @@ def cmd_project_create(name: str, ratio: str = "9:16", channel: Optional[str] = 
     os.makedirs(os.path.join(ws_dir, "renders"), exist_ok=True)
 
     pj = read_project_json(clean_name)
-    pj["aspect_ratio"] = "16:9" if ratio == "16:9" else "9:16"
+    from engine.reference_dna import normalize_aspect_ratio, resolution_for
+    pj["aspect_ratio"] = normalize_aspect_ratio(ratio, "9:16")
+    pj["resolution"] = resolution_for(pj["aspect_ratio"], "1080p")
     if channel:
         pj["channel_id"] = channel.strip()
     write_project_json(clean_name, pj)
@@ -554,7 +561,13 @@ def cmd_media_assign(project: str, scene_idx: int, url: str, start: Optional[str
 def cmd_render_start(project: str, safe_zone: bool = True) -> Dict[str, Any]:
     clean_p = os.path.basename(project.strip())
     emit_step(f"Memulai proses render video proyek '{clean_p}'...")
-    res = call_bridge("POST", f"/render/{clean_p}", {"safe_zone": safe_zone})
+    pj_ratio = read_project_json(clean_p)
+    res = call_bridge("POST", f"/render/{clean_p}", {
+        "safe_zone": safe_zone,
+        "aspect_ratio": pj_ratio.get("aspect_ratio", "9:16"),
+        "resolution": pj_ratio.get("resolution"),
+        "long_form": pj_ratio.get("format_scale") == "long",
+    })
     if res:
         emit_ui_sync("project", clean_p)
         return res
@@ -665,6 +678,194 @@ def cmd_memory_remove(id: str, project: Optional[str] = None) -> Dict[str, Any]:
         emit_ui_sync("memory", "global")
         return {"status": "ok", "scope": "global", "removed_id": target_id}
 
+# ─── REFERENCE DNA, ASSET ROUTER, GRAPHIC & TOPIC HISTORY (V3.6) ─────────────
+
+def cmd_save_reference_dna(
+    project: str,
+    json_file: Optional[str] = None,
+    format_scale: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
+    resolution: Optional[str] = None,
+    visual_continuity: Optional[str] = None,
+    layout_pattern: Optional[str] = None,
+    audio_modality: Optional[str] = None,
+    pacing_style: Optional[str] = None,
+    avg_scene_sec: Optional[float] = None,
+    chapter_structure: Optional[bool] = None,
+    sources_priority: Optional[List[str]] = None,
+    visual_style_anchor: Optional[str] = None,
+    mechanics_summary: Optional[str] = None,
+    user_overrides: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Simpan kontrak Reference DNA (short/long + semua rasio) untuk proyek."""
+    from engine.reference_dna import load_reference_dna, save_reference_dna
+
+    clean_p = os.path.basename(project.strip())
+    emit_step(f"Menyimpan kontrak Reference DNA proyek '{clean_p}'...")
+    if json_file:
+        payload = read_json_file(json_file, {})
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "File JSON kontrak tidak valid"}
+    else:
+        payload = load_reference_dna(clean_p)
+
+    if format_scale:
+        payload["format_scale"] = format_scale
+    if aspect_ratio:
+        payload["aspect_ratio"] = aspect_ratio
+    if resolution:
+        payload["resolution"] = resolution
+    if visual_continuity:
+        payload["visual_continuity"] = visual_continuity
+    if layout_pattern:
+        payload["layout_pattern"] = layout_pattern
+    if audio_modality:
+        payload["audio_modality"] = audio_modality
+    if visual_style_anchor is not None:
+        payload["visual_style_anchor"] = visual_style_anchor
+    if mechanics_summary is not None:
+        payload["mechanics_summary"] = mechanics_summary
+    if user_overrides is not None:
+        payload["user_overrides"] = user_overrides
+    if sources_priority:
+        payload["sources_priority"] = sources_priority
+    pacing = payload.get("pacing_profile")
+    if not isinstance(pacing, dict):
+        pacing = {}
+    if pacing_style:
+        pacing["style"] = pacing_style
+    if avg_scene_sec is not None:
+        pacing["avg_scene_sec"] = float(avg_scene_sec)
+    if chapter_structure is not None:
+        pacing["chapter_structure"] = bool(chapter_structure)
+    if pacing:
+        payload["pacing_profile"] = pacing
+
+    try:
+        dna = save_reference_dna(clean_p, payload)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+    # Sinkronkan rasio proyek agar render & worker memakai kontrak yang sama.
+    pj = read_project_json(clean_p)
+    pj["aspect_ratio"] = dna.get("aspect_ratio", pj.get("aspect_ratio"))
+    pj["resolution"] = dna.get("resolution")
+    pj["format_scale"] = dna.get("format_scale")
+    write_project_json(clean_p, pj)
+    emit_ui_sync("project", clean_p)
+    return {"status": "ok", "project": clean_p, "reference_dna": dna}
+
+
+def cmd_resolve_assets(project: str, force: bool = False, scene: Optional[int] = None) -> Dict[str, Any]:
+    """Jalankan router hybrid 5 worker untuk seluruh scene (checkpoint resume)."""
+    from engine.assets.router import resolve_assets
+
+    clean_p = os.path.basename(project.strip())
+    emit_step(f"Mereresolusi aset proyek '{clean_p}' lewat router hybrid...")
+    res = resolve_assets(clean_p, force=force, only=scene)
+    emit_ui_sync("project", clean_p)
+    return res
+
+
+def cmd_generate_media(
+    project: str,
+    prompt: str,
+    scene: Optional[int] = None,
+    seed: Optional[int] = None,
+    aspect_ratio: Optional[str] = None,
+    out_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Panggil langsung generate_worker sesuai rasio proyek."""
+    from engine.reference_dna import load_reference_dna
+    from engine.assets.generate_worker import generate_image
+
+    clean_p = os.path.basename(project.strip())
+    dna = load_reference_dna(clean_p)
+    emit_step(f"Menyiapkan generate media untuk '{clean_p}'...")
+    if not out_path:
+        target_name = f"gen_scene_{scene + 1:02d}.png" if scene is not None else f"gen_{datetime.now().strftime('%H%M%S')}.png"
+        out_path = os.path.join(get_workspace_dir(clean_p), "assets", target_name)
+    res = generate_image(
+        out_path, prompt, dna=dna,
+        aspect_ratio=aspect_ratio or dna.get("aspect_ratio"),
+        seed=seed, project=clean_p, scene_index=scene or 0,
+    )
+    if res.get("status") == "ok":
+        emit_ui_sync("project", clean_p)
+    return res
+
+
+def cmd_render_graphic(
+    project: str,
+    template: str = "stat",
+    title: str = "",
+    subtitle: str = "",
+    value: str = "",
+    out_path: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
+    data_json: str = "",
+    as_video: bool = False,
+    duration: float = 3.0,
+) -> Dict[str, Any]:
+    """Render kartu grafis lokal pada rasio proyek."""
+    from engine.reference_dna import load_reference_dna
+    from engine.assets.graphic_worker import render_graphic, render_graphic_video
+
+    clean_p = os.path.basename(project.strip())
+    dna = load_reference_dna(clean_p)
+    payload: Dict[str, Any] = {}
+    if data_json:
+        parsed = read_json_file(data_json, {})
+        if isinstance(parsed, dict):
+            payload = parsed
+    for key, val in (("title", title), ("subtitle", subtitle), ("value", value)):
+        if val:
+            payload[key] = val
+    emit_step(f"Merender kartu grafis '{template}' untuk '{clean_p}'...")
+    if not out_path:
+        suffix = ".mp4" if as_video else ".png"
+        out_path = os.path.join(get_workspace_dir(clean_p), "assets", f"graphic_{template}{suffix}")
+    if as_video:
+        res = render_graphic_video(out_path, template, payload, duration, dna, aspect_ratio)
+    else:
+        res = render_graphic(out_path, template, payload, dna, aspect_ratio)
+    if res.get("status") == "ok":
+        emit_ui_sync("project", clean_p)
+    return res
+
+
+def cmd_topic_history(
+    action: str,
+    project: Optional[str] = None,
+    topic: Optional[str] = None,
+    angle: str = "",
+    format_scale: str = "short",
+    hook_type: str = "",
+    payoff_type: str = "",
+    status: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Kelola riwayat topik sebagai konteks variasi (tidak pernah memblokir)."""
+    from engine import topic_history
+
+    if action == "list":
+        entries = topic_history.list_entries(status)
+        return {"status": "ok", "count": len(entries), "entries": entries, "blocked": False}
+    if action == "record":
+        if not project or not topic:
+            return {"status": "error", "message": "--project dan --topic wajib diisi"}
+        return topic_history.record_topic(project, topic, angle, format_scale, hook_type, payoff_type, status or "draft")
+    if action == "set-status":
+        if not status:
+            return {"status": "error", "message": "--status wajib diisi"}
+        return topic_history.set_status(project or "", topic or "", status)
+    if action == "sync":
+        return topic_history.sync_statuses()
+    if action == "context":
+        if not topic:
+            return {"status": "error", "message": "--topic wajib diisi"}
+        return topic_history.get_variation_context(topic)
+    return {"status": "error", "message": "Aksi topic-history tidak dikenal"}
+
 # ─── MAIN CLI PARSER ──────────────────────────────────────────────────────────
 
 def main():
@@ -677,7 +878,7 @@ def main():
     p_proj_sub.add_parser("list")
     p_create = p_proj_sub.add_parser("create")
     p_create.add_argument("--name", required=True)
-    p_create.add_argument("--ratio", default="9:16", choices=["9:16", "16:9"])
+    p_create.add_argument("--ratio", default="9:16", choices=["9:16", "16:9", "1:1", "4:5"])
     p_create.add_argument("--channel", default=None)
     p_del = p_proj_sub.add_parser("delete")
     p_del.add_argument("--name", required=True)
@@ -770,6 +971,71 @@ def main():
     p_pset.add_argument("--description", required=True)
     p_pset.add_argument("--tags", required=True)
 
+    # ── REFERENCE DNA ──
+    p_dna = subparsers.add_parser("save-reference-dna", help="Simpan kontrak Reference DNA (short/long + multi-rasio)")
+    p_dna.add_argument("--project", required=True)
+    p_dna.add_argument("--json", dest="json_file", default=None)
+    p_dna.add_argument("--format-scale", default=None, choices=["short", "long"])
+    p_dna.add_argument("--aspect-ratio", default=None, choices=["16:9", "9:16", "1:1", "4:5"])
+    p_dna.add_argument("--resolution", default=None)
+    p_dna.add_argument("--visual-continuity", default=None, choices=["strict_consistent", "editorial_varied"])
+    p_dna.add_argument("--layout-pattern", default=None, choices=["fullscreen", "grid_2x2", "vertical_3_tier", "split_screen", "card_overlay", "picture_in_picture"])
+    p_dna.add_argument("--audio-modality", default=None, choices=["visual_only_bgm", "vo_plus_bgm", "original_clip_audio", "ambient_bgm"])
+    p_dna.add_argument("--pacing-style", default=None, choices=["fast_cut", "escalating", "narrative_chapters", "slow_cinematic"])
+    p_dna.add_argument("--avg-scene-sec", type=float, default=None)
+    p_dna.add_argument("--chapter-structure", action="store_true")
+    p_dna.add_argument("--sources-priority", default=None, help="Contoh: clip,generate,stock,graphic,local")
+    p_dna.add_argument("--visual-style-anchor", default=None)
+    p_dna.add_argument("--mechanics-summary", default=None)
+    p_dna.add_argument("--user-overrides", default=None)
+
+    # ── ASSET ROUTER & WORKERS ──
+    p_resolve = subparsers.add_parser("resolve-assets", help="Resolusi aset 5 worker hybrid dengan checkpoint resume")
+    p_resolve.add_argument("--project", required=True)
+    p_resolve.add_argument("--force", action="store_true")
+    p_resolve.add_argument("--scene", type=int, default=None)
+
+    p_gen = subparsers.add_parser("generate-media", help="Generate media AI sesuai rasio proyek")
+    p_gen.add_argument("--project", required=True)
+    p_gen.add_argument("--prompt", required=True)
+    p_gen.add_argument("--scene", type=int, default=None)
+    p_gen.add_argument("--seed", type=int, default=None)
+    p_gen.add_argument("--aspect-ratio", default=None, choices=["16:9", "9:16", "1:1", "4:5"])
+    p_gen.add_argument("--out", default=None)
+
+    p_graph = subparsers.add_parser("render-graphic", help="Render kartu grafis lokal multi-rasio")
+    p_graph.add_argument("--project", required=True)
+    p_graph.add_argument("--template", default="stat", choices=["stat", "comparison", "chapter", "quote", "tier"])
+    p_graph.add_argument("--title", default="")
+    p_graph.add_argument("--subtitle", default="")
+    p_graph.add_argument("--value", default="")
+    p_graph.add_argument("--data-json", default="")
+    p_graph.add_argument("--out", default=None)
+    p_graph.add_argument("--aspect-ratio", default=None, choices=["16:9", "9:16", "1:1", "4:5"])
+    p_graph.add_argument("--video", action="store_true")
+    p_graph.add_argument("--duration", type=float, default=3.0)
+
+    # ── TOPIC HISTORY ──
+    p_topic = subparsers.add_parser("topic-history", help="Riwayat topik non-blokir sebagai konteks variasi")
+    p_topic_sub = p_topic.add_subparsers(dest="topic_action")
+    p_t_list = p_topic_sub.add_parser("list")
+    p_t_list.add_argument("--status", default=None, choices=["draft", "exported", "published", "deleted"])
+    p_t_rec = p_topic_sub.add_parser("record")
+    p_t_rec.add_argument("--project", required=True)
+    p_t_rec.add_argument("--topic", required=True)
+    p_t_rec.add_argument("--angle", default="")
+    p_t_rec.add_argument("--format-scale", default="short", choices=["short", "long"])
+    p_t_rec.add_argument("--hook-type", default="")
+    p_t_rec.add_argument("--payoff-type", default="")
+    p_t_rec.add_argument("--status", default="draft", choices=["draft", "exported", "published"])
+    p_t_set = p_topic_sub.add_parser("set-status")
+    p_t_set.add_argument("--project", default=None)
+    p_t_set.add_argument("--topic", default=None)
+    p_t_set.add_argument("--status", required=True, choices=["draft", "exported", "published", "deleted"])
+    p_topic_sub.add_parser("sync")
+    p_t_ctx = p_topic_sub.add_parser("context")
+    p_t_ctx.add_argument("--topic", required=True)
+
     # ── MEMORY ──
     p_mem = subparsers.add_parser("memory", help="Cross-Session Project & Global Memory")
     p_mem_sub = p_mem.add_subparsers(dest="action")
@@ -845,6 +1111,47 @@ def main():
     elif args.subcommand == "publish":
         if args.action == "set":
             print(json.dumps(cmd_publish_set(args.project, args.title, args.description, args.tags), indent=2))
+
+    elif args.subcommand == "save-reference-dna":
+        priority = None
+        if args.sources_priority:
+            priority = [s.strip() for s in args.sources_priority.split(",") if s.strip()]
+        print(json.dumps(cmd_save_reference_dna(
+            args.project, args.json_file, args.format_scale, args.aspect_ratio, args.resolution,
+            args.visual_continuity, args.layout_pattern, args.audio_modality, args.pacing_style,
+            args.avg_scene_sec, (True if args.chapter_structure else None), priority,
+            args.visual_style_anchor, args.mechanics_summary, args.user_overrides,
+        ), indent=2, ensure_ascii=False))
+
+    elif args.subcommand == "resolve-assets":
+        print(json.dumps(cmd_resolve_assets(args.project, args.force, args.scene), indent=2, ensure_ascii=False))
+
+    elif args.subcommand == "generate-media":
+        print(json.dumps(cmd_generate_media(
+            args.project, args.prompt, args.scene, args.seed, args.aspect_ratio, args.out,
+        ), indent=2, ensure_ascii=False))
+
+    elif args.subcommand == "render-graphic":
+        print(json.dumps(cmd_render_graphic(
+            args.project, args.template, args.title, args.subtitle, args.value,
+            args.out, args.aspect_ratio, args.data_json, args.video, args.duration,
+        ), indent=2, ensure_ascii=False))
+
+    elif args.subcommand == "topic-history":
+        action = getattr(args, "topic_action", None)
+        if not action:
+            p_topic.print_help(sys.stderr)
+            sys.exit(1)
+        print(json.dumps(cmd_topic_history(
+            action,
+            getattr(args, "project", None),
+            getattr(args, "topic", None),
+            getattr(args, "angle", ""),
+            getattr(args, "format_scale", "short"),
+            getattr(args, "hook_type", ""),
+            getattr(args, "payoff_type", ""),
+            getattr(args, "status", None),
+        ), indent=2, ensure_ascii=False))
 
     elif args.subcommand == "memory":
         if args.action == "list":

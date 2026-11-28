@@ -8,6 +8,9 @@ mkdir -p "$DEST_CORE/.agents/skills" "$DEST_CORE/engine"
 cp -f "$PROJECT_ROOT/AGENTS.md" "$DEST_CORE/"
 cp -rf "$PROJECT_ROOT/.agents/skills/"* "$DEST_CORE/.agents/skills/"
 cp -rf "$PROJECT_ROOT/engine/"* "$DEST_CORE/engine/"
+# Jangan ikutkan bytecode/cache lokal ke paket APK.
+find "$DEST_CORE" -type d -name "__pycache__" -prune -exec rm -rf {} +
+find "$DEST_CORE" -type f -name "*.pyc" -delete
 
 python3 -c '
 import zipfile, os

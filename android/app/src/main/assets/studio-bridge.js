@@ -2226,6 +2226,20 @@ function formatSrtTime(sec) {
   return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
 }
 
+// Peta rasio -> resolusi render untuk 4 rasio produksi (bukan hanya 16:9 / 9:16).
+function resolveRenderDimensions(aspectRatio, resolution) {
+  const ratio = String(aspectRatio || '9:16').replace(/\s+/g, '');
+  const high = String(resolution || '').toLowerCase() === '1080p';
+  const table = {
+    '16:9': high ? [1920, 1080] : [1280, 720],
+    '9:16': high ? [1080, 1920] : [720, 1280],
+    '1:1': high ? [1080, 1080] : [720, 720],
+    '4:5': high ? [1080, 1350] : [864, 1080],
+  };
+  const dims = table[ratio] || table['9:16'];
+  return { width: dims[0], height: dims[1], ratio: table[ratio] ? ratio : '9:16' };
+}
+
 async function executeRenderPipeline(cleanWs, proj, options, job) {
   const wsPath = path.join(WORKSPACES_DIR, cleanWs);
   const ffmpegBin = fs.existsSync(path.join(PREFIX_DIR, 'bin', 'ffmpeg')) ? path.join(PREFIX_DIR, 'bin', 'ffmpeg') : 'ffmpeg';
@@ -2235,10 +2249,11 @@ async function executeRenderPipeline(cleanWs, proj, options, job) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.mkdirSync(tmpDir, { recursive: true });
 
-    const is169 = (proj.aspect_ratio === '16:9');
-    const is1080p = (options && options.resolution === '1080p');
-    const targetW = is169 ? (is1080p ? 1920 : 1280) : (is1080p ? 1080 : 720);
-    const targetH = is169 ? (is1080p ? 1080 : 720) : (is1080p ? 1920 : 1280);
+    const requestedRatio = String((options && options.aspect_ratio) || proj.aspect_ratio || '9:16');
+    const dims = resolveRenderDimensions(requestedRatio, options && options.resolution);
+    const is169 = (dims.ratio === '16:9');
+    const targetW = dims.width;
+    const targetH = dims.height;
 
     const scenes = Array.isArray(proj.scenes) ? proj.scenes : [];
     if (scenes.length === 0) {
@@ -2666,9 +2681,9 @@ async function handleChat(req, res) {
     }
   }
 
-  function emitStatus(step, detail = '') {
+  function emitStatus(step, detail = '', kind = 'step') {
     const label = detail ? `${step} (${detail})` : step;
-    emit({ type: 'status', text: label, step, detail });
+    emit({ type: 'status', kind, text: label, step, detail });
   }
 
   emitStatus('Menghubungkan engine lokal');
@@ -2913,6 +2928,19 @@ async function handleChat(req, res) {
     return line.length > 90 ? `${line.slice(0, 89)}...` : line;
   }
 
+  // Alur pikir naratif boleh lebih panjang, tetap bebas noise & stack trace.
+  function normalizeThoughtLine(rawLine) {
+    const line = stripAnsi(rawLine).replace(/\s+/g, ' ').trim();
+    if (line.length < 2) return '';
+    if (isNoiseLogLine(line)) return '';
+    if (/^Traceback\b/.test(line)) return '';
+    if (/^File "/.test(line)) return '';
+    if (/^at\s/.test(line)) return '';
+    if (/^\^+$/.test(line)) return '';
+    if (line.includes('Traceback (most recent call last)')) return '';
+    return line.length > 220 ? `${line.slice(0, 219)}...` : line;
+  }
+
   proc.stderr.on('data', (chunk) => {
     const text = chunk.toString('utf8');
     errOutput += text;
@@ -2931,14 +2959,19 @@ async function handleChat(req, res) {
           res.write(`event: ui_sync\ndata: ${JSON.stringify({ scope, target })}\n\n`);
         }
         emit({ type: 'ui_sync', scope, target });
+      } else if (line.startsWith('[THINK]')) {
+        const thought = normalizeThoughtLine(line.replace(/^\[THINK\]\s*/, ''));
+        if (thought) emitStatus(thought, '', 'thought');
       } else if (line.startsWith('[STEP]')) {
-        emitStatus(normalizeLogLine(line.replace(/^\[STEP\]\s*/, '')));
+        const stepLine = normalizeLogLine(line.replace(/^\[STEP\]\s*/, ''));
+        if (stepLine) emitStatus(stepLine, '', 'step');
       } else if (line.startsWith('[TOOL]')) {
-        emitStatus(normalizeLogLine(line.replace(/^\[TOOL\]\s*/, '')));
+        const toolLine = normalizeLogLine(line.replace(/^\[TOOL\]\s*/, ''));
+        if (toolLine) emitStatus(toolLine, '', 'step');
       } else {
         // Log aktivitas nyata dari stderr anak proses (CLI, media engine, dsb).
         const logLine = normalizeLogLine(line);
-        if (logLine) emitStatus(logLine);
+        if (logLine) emitStatus(logLine, '', 'step');
       }
     }
   });
@@ -3827,6 +3860,7 @@ if (require.main === module) {
 module.exports = {
   stripAnsi,
   cleanStderr,
+  resolveRenderDimensions,
   listWorkspaces,
   createWorkspace,
   deleteWorkspace,

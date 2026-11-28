@@ -40,6 +40,8 @@ from engine.skills import get_skill_index, load_skill, install_skill, list_skill
 from engine.mcp_client import get_all_mcp_tools, is_mcp_tool, call_mcp_tool, list_mcp_servers
 from engine.fetch import hunt_media
 from engine.assets import load_library, scan_assets_library
+from engine.reference_dna import load_reference_dna
+from engine.topic_history import get_variation_context, sync_statuses
 
 GLOBAL_SESSION_FILE = "operator_session.json"
 MAX_AGENT_STEPS = 12
@@ -586,6 +588,14 @@ def _emit_step(message: str) -> None:
     except Exception:
         pass
 
+def _emit_think(message: str) -> None:
+    """Emit alur pikir naratif singkat ke stderr (live thinking, bukan stdout)."""
+    try:
+        print(f"[THINK] {message}", file=sys.stderr, flush=True)
+        sys.stderr.flush()
+    except Exception:
+        pass
+
 
 def execute_autonomous_agent(
     user_prompt: str,
@@ -656,11 +666,34 @@ def execute_autonomous_agent(
 
     memory_summary = "\n".join(memory_notes) if memory_notes else "Belum ada catatan memori tersimpan."
 
-    # 3. Bangun System Prompt Proaktif V3.4
-    system_prompt = f"""Kamu adalah ContentStudio Autonomous AI Agent (ContentStudio V3.4), sutradara dan produser video profesional.
-TARGET UTAMA: Vertikal 9:16 Full HD 1080p (1080x1920, 30fps) kecuali pengguna meminta format lain.
+    # 2b. Kontrak Reference DNA aktif + sinkronisasi riwayat topik (non-blocking)
+    dna_summary = "Belum ada kontrak DNA. Susun dari referensi/instruksi user sebelum produksi."
+    try:
+        dna = load_reference_dna(active_ws)
+        pacing = dna.get("pacing_profile") or {}
+        dna_summary = (
+            f"- format_scale: {dna.get('format_scale')} | aspect_ratio: {dna.get('aspect_ratio')} | resolution: {dna.get('resolution')}\n"
+            f"- sources_priority: {', '.join(dna.get('sources_priority') or [])}\n"
+            f"- visual_continuity: {dna.get('visual_continuity')} | layout: {dna.get('layout_pattern')} | audio: {dna.get('audio_modality')}\n"
+            f"- pacing: {pacing.get('style')} ({pacing.get('avg_scene_sec')}s/scene, chapters={pacing.get('chapter_structure')})\n"
+            f"- visual_style_anchor: {dna.get('visual_style_anchor') or '-'}\n"
+            f"- mechanics_summary: {dna.get('mechanics_summary') or '-'}"
+        )
+    except Exception:
+        pass
+    try:
+        sync_statuses()
+    except Exception:
+        pass
+
+    # 3. Bangun System Prompt Proaktif V3.6
+    system_prompt = f"""Kamu adalah ContentStudio Autonomous AI Agent (ContentStudio V3.6), sutradara dan produser video profesional.
+FORMAT & RASIO TIDAK DIKUNCI: dukung video pendek (short) MAUPUN video panjang berbab (long), serta rasio 16:9, 9:16, 1:1, dan 4:5 sesuai referensi atau instruksi user.
 
 WORKSPACE AKTIF: '{active_ws}'
+
+REFERENCE DNA AKTIF (sifat produksi yang harus dijaga):
+{dna_summary}
 MODE OPERASI: {mode.upper()} - {mode_instructions}
 
 CROSS-SESSION PROJECT & GLOBAL MEMORY (ATURAN/KEPUTUSAN TETAP):
@@ -669,7 +702,7 @@ CROSS-SESSION PROJECT & GLOBAL MEMORY (ATURAN/KEPUTUSAN TETAP):
 SKILL OPERASIONAL TERSEDIA (Gunakan tool load_skill jika memerlukan detail SOP):
 {skill_idx_summary}
 
-PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
+PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.6):
 1. DILARANG MERESPONS PASIF ala Customer Service ("Maaf...", atau balik bertanya hal teknis sebelum bertindak).
 2. DILARANG MENYURUH USER KLIK MANUAL DI UI. Gunakan tool 'run_studio_cli' untuk mengotomasi proyek:
    - Membuat/mengatur proyek: ['project', 'create', '--name', '<nama>', '--ratio', '9:16']
@@ -680,6 +713,11 @@ PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
    - Audio mastering: ['voice', 'master', '--project', '<nama>', '--preset', 'podcast']
    - Background music: ['audio', 'set-bgm', '--project', '<nama>', '--file', '<path>']
    - Cross-session memory: ['memory', 'add', '--project', '<nama>', '--note', '<catatan>', '--category', 'decision']
+   - Kontrak referensi: ['save-reference-dna', '--project', '<nama>', '--format-scale', 'short|long', '--aspect-ratio', '16:9|9:16|1:1|4:5', '--visual-continuity', 'strict_consistent|editorial_varied']
+   - Resolusi aset hybrid: ['resolve-assets', '--project', '<nama>'] (checkpoint resume, tanpa mengulang scene valid)
+   - Generate media: ['generate-media', '--project', '<nama>', '--prompt', '<deskripsi>', '--scene', '<idx>']
+   - Kartu grafis: ['render-graphic', '--project', '<nama>', '--template', 'stat|comparison|chapter|quote|tier', '--title', '<judul>']
+   - Riwayat topik: ['topic-history', 'record', '--project', '<nama>', '--topic', '<tema>', '--angle', '<sudut>'] / ['topic-history', 'context', '--topic', '<tema>']
 3. Jika belum ada bahan media: gunakan tool 'hunt_media' atau 'run_studio_cli' untuk mencari aset video/audio.
 4. Tampilkan tabel ringkasan shot list (adegan, narasi, visual, durasi) kepada pengguna di akhir.
 5. PROTOKOL INTERAKTIF V3.4:
@@ -699,6 +737,11 @@ PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
 14. KUNCI DOMAIN, FORMAT & MODALITAS REFERENSI: Ekstrak pola kerja, ritme, struktur, SEKALIGUS jenis/domain kontennya. Wajib konsisten: referensi menggambar/visual art -> tetap membuat konten menggambar/visual art (visual + label singkat + BGM, TANPA mengubahnya jadi video pembahasan/narasi bicara). Referensi pembahasan/commentary -> tetap membuat konten pembahasan. Referensi vibe/ambient/mood -> tetap membuat konten vibe/ambient. DILARANG KERAS melompat domain (mis. mengubah referensi menggambar menjadi memasak mie instan atau video edukasi bernarasi) kecuali ada perintah eksplisit dari user.
 15. TETAP OTONOM: Jika user memberi referensi dan menyuruh eksekusi tanpa menyebut objek spesifik, AI HARUS berani menentukan sendiri objek/topik baru yang segar dan 100% masih satu domain dengan referensi, lalu langsung produksi tanpa kebanyakan tanya.
 16. ZERO PROGRESS FILLER & ZERO RAW PATH: DILARANG menulis kalimat progres seperti "Memproses bedah teknis...", "Mengunduh video pertama...", atau mencetak URL mentah file:///data/user/0/... di jawaban utama (stdout). Semua progres WAJIB hanya ke stderr dengan [STEP].
+17. MULTI-FORMAT & MULTI-RASIO: Jangan pernah mengasumsikan semua proyek adalah Shorts 9:16. Deteksi format (short vs long) dan rasio (16:9, 9:16, 1:1, 4:5) dari referensi atau instruksi user. Untuk video panjang, susun struktur per-bab (chapters), siapkan transisi antar-bab termasuk kartu bab grafis bila cocok, dan jaga ritme retensi jangka panjang. Untuk video pendek, fokus 1 busur hook-escalation-payoff.
+18. REFERENCE-FIRST DNA LOCK: Setiap kali user memberi referensi, WAJIB simpan sifat produksinya lewat 'save-reference-dna' SEBELUM produksi: format_scale, aspect_ratio, sources_priority, visual_continuity, layout_pattern, audio_modality, pacing_profile, visual_style_anchor, mechanics_summary. Pertahankan modalitas & domain asli referensi kecuali user memerintahkan perubahan.
+19. IDEATION FILTER (ANTI-ASAL, ANTI-MONOTON): Saring 3-5 kandidat ide di belakang layar berdasarkan hook kuat, eskalasi/kedalaman sesuai format, pemicu interaksi alami, dan kelayakan visual dengan 5 worker. Riwayat topik TIDAK PERNAH memblokir tema apa pun; jika mengangkat tema yang sama, WAJIB rotasi angle, hook, atau payoff agar tidak klise. Cek variasi via 'topic-history context --topic <tema>'.
+20. HYBRID ASSET CONTRACT PER SCENE: Setiap scene wajib menentukan source_type paling masuk akal (clip, generate, graphic, stock, local) plus visual_goal, keywords, style_anchor, duration, dan chapter bila video panjang. Jalankan 'resolve-assets' agar router menerapkan matriks fallback ketat + QA gate + checkpoint resume. DILARANG memaksa satu sumber untuk semua scene.
+21. LIVE THINKING STREAM: Alur pikir mengalir ke stderr secara real-time via print("[THINK] ...", file=sys.stderr, flush=True) untuk analisis/pertimbangan, dan print("[STEP] ...") untuk aksi alat. Jangan pernah menulis alur pikir ke stdout, jangan membocorkan path internal mentah, dan jangan mencetak stack trace.
 """
 
     # 4. Susun pesan percakapan
@@ -719,6 +762,10 @@ PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
 
     # 5. Loop Agentik (Maksimal 12 Langkah)
     for step_num in range(1, MAX_AGENT_STEPS + 1):
+        if step_num == 1:
+            _emit_think("Membaca arah permintaan, kontrak DNA, dan riwayat topik sebelum menyusun langkah.")
+        else:
+            _emit_think("Menimbang hasil langkah sebelumnya untuk menentukan aksi berikutnya.")
         _emit_step(f"Memproses permintaan ke model AI (tahap {step_num})")
         try:
             llm_res = chat_with_tools(
@@ -740,6 +787,7 @@ PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
 
         if not tool_calls:
             # Selesai: LLM memberikan jawaban akhir
+            _emit_think("Konteks sudah cukup. Merangkum hasil produksi dan menyusun jawaban akhir.")
             _emit_step("Menyusun jawaban")
             final_reply = content
             break
@@ -750,6 +798,7 @@ PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
             t_name = tc.get("name", "")
             t_args = tc.get("arguments") or {}
 
+            _emit_think(f"Aksi paling masuk akal sekarang: menjalankan {t_name}.")
             _emit_step(f"Menjalankan tool: {t_name}")
             # Emit event ke Android Kotlin Service
             if event_callback:

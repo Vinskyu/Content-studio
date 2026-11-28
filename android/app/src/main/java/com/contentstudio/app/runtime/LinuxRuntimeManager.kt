@@ -1936,6 +1936,7 @@ object LinuxRuntimeManager {
         attachments: List<String> = emptyList(),
         onConnectionCreated: ((HttpURLConnection) -> Unit)? = null,
         onStatus: (String) -> Unit,
+        onThinking: ((kind: String, text: String) -> Unit)? = null,
         onUiSync: ((scope: String, target: String) -> Unit)? = null,
         onActionPlan: ((ActionPlanCardData) -> Unit)? = null,
         onSuggestions: ((List<String>) -> Unit)? = null,
@@ -2045,7 +2046,12 @@ object LinuxRuntimeManager {
                                 } else when (type) {
                                     "status" -> {
                                         val stepLabel = text.ifBlank { obj.optString("step", "") }
-                                        if (stepLabel.isNotBlank()) onStatus(stepLabel)
+                                        if (stepLabel.isNotBlank()) {
+                                            // kind: "thought" | "step"; aman untuk payload lama tanpa kind.
+                                            val kind = obj.optString("kind", "step")
+                                            onThinking?.invoke(if (kind == "thought") "thought" else "step", stepLabel)
+                                            onStatus(stepLabel)
+                                        }
                                     }
                                     "delta" -> onDelta(text)
                                     "done" -> {

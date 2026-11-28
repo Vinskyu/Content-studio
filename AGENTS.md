@@ -1,6 +1,6 @@
-# KONSTITUSI CONTENTSTUDIO (AGENTS.md V3.4)
+# KONSTITUSI CONTENTSTUDIO (AGENTS.md V3.6)
 
-Pedoman hukum, arsitektur, dan instruksi eksekusi otonom mutlak bagi seluruh agen AI yang beroperasi di ContentStudio V3.4+.
+Pedoman hukum, arsitektur, dan instruksi eksekusi otonom mutlak bagi seluruh agen AI yang beroperasi di ContentStudio V3.6+ (multi-rasio, short & long-form, trait-driven Reference DNA, 5 worker hybrid, live thinking).
 Setiap agen yang aktif terikat penuh tanpa pengecualian pada prinsip dan tata cara operasi berikut:
 
 ---
@@ -26,7 +26,7 @@ Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
 
 ### A. Proyek & Workspace
 - `python3 engine/studio_cli.py project list`
-- `python3 engine/studio_cli.py project create --name <nama> --ratio 9:16|16:9 [--channel <id>]`
+- `python3 engine/studio_cli.py project create --name <nama> --ratio 16:9|9:16|1:1|4:5 [--channel <id>]`
 - `python3 engine/studio_cli.py project status --name <nama>`
 - `python3 engine/studio_cli.py project delete --name <nama>`
 
@@ -55,10 +55,26 @@ Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
   `python3 engine/studio_cli.py media assign --project <nama> --scene <index> --url "<url>" [--start "00:00:10"] [--end "00:00:25"]`
 - Inspeksi kualitas media (QA): `python3 engine/media_fetcher.py qa --file <path> [--expected-ratio 9:16|16:9]`
 
-### F. Cross-Session Project Memory & User Preferences
+### E2. Reference DNA & Router Hybrid 5 Worker + QA Gate (V3.6)
+- Simpan kontrak referensi (short/long + multi-rasio):
+  `python3 engine/studio_cli.py save-reference-dna --project <nama> --format-scale short|long --aspect-ratio 16:9|9:16|1:1|4:5 --visual-continuity strict_consistent|editorial_varied`
+- Resolusi aset seluruh scene (checkpoint resume, matriks fallback ketat, QA gate):
+  `python3 engine/studio_cli.py resolve-assets --project <nama> [--force] [--scene <idx>]`
+- Wrapper setara: `python3 engine/media_fetcher.py resolve-assets --project <nama>`
+- Generate AI konsisten (BYOK -> Pollinations fallback):
+  `python3 engine/studio_cli.py generate-media --project <nama> --prompt "<deskripsi>" [--scene <idx>] [--seed <n>]`
+- Kartu grafis lokal (stat/comparison/chapter/quote/tier):
+  `python3 engine/studio_cli.py render-graphic --project <nama> --template chapter --title "<judul>" [--video]`
+
+### F. Cross-Session Project Memory, Topic History & User Preferences
 - `python3 engine/studio_cli.py memory list [--project <nama>]`
 - `python3 engine/studio_cli.py memory add [--project <nama>] --note "<catatan>" [--category decision|style|rejected|fact]`
 - `python3 engine/studio_cli.py memory remove [--project <nama>] --id <id>`
+- Riwayat topik (NON-BLOKIR, hanya konteks variasi angle):
+  `python3 engine/studio_cli.py topic-history record --project <nama> --topic "<tema>" --angle "<sudut>" [--hook-type ...] [--payoff-type ...]`
+  `python3 engine/studio_cli.py topic-history context --topic "<tema>"`
+  `python3 engine/studio_cli.py topic-history set-status --project <nama> --topic "<tema>" --status draft|exported|published|deleted`
+  `python3 engine/studio_cli.py topic-history sync`
 
 ### G. Render Final & Publish Kit
 - `python3 engine/studio_cli.py render start --project <nama>`
@@ -66,7 +82,7 @@ Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
 
 ## 4. ZERO-FORM & LANGSUNG EKSEKUSI
 - **Dilarang menginterogasi pengguna** dengan daftar pertanyaan panjang tentang format, resolusi, atau opsi teknis.
-- Jika pengguna meminta membuat video atau proyek, langsung buat proyek via CLI (default rasio `9:16` 1080x1920 kecuali pengguna menyebut `16:9`).
+- Jika pengguna meminta membuat video atau proyek, langsung buat proyek via CLI. Deteksi format (`short` vs `long`) dan rasio (`16:9`, `9:16`, `1:1`, `4:5`) dari referensi atau instruksi user; jika benar-benar tidak ada petunjuk, pilih rasio paling lazim untuk domain tersebut (mis. `16:9` untuk naratif sinematik, `9:16` untuk potongan vertikal cepat). Jangan mengunci semua proyek ke `9:16`.
 - Tampilkan ringkasan status dalam bentuk tabel rapi dan padat di chat.
 
 ## 5. ALUR KERJA WAJIB & PROTOKOL INTERAKTIF V3.4
@@ -96,6 +112,7 @@ Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
 2. **PISAHKAN MEKANIK VS OBJEK REFERENSI:** Saat pengguna memberi referensi konten (video/link/deskripsi), yang wajib diambil adalah cara kerja, pola struktur, ritme/pacing, dan format produksinya. DILARANG menyalin mentah objek/topik referensi (contoh: referensi menggambar kucing dengan format tier, ambil mekanik tiering/progresifnya, bukan objek kucingnya, kecuali pengguna memang meminta topik kucing).
 3. **ADAPTASI KE KONDISI NYATA:** Jika pengguna berkata "buat berdasarkan kondisi" atau meminta adaptasi, langsung sesuaikan dengan keterbatasan alat/aset yang tersedia di ContentStudio (tanpa kamera/rekaman tangan) secara cerdas dan ringkas, tanpa ceramah panjang atau memaksa pengguna menjelaskan ulang hal dasar konten.
 4. **EKSEKUSI SEKUENSIAL & PROGRES NYATA:** DILARANG memicu banyak subagent atau aksi berat secara paralel (misalnya generate 4-5 gambar sekaligus) karena membuat proses hang. Jalankan bertahap satu per satu dan wajib melaporkan progres nyata setiap aksi lewat `[STEP] ...` dengan `flush=True` agar pengguna selalu melihat pekerjaan yang sedang berjalan.
+5. **ALUR PIKIR REAL-TIME (LIVE THINKING):** Selain aksi, alirkan pertimbangan singkat lewat `[THINK] ...` ke stderr (`print(..., file=sys.stderr, flush=True)`): apa yang sedang dianalisis, ditimbang, atau diputuskan. `[THINK]` untuk narasi pikir, `[STEP]` untuk aksi alat. Keduanya DILARANG muncul di stdout.
 
 ## 8. GAYA JAWABAN BERSIH ALA CLAUDE (V3.4.3)
 1. **DILARANG MENULIS LAPORAN PROGRES DI JAWABAN UTAMA:** Jangan pernah menulis kalimat filler seperti "Sedang memeriksa...", "Mohon tunggu sebentar...", "Sudah membedah...", atau "Cache telah dibersihkan" di teks balasan utama (stdout). Semua status proses WAJIB hanya dikirim lewat marker `[STEP] ...` ke stderr.
@@ -110,4 +127,12 @@ Gunakan selalu perintah Python Master CLI untuk memanipulasi dapur produksi:
    - Referensi vibe / ambient / mood -> WAJIB tetap membuat konten vibe / ambient.
    - DILARANG KERAS melompat domain (seperti mengubah referensi menggambar menjadi memasak mie instan atau video edukasi bernarasi) kecuali ada perintah eksplisit dari user.
 2. **TETAP OTONOM:** Jika user memberi referensi dan menyuruh eksekusi tanpa menyebut objek spesifik, AI HARUS berani menentukan sendiri objek/topik baru yang segar dan 100% masih satu domain dengan referensi, lalu langsung produksi tanpa kebanyakan tanya.
-3. **ZERO PROGRESS FILLER & ZERO RAW PATH:** DILARANG menulis kalimat progres seperti "Memproses bedah teknis...", "Mengunduh video pertama...", atau mencetak URL mentah file:///data/user/0/... di jawaban utama (stdout). Semua progres WAJIB hanya ke stderr dengan [STEP].
+3. **ZERO PROGRESS FILLER & ZERO RAW PATH:** DILARANG menulis kalimat progres seperti "Memproses bedah teknis...", "Mengunduh video pertama...", atau mencetak URL mentah file:///data/user/0/... di jawaban utama (stdout). Semua progres WAJIB hanya ke stderr dengan [STEP] dan [THINK].
+
+## 10. MULTI-FORMAT, MULTI-RASIO & HYBRID ASSET CONTRACT (V3.6)
+1. **SHORT & LONG-FORM SETARA:** Jangan mengasumsikan semua proyek adalah Shorts `9:16`. `format_scale=short` berarti satu busur hook-escalation-payoff; `format_scale=long` berarti struktur berbab (3-30+ menit) dengan chapter card, transisi antar-bab, dan ritme retensi jangka panjang. Semua rasio (`16:9`, `9:16`, `1:1`, `4:5`) didukung penuh oleh DNA, worker, CLI, dan render.
+2. **REFERENCE-FIRST DNA LOCK:** Setiap referensi WAJIB diterjemahkan menjadi `reference_dna.json` (via `save-reference-dna`) SEBELUM produksi: `format_scale`, `aspect_ratio`, `resolution`, `sources_priority`, `visual_continuity`, `layout_pattern`, `audio_modality`, `pacing_profile`, `visual_style_anchor`, `mechanics_summary`, `user_overrides`. Modalitas & domain referensi dipertahankan kecuali user memerintahkan perubahan.
+3. **IDEATION FILTER:** Saring 3-5 kandidat ide secara internal (hook kuat, kedalaman sesuai format, pemicu interaksi alami, kelayakan visual 5 worker). Riwayat topik bersifat NON-BLOKIR: tidak ada tema yang dilarang; jika mengulang tema populer, WAJIB rotasi angle, hook, atau payoff agar tidak monoton.
+4. **HYBRID ASSET CONTRACT PER SCENE:** Setiap scene di `plan.json`/`project.json` wajib punya `source_type` (`clip`, `generate`, `graphic`, `stock`, `local`), `visual_goal`, `keywords`, `style_anchor`, `duration`, `seed`, dan `chapter` bila long-form. Matriks fallback ketat: `clip` -> klip alternatif -> still sumber -> graphic (TANPA stock generik); `generate` -> prompt ringkas -> ganti provider (TANPA stok orang lain); `stock` -> query alternatif -> generate; `graphic` -> render lokal; `local` -> error jelas (TANPA internet). Semua output wajib lolos `qa_gate`.
+5. **CHECKPOINT & RENDER AMAN RAM:** `resolve-assets` melanjutkan dari scene yang sudah valid (kecuali `--force`). Render proyek panjang dilakukan per-segmen lalu digabung FFmpeg concat demuxer, bukan satu filtergraph raksasa.
+6. **TRAIT-DRIVEN, BUKAN NICHE:** DILARANG menanam logika `if niche == ...`. Semua keputusan berasal dari sifat produksi universal (rasio, format, kontinuitas, pacing, modalitas audio, sifat visual scene).

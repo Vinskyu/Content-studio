@@ -88,6 +88,7 @@ import com.contentstudio.app.ui.theme.TextMuted
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
 import com.contentstudio.app.ui.components.StudioMediaThumbnail
+import com.contentstudio.app.ui.components.StudioThinkingBlock
 import com.contentstudio.app.ui.components.StudioMediaPlayerDialog
 import com.contentstudio.app.ui.components.StudioMarkdownText
 import androidx.compose.foundation.lazy.grid.items
@@ -2187,7 +2188,8 @@ fun ProjectBoardScreen(
         }
         val agentMessages by ChatController.messages.collectAsState()
         val isStreaming by ChatController.isStreaming.collectAsState()
-        val liveStatus by ChatController.liveStatus.collectAsState()
+        val thinkingEntries by ChatController.thinkingEntries.collectAsState()
+        val thinkingStartMs by ChatController.thinkingStartTimeMs.collectAsState()
         var coPilotInput by remember { mutableStateOf("") }
         val sheetListState = rememberLazyListState()
 
@@ -2356,26 +2358,13 @@ fun ProjectBoardScreen(
                 }
 
                 if (isStreaming) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(StudioAccent)
-                        )
-                        Text(
-                            text = if (liveStatus.isNotBlank()) liveStatus else "Agent is thinking...",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 11.sp,
-                            color = StudioAccent
-                        )
-                    }
+                    val lastAssistantText = agentMessages.lastOrNull { !it.isUser }?.text.orEmpty()
+                    StudioThinkingBlock(
+                        entries = thinkingEntries,
+                        isThinking = lastAssistantText.isBlank(),
+                        startTimeMs = thinkingStartMs,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))

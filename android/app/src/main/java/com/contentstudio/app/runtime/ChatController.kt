@@ -1,5 +1,6 @@
 package com.contentstudio.app.runtime
 
+import com.contentstudio.app.ui.components.ThinkingEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -64,6 +65,9 @@ object ChatController {
 
     private val _thinkingSteps = MutableStateFlow<List<String>>(emptyList())
     val thinkingSteps: StateFlow<List<String>> = _thinkingSteps.asStateFlow()
+
+    private val _thinkingEntries = MutableStateFlow<List<ThinkingEntry>>(emptyList())
+    val thinkingEntries: StateFlow<List<ThinkingEntry>> = _thinkingEntries.asStateFlow()
 
     private val _chatMode = MutableStateFlow("director")
     val chatMode: StateFlow<String> = _chatMode.asStateFlow()
@@ -291,6 +295,7 @@ object ChatController {
                         _liveStatus.value = ""
                         _thinkingStartTimeMs.value = null
                         _thinkingSteps.value = emptyList()
+                        _thinkingEntries.value = emptyList()
                         refreshSessions()
                     }
                 }
@@ -344,6 +349,7 @@ object ChatController {
         _isStreaming.value = false
         _liveStatus.value = ""
         _thinkingStartTimeMs.value = null
+        _thinkingEntries.value = emptyList()
         val current = _messages.value.toMutableList()
         val lastIdx = current.indexOfLast { !it.isUser && it.isStreaming }
         if (lastIdx != -1) {
@@ -453,6 +459,7 @@ object ChatController {
         val startMs = System.currentTimeMillis()
         _thinkingStartTimeMs.value = startMs
         _thinkingSteps.value = emptyList()
+        _thinkingEntries.value = emptyList()
         _liveStatus.value = "Menghubungkan engine lokal"
 
         val userItem = ChatMessageItem(
@@ -482,6 +489,7 @@ object ChatController {
                 _isStreaming.value = false
                 _liveStatus.value = ""
                 _thinkingStartTimeMs.value = null
+                _thinkingEntries.value = emptyList()
                 val currentList = _messages.value.toMutableList()
                 val idx = currentList.indexOfLast { it.id == assistantId }
                 if (idx != -1) {
@@ -513,6 +521,21 @@ object ChatController {
                         if (steps.lastOrNull() != cleanSt) {
                             // Simpan maksimal 30 baris log terakhir agar kartu tetap ringan.
                             _thinkingSteps.value = (steps + cleanSt).takeLast(30)
+                        }
+                    }
+                },
+                onThinking = { kind, thoughtText ->
+                    val cleanThought = thoughtText.trim()
+                    if (cleanThought.isNotEmpty()) {
+                        val entries = _thinkingEntries.value
+                        val last = entries.lastOrNull()
+                        if (last == null || last.kind != kind || last.text != cleanThought) {
+                            val entry = ThinkingEntry(
+                                kind = if (kind == "thought") "thought" else "step",
+                                text = cleanThought,
+                                timestampMs = System.currentTimeMillis()
+                            )
+                            _thinkingEntries.value = (entries + entry).takeLast(60)
                         }
                     }
                 },
@@ -569,6 +592,7 @@ object ChatController {
                     _isStreaming.value = false
                     _liveStatus.value = ""
                     _thinkingStartTimeMs.value = null
+                    _thinkingEntries.value = emptyList()
                     refreshSessions()
                 },
                 onError = { err ->
@@ -592,6 +616,7 @@ object ChatController {
                     _isStreaming.value = false
                     _liveStatus.value = ""
                     _thinkingStartTimeMs.value = null
+                    _thinkingEntries.value = emptyList()
                     refreshSessions()
                 }
             )

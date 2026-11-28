@@ -531,6 +531,28 @@ def download(args):
     sys.stdout.flush()
 
 # ---------------------------------------------------------------------------
+# Hybrid Router wrapper (kompatibel dengan engine/assets/router.py)
+# ---------------------------------------------------------------------------
+
+def resolve_via_router(project: str, force: bool = False, scene: int = None) -> dict:
+    """Delegasikan resolusi aset seluruh scene ke router hybrid 5 worker."""
+    from engine.assets.router import resolve_assets
+    return resolve_assets(project, force=force, only=scene)
+
+def resolve_assets_cmd(args):
+    parser = argparse.ArgumentParser(prog="media_fetcher.py resolve-assets")
+    parser.add_argument("--project", required=True)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--scene", type=int, default=None)
+    opts = parser.parse_args(args)
+    _log_step(f"Resolving assets via hybrid router for '{opts.project}'")
+    res = resolve_via_router(opts.project, force=opts.force, scene=opts.scene)
+    json.dump(res, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    sys.exit(0 if res.get("status") == "ok" else 1)
+
+# ---------------------------------------------------------------------------
 # CLI dispatcher
 # ---------------------------------------------------------------------------
 
@@ -547,6 +569,8 @@ def main():
         download(sys.argv[2:])
     elif cmd == "qa":
         qa(sys.argv[2:])
+    elif cmd == "resolve-assets":
+        resolve_assets_cmd(sys.argv[2:])
     else:
         sys.stderr.write(f"Unknown command: {cmd}\n")
         sys.exit(2)

@@ -122,6 +122,7 @@ import com.contentstudio.app.runtime.ChatController
 import com.contentstudio.app.runtime.ChatMessageItem
 import com.contentstudio.app.runtime.LinuxRuntimeManager
 import com.contentstudio.app.ui.components.StudioMarkdownText
+import com.contentstudio.app.ui.components.StudioThinkingBlock
 import androidx.activity.compose.BackHandler
 import com.contentstudio.app.runtime.MemoryEntry
 import com.contentstudio.app.runtime.StockMediaItem
@@ -174,9 +175,8 @@ fun ChatScreen(
     val activeSessionId by ChatController.activeSessionId.collectAsState()
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
     val lastError by ChatController.lastError.collectAsState()
-    val liveStatus by ChatController.liveStatus.collectAsState()
     val thinkingStartMs by ChatController.thinkingStartTimeMs.collectAsState()
-    val thinkingSteps by ChatController.thinkingSteps.collectAsState()
+    val thinkingEntries by ChatController.thinkingEntries.collectAsState()
     val chatMode by ChatController.chatMode.collectAsState()
     val draftText by ChatController.draftText.collectAsState()
     val pendingAttachments by ChatController.pendingAttachments.collectAsState()
@@ -607,11 +607,12 @@ fun ChatScreen(
                     }
 
                     if (isStreaming) {
+                        val lastAssistantText = messages.lastOrNull { !it.isUser }?.text.orEmpty()
                         item(key = "live_thinking_card") {
-                            LiveThinkingCard(
-                                startTimeMs = thinkingStartMs,
-                                liveStatus = liveStatus,
-                                steps = thinkingSteps
+                            StudioThinkingBlock(
+                                entries = thinkingEntries,
+                                isThinking = lastAssistantText.isBlank(),
+                                startTimeMs = thinkingStartMs
                             )
                         }
                     }
@@ -2541,151 +2542,6 @@ private fun InlineMediaPreviewDialog(
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF0B0C0E)
                         )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun LiveThinkingCard(
-    startTimeMs: Long?,
-    liveStatus: String,
-    steps: List<String>
-) {
-    var expanded by remember { mutableStateOf(true) }
-    var elapsedMs by remember { mutableLongStateOf(0L) }
-
-    LaunchedEffect(startTimeMs) {
-        if (startTimeMs == null) {
-            elapsedMs = 0L
-            return@LaunchedEffect
-        }
-        while (true) {
-            elapsedMs = (System.currentTimeMillis() - startTimeMs).coerceAtLeast(0L)
-            delay(100)
-        }
-    }
-
-    val infiniteTransition = rememberInfiniteTransition(label = "thinkingDotPulse")
-    val dotAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(700, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "dotAlpha"
-    )
-
-    val timerText = String.format(Locale.US, "%.1fs", elapsedMs / 1000.0)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MatteSurface)
-            .clickable { expanded = !expanded }
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .alpha(dotAlpha)
-                        .clip(CircleShape)
-                        .background(StudioAccent)
-                )
-                Text(
-                    text = liveStatus.ifBlank { "Memproses..." },
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = timerText,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = TextMuted
-                )
-                Icon(
-                    imageVector = if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
-                    contentDescription = "Toggle Steps",
-                    tint = TextMuted,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
-
-        AnimatedVisibility(visible = expanded && steps.isNotEmpty()) {
-            val stepsScrollState = rememberScrollState()
-            LaunchedEffect(steps.size) {
-                stepsScrollState.animateScrollTo(Int.MAX_VALUE)
-            }
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 180.dp)
-                    .verticalScroll(stepsScrollState)
-                    .padding(top = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                steps.forEachIndexed { idx, step ->
-                    val isLatest = (idx == steps.lastIndex)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (isLatest) {
-                            Box(
-                                modifier = Modifier
-                                    .size(14.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .alpha(dotAlpha)
-                                        .clip(CircleShape)
-                                        .background(StudioAccent)
-                                )
-                            }
-                            Text(
-                                text = step,
-                                fontSize = 11.sp,
-                                color = TextPrimary
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Outlined.Check,
-                                contentDescription = null,
-                                tint = StudioSage,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Text(
-                                text = step,
-                                fontSize = 11.sp,
-                                color = TextMuted
-                            )
-                        }
                     }
                 }
             }

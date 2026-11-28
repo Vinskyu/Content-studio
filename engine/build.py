@@ -440,8 +440,10 @@ def validate_plan(plan: Dict[str, Any], plan_file: str) -> bool:
 def parse_dimensions(plan: Dict[str, Any], preview_mode: bool) -> Tuple[int, int, float]:
     """Hitung lebar dan tinggi target kanvas (selalu genap) serta FPS."""
     output_cfg = plan.get("output", {})
-    aspect_str = str(output_cfg.get("aspect", "16:9")).lower()
-    res_spec = output_cfg.get("resolution", "1080p")
+    # Rasio & resolusi boleh berasal dari output plan, atau fallback ke
+    # kontrak proyek (aspect_ratio/resolution) agar tidak terkunci ke 16:9.
+    aspect_str = str(output_cfg.get("aspect") or plan.get("aspect_ratio") or "16:9").lower()
+    res_spec = output_cfg.get("resolution") or plan.get("resolution") or "1080p"
     fps_val = output_cfg.get("fps", 30)
 
     # Sumber default jika 'source'
