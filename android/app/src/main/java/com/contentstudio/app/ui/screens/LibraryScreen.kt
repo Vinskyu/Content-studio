@@ -141,6 +141,14 @@ fun LibraryScreen(
     var selectedProjectFolder by remember { mutableStateOf<com.contentstudio.app.runtime.GalleryProjectFolder?>(null) }
     var selectedFolderTab by remember { mutableStateOf("finished") }
     var previewGalleryItem by remember { mutableStateOf<com.contentstudio.app.runtime.GalleryFileItem?>(null) }
+    val studioMedia = remember { mutableStateListOf<com.contentstudio.app.runtime.StudioMediaFile>() }
+    var selectedMediaFilter by remember { mutableStateOf("All") }
+    var selectedStudioMedia by remember { mutableStateOf<com.contentstudio.app.runtime.StudioMediaFile?>(null) }
+    var selectedCategory by remember { mutableStateOf("all") }
+    var searchQuery by remember { mutableStateOf("") }
+    var mediaSelectionMode by remember { mutableStateOf(false) }
+    val selectedMediaPaths = remember { mutableStateListOf<String>() }
+    var pendingMediaDelete by remember { mutableStateOf<List<String>>(emptyList()) }
 
     fun refreshGalleryTree() {
         scope.launch(Dispatchers.IO) {
@@ -156,15 +164,6 @@ fun LibraryScreen(
             }
         }
     }
-
-    var selectedCategory by remember { mutableStateOf("all") }
-    var searchQuery by remember { mutableStateOf("") }
-    val studioMedia = remember { mutableStateListOf<com.contentstudio.app.runtime.StudioMediaFile>() }
-    var selectedMediaFilter by remember { mutableStateOf("All") }
-    var selectedStudioMedia by remember { mutableStateOf<com.contentstudio.app.runtime.StudioMediaFile?>(null) }
-    var mediaSelectionMode by remember { mutableStateOf(false) }
-    val selectedMediaPaths = remember { mutableStateListOf<String>() }
-    var pendingMediaDelete by remember { mutableStateOf<List<String>>(emptyList()) }
 
     fun exitMediaSelection() {
         mediaSelectionMode = false
