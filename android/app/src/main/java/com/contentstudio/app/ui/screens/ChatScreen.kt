@@ -2549,9 +2549,6 @@ private fun InlineMediaPreviewDialog(
 }
 
 @Composable
-}
-
-@Composable
 private fun LiveThinkingCard(
     startTimeMs: Long?,
     liveStatus: String,

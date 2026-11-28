@@ -43,9 +43,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
@@ -120,16 +117,6 @@ fun LibraryScreen(
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
     var activeTab by remember { mutableStateOf("channels") } // "channels", "templates", "media"
 
-    val libHasOverlay = showStockSheet || assetToDelete != null || assetToUse != null || selectedStudioMedia != null
-    BackHandler(enabled = libHasOverlay) {
-        when {
-            showStockSheet -> showStockSheet = false
-            assetToDelete != null -> assetToDelete = null
-            assetToUse != null -> assetToUse = null
-            selectedStudioMedia != null -> selectedStudioMedia = null
-        }
-    }
-
     // Media state
     var selectedCategory by remember { mutableStateOf("all") }
     var searchQuery by remember { mutableStateOf("") }
@@ -150,6 +137,16 @@ fun LibraryScreen(
 
     // Stock Media & BYOK state
     var showStockSheet by remember { mutableStateOf(false) }
+
+    val libHasOverlay = showStockSheet || assetToDelete != null || assetToUse != null || selectedStudioMedia != null
+    BackHandler(enabled = libHasOverlay) {
+        when {
+            showStockSheet -> showStockSheet = false
+            assetToDelete != null -> assetToDelete = null
+            assetToUse != null -> assetToUse = null
+            selectedStudioMedia != null -> selectedStudioMedia = null
+        }
+    }
     var stockSheetTab by remember { mutableIntStateOf(0) } // 0: Search, 1: URL Download
     var stockQuery by remember { mutableStateOf("") }
     var stockSource by remember { mutableStateOf("auto") } // "auto", "ytdlp", "wikimedia", "pexels", "pixabay"

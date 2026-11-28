@@ -14,12 +14,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -35,12 +37,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.contentstudio.app.ui.theme.MatteDivider
-import com.contentstudio.app.ui.theme.MatteElevated
-import com.contentstudio.app.ui.theme.MatteSurface
 import com.contentstudio.app.ui.theme.TextMuted
 import com.contentstudio.app.ui.theme.TextPrimary
 
+private val MatteSurface = Color(0xFF15171C)
+private val MatteElevated = Color(0xFF1E2128)
+private val MatteDivider = Color(0xFF262A33)
+
+@Composable
 fun StudioMarkdownText(
     markdown: String,
     onCopyCodeBlock: (String) -> Unit = {}
@@ -359,3 +363,4 @@ private fun parseInlineMarkdown(raw: String): AnnotatedString {
         i++
     }
     return builder.toAnnotatedString()
+}

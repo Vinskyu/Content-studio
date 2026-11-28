@@ -30,3 +30,6 @@ Thumbs.db
 # Scratch test directories
 scratch/
 
+
+# Local build toolchain (JDK/Android SDK)
+.toolchain/

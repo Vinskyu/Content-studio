@@ -141,17 +141,6 @@ fun ProjectBoardScreen(
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
 
-    BackHandler {
-        when {
-            showCopilotSheet -> showCopilotSheet = false
-            showCopilotSheet -> showCopilotSheet = false
-            showLibraryPickerForScene != null -> showLibraryPickerForScene = null
-            activeAudioPickingType != null -> activeAudioPickingType = null
-            selectedProjectMedia != null -> selectedProjectMedia = null
-            else -> onBack()
-        }
-    }
-
     var selectedBoardTab by remember { mutableIntStateOf(0) } // 0: Script, 1: Voice, 2: Visual, 3: Export
     val boardTabs = listOf(
         "Script" to Icons.Outlined.Description,
@@ -205,6 +194,16 @@ fun ProjectBoardScreen(
     var showFilesModal by remember { mutableStateOf(false) }
     var showLibraryPickerForScene by remember { mutableStateOf<Int?>(null) }
     var activeAudioPickingType by remember { mutableStateOf<String?>(null) } // "vo" or "bgm"
+
+    BackHandler {
+        when {
+            showCopilotSheet -> showCopilotSheet = false
+            showLibraryPickerForScene != null -> showLibraryPickerForScene = null
+            activeAudioPickingType != null -> activeAudioPickingType = null
+            selectedProjectMedia != null -> selectedProjectMedia = null
+            else -> onBack()
+        }
+    }
     var showApplyPatternDialog by remember { mutableStateOf(false) }
     val availablePatterns = remember { mutableStateListOf<PatternItem>() }
     var showSavePatternDialog by remember { mutableStateOf(false) }
