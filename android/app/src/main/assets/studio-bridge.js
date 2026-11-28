@@ -2480,10 +2480,22 @@ async function handleChat(req, res) {
     }
   });
 
+  // Blacklist noise internal Go/gRPC/absl agar tidak pernah sampai ke kartu thinking.
+  function isNoiseLogLine(line) {
+    if (line.includes('logging before google.Init')) return true;
+    if (line.includes('server_zerog.go')) return true;
+    if (/^[IWEF]\d{4}\s+\d{2}:\d{2}:\d{2}/.test(line)) return true;
+    if (line.includes('absl::InitializeLog')) return true;
+    if (line.includes('WARNING: All log messages before')) return true;
+    if (line.includes('ERROR: logging before')) return true;
+    return false;
+  }
+
   // Rapikan log aktivitas nyata jadi 1 baris ringkas (maks ~90 karakter), buang stack trace.
   function normalizeLogLine(rawLine) {
     const line = stripAnsi(rawLine).replace(/\s+/g, ' ').trim();
     if (line.length < 3) return '';
+    if (isNoiseLogLine(line)) return '';
     if (/^Traceback\b/.test(line)) return '';
     if (/^File "/.test(line)) return '';
     if (/^at\s/.test(line)) return '';

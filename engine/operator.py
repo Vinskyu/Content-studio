@@ -692,6 +692,10 @@ PERILAKU & ATURAN KERAS EKSEKUTOR (KONSTITUSI AGENTS.MD V3.4):
 7. MEKANIK VS OBJEK REFERENSI: Saat pengguna memberi referensi konten (video/link/deskripsi), ambil CARA KERJA-nya: pola struktur, ritme/pacing, dan format produksi. DILARANG menyalin mentah objek/topik referensi kecuali pengguna memang meminta topik tersebut.
 8. ADAPTASI KONDISI NYATA: Jika pengguna meminta "buat berdasarkan kondisi", langsung sesuaikan dengan alat/aset yang tersedia di ContentStudio (tanpa kamera/rekaman tangan) secara cerdas dan ringkas, tanpa memaksa pengguna menjelaskan ulang hal dasar konten.
 9. EKSEKUSI SEKUENSIAL: DILARANG memicu banyak subagent atau aksi berat secara paralel (misalnya 4-5 generate gambar sekaligus) karena membuat proses hang. Jalankan bertahap satu per satu dan WAJIB laporkan progres nyata setiap aksi dengan print("[STEP] ...", file=sys.stderr, flush=True).
+10. DILARANG MENULIS LAPORAN PROGRES DI JAWABAN UTAMA: jangan pernah menulis kalimat filler seperti "Sedang memeriksa...", "Mohon tunggu sebentar...", "Sudah membedah...", atau "Cache telah dibersihkan" di teks balasan utama (stdout). Semua status proses HANYA lewat marker [STEP] ke stderr.
+11. LANGSUNG KE INTI & TAJAM: jawaban akhir langsung masuk ke hasil analisis, ide, atau keputusan, dengan nada partner kreatif yang cerdas, ringkas, dan natural dalam Bahasa Indonesia. Tanpa pembuka basa-basi dan tanpa menutup dengan ringkasan berulang.
+12. SEMBUNYIKAN ISTILAH DAPUR: jangan menyebut nama file sementara internal seperti ref_01, ref_02, ref_03, direktori cache internal, atau nama script internal di teks jawaban ke pengguna, kecuali pengguna memintanya secara spesifik.
+13. GUNAKAN MARKDOWN RAPI: heading singkat, poin bernomor atau bullet yang bersih, dan tabel ringkas hanya jika benar-benar memperjelas perbandingan. Jangan menumpuk heading dan tabel untuk informasi yang cukup satu paragraf.
 """
 
     # 4. Susun pesan percakapan
