@@ -59,7 +59,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Refresh
 import android.content.Intent
 import android.media.MediaPlayer
@@ -157,7 +157,7 @@ private val MatteDivider = Color(0xFF262A33)
 @Composable
 fun ChatScreen(
     modifier: Modifier = Modifier,
-    onOpenSidebar: () -> Unit = {},
+    onOpenBoard: () -> Unit = {},
     onNavigateToExtensions: () -> Unit = {}
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -322,23 +322,11 @@ fun ChatScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Left: Sidebar Menu (no border box)
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { onOpenSidebar() },
-                contentAlignment = Alignment.Center
+            // Left: pil proyek aktif + shortcut Board 1 ketuk
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Menu,
-                    contentDescription = "Menu",
-                    tint = TextPrimary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            // Center: Active Project Pill
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(16.dp))
@@ -381,6 +369,23 @@ fun ChatScreen(
                         modifier = Modifier.size(16.dp)
                     )
                 }
+            }
+
+            // Shortcut 1 ketuk: buka Project Board proyek aktif tanpa pindah tab
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenBoard() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.OpenInNew,
+                    contentDescription = "Board",
+                    tint = if (activeWorkspace.isNotBlank()) TextPrimary else TextMuted,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
             }
 
             // Right: New Chat & History (no border box)
@@ -2752,9 +2757,15 @@ private fun LiveThinkingCard(
         }
 
         AnimatedVisibility(visible = expanded && steps.isNotEmpty()) {
+            val stepsScrollState = rememberScrollState()
+            LaunchedEffect(steps.size) {
+                stepsScrollState.animateScrollTo(Int.MAX_VALUE)
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 180.dp)
+                    .verticalScroll(stepsScrollState)
                     .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {

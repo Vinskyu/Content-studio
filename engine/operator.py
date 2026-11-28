@@ -553,6 +553,9 @@ def execute_local_tool(name: str, args: Dict[str, Any], session: Dict[str, Any])
         env = dict(os.environ)
         if "BRIDGE_PORT" not in env:
             env["BRIDGE_PORT"] = os.environ.get("PORT", "18950")
+        # Agar log CLI langsung mengalir ke kartu thinking, bukan tertahan buffer.
+        env["PYTHONUNBUFFERED"] = "1"
+        _emit_step("Menjalankan CLI: " + " ".join(str(a) for a in cli_args[:4]))
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
             for line in proc.stderr.splitlines():
@@ -560,10 +563,12 @@ def execute_local_tool(name: str, args: Dict[str, Any], session: Dict[str, Any])
                 if l_str.startswith("[STEP]") or l_str.startswith("[UI_SYNC]"):
                     sys.stderr.write(l_str + "\n")
                     sys.stderr.flush()
+            _emit_step("CLI selesai" + (" (exit 0)" if proc.returncode == 0 else f" (exit {proc.returncode})"))
             if proc.returncode != 0:
                 return f"[ERR] studio_cli error: {proc.stderr or proc.stdout}"
             return proc.stdout.strip() or "[OK]"
         except Exception as e:
+            _emit_step(f"CLI gagal: {e}")
             return f"[ERR] Gagal menjalankan studio_cli: {e}"
 
     return f"[ERR] Tool lokal '{name}' tidak dikenal."

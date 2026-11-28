@@ -509,8 +509,10 @@ object ChatController {
                     val cleanSt = st.trim()
                     if (cleanSt.isNotEmpty()) {
                         _liveStatus.value = cleanSt
-                        if (_thinkingSteps.value.lastOrNull() != cleanSt) {
-                            _thinkingSteps.value = _thinkingSteps.value + cleanSt
+                        val steps = _thinkingSteps.value
+                        if (steps.lastOrNull() != cleanSt) {
+                            // Simpan maksimal 30 baris log terakhir agar kartu tetap ringan.
+                            _thinkingSteps.value = (steps + cleanSt).takeLast(30)
                         }
                     }
                 },

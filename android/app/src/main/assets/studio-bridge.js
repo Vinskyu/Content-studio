@@ -69,6 +69,8 @@ function getAntigravityEnv(isAuthMode = false) {
     TERM: isAuthMode ? 'xterm-256color' : 'dumb',
     NO_COLOR: isAuthMode ? '0' : '1',
     FORCE_COLOR: '0',
+    // Log sub-proses harus langsung terlihat di kartu thinking, tanpa tertahan buffer.
+    PYTHONUNBUFFERED: '1',
   };
 
   // Jangan pasang ANTIGRAVITY_SAFECLIS_SOURCE saat auth mode
@@ -2478,6 +2480,18 @@ async function handleChat(req, res) {
     }
   });
 
+  // Rapikan log aktivitas nyata jadi 1 baris ringkas (maks ~90 karakter), buang stack trace.
+  function normalizeLogLine(rawLine) {
+    const line = stripAnsi(rawLine).replace(/\s+/g, ' ').trim();
+    if (line.length < 3) return '';
+    if (/^Traceback\b/.test(line)) return '';
+    if (/^File "/.test(line)) return '';
+    if (/^at\s/.test(line)) return '';
+    if (/^\^+$/.test(line)) return '';
+    if (line.includes('Traceback (most recent call last)')) return '';
+    return line.length > 90 ? `${line.slice(0, 89)}...` : line;
+  }
+
   proc.stderr.on('data', (chunk) => {
     const text = chunk.toString('utf8');
     errOutput += text;
@@ -2497,11 +2511,13 @@ async function handleChat(req, res) {
         }
         emit({ type: 'ui_sync', scope, target });
       } else if (line.startsWith('[STEP]')) {
-        emitStatus(line.replace(/^\[STEP\]\s*/, ''));
+        emitStatus(normalizeLogLine(line.replace(/^\[STEP\]\s*/, '')));
       } else if (line.startsWith('[TOOL]')) {
-        emitStatus(line.replace(/^\[TOOL\]\s*/, ''));
-      } else if (line.includes('tool') || line.includes('Writing') || line.includes('Reading') || line.includes('Running')) {
-        emitStatus(line.slice(0, 90));
+        emitStatus(normalizeLogLine(line.replace(/^\[TOOL\]\s*/, '')));
+      } else {
+        // Log aktivitas nyata dari stderr anak proses (CLI, media engine, dsb).
+        const logLine = normalizeLogLine(line);
+        if (logLine) emitStatus(logLine);
       }
     }
   });
