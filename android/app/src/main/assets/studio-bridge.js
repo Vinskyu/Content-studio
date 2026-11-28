@@ -1383,6 +1383,187 @@ function scanWorkspaceFiles(wsName) {
   return result;
 }
 
+
+// ── Media Indexer & Streamer (V3.5) ─────────────────────────────────────────
+const MEDIA_EXT = new Set(['.mp4','.mov','.webm','.jpg','.jpeg','.png','.webp','.mp3','.wav','.m4a']);
+const DOC_EXT = new Set(['.txt','.json','.srt','.ass','.md']);
+
+function mediaTypeForExt(ext) {
+  ext = ext.toLowerCase();
+  if (['.mp4','.mov','.webm'].includes(ext)) return 'video';
+  if (['.jpg','.jpeg','.png','.webp'].includes(ext)) return 'image';
+  if (['.mp3','.wav','.m4a'].includes(ext)) return 'audio';
+  if (DOC_EXT.has(ext)) return 'doc';
+  return null;
+}
+
+function mediaCategoryForRel(rel) {
+  const lower = rel.toLowerCase();
+  if (lower.includes('/renders/') || lower.startsWith('renders/')) return 'render';
+  if (lower.includes('/scenes/') || lower.startsWith('scenes/')) return 'scene';
+  if (lower.includes('/audio/') || lower.startsWith('audio/')) return 'audio';
+  if (lower.includes('/assets/') || lower.startsWith('assets/')) return 'asset';
+  if (DOC_EXT.has(path.extname(lower))) return 'doc';
+  return 'asset';
+}
+
+function scanMediaFiles(projectFilter) {
+  const items = [];
+  const cleanProject = projectFilter ? path.basename(String(projectFilter).trim()) : '';
+  const roots = [];
+
+  // Global library/media
+  roots.push({ base: LIBRARY_DIR, project: '', rootLabel: 'library' });
+  // Global assets
+  roots.push({ base: path.join(CONTENT_STUDIO_DIR, 'assets'), project: '', rootLabel: 'assets' });
+
+  // Workspaces
+  if (fs.existsSync(WORKSPACES_DIR)) {
+    const wsEntries = fs.readdirSync(WORKSPACES_DIR, { withFileTypes: true });
+    for (const ent of wsEntries) {
+      if (!ent.isDirectory()) continue;
+      const wsName = ent.name;
+      if (cleanProject && wsName !== cleanProject) continue;
+      const wsPath = path.join(WORKSPACES_DIR, wsName);
+      roots.push({ base: wsPath, project: wsName, rootLabel: 'workspace' });
+    }
+  }
+
+  for (const root of roots) {
+    if (!fs.existsSync(root.base) || !fs.statSync(root.base).isDirectory()) continue;
+    walkMedia(root.base, root.base, root.project, items);
+  }
+
+  // If project filter, also ensure only that project's workspace included (already filtered above).
+  // Sort newest first
+  items.sort((a, b) => b.updatedAt - a.updatedAt);
+  return items;
+}
+
+function walkMedia(currentDir, baseDir, project, items) {
+  let entries = [];
+  try { entries = fs.readdirSync(currentDir, { withFileTypes: true }); } catch (_) { return; }
+  for (const ent of entries) {
+    if (ent.name.startsWith('.')) continue;
+    const full = path.join(currentDir, ent.name);
+    if (ent.isDirectory()) {
+      walkMedia(full, baseDir, project, items);
+    } else if (ent.isFile()) {
+      const ext = path.extname(ent.name).toLowerCase();
+      const type = mediaTypeForExt(ext);
+      if (!type) continue;
+      let stat = null;
+      try { stat = fs.statSync(full); } catch (_) { continue; }
+      const rel = path.relative(baseDir, full).replace(/\\/g, '/');
+      // Build a project-scoped relative path for stream: root-relative under ContentStudio? We'll store absolute-ish relative.
+      // Stream path should be relative to CONTENT_STUDIO_DIR when possible, else relative to HOME? We'll store path relative to CONTENT_STUDIO_DIR if inside; otherwise relative to HOME_DIR.
+      let streamRel = full;
+      if (full.startsWith(CONTENT_STUDIO_DIR + path.sep)) {
+        streamRel = path.relative(CONTENT_STUDIO_DIR, full).replace(/\\/g, '/');
+      } else if (full.startsWith(HOME_DIR + path.sep)) {
+        streamRel = path.relative(HOME_DIR, full).replace(/\\/g, '/');
+      } else {
+        streamRel = full.replace(/\\/g, '/');
+      }
+      const id = crypto.createHash('md5').update(full).digest('hex');
+      items.push({
+        id,
+        name: ent.name,
+        type,
+        category: mediaCategoryForRel(rel),
+        project: project || '',
+        relativePath: streamRel,
+        sizeBytes: stat.size,
+        updatedAt: stat.mtimeMs,
+        streamUrl: '/api/media/stream?path=' + encodeURIComponent(streamRel),
+      });
+    }
+  }
+}
+
+function resolveSafeMediaPath(relPath) {
+  if (!relPath) return null;
+  let decoded;
+  try { decoded = decodeURIComponent(relPath); } catch (_) { decoded = relPath; }
+  // Normalize separators
+  decoded = decoded.replace(/\\/g, '/');
+  // Remove leading slashes
+  decoded = decoded.replace(/^\/+/, '');
+  // Prevent traversal
+  const parts = decoded.split('/');
+  if (parts.some(p => p === '..' || p === '' && false)) {
+    // allow single empty? no
+  }
+  if (decoded.includes('..')) return null;
+  // Candidate bases
+  const candidates = [CONTENT_STUDIO_DIR, HOME_DIR];
+  for (const base of candidates) {
+    const full = path.resolve(base, decoded);
+    const baseResolved = path.resolve(base);
+    if (full === baseResolved) continue;
+    if (!full.startsWith(baseResolved + path.sep)) continue;
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) continue;
+    return full;
+  }
+  return null;
+}
+
+function handleMediaIndex(req, res, urlObj) {
+  const project = urlObj.searchParams.get('project') || '';
+  const items = scanMediaFiles(project);
+  return sendJson(res, 200, { items });
+}
+
+function handleMediaStream(req, res, urlObj) {
+  const p = urlObj.searchParams.get('path');
+  const full = resolveSafeMediaPath(p);
+  if (!full) {
+    res.statusCode = 403;
+    res.end('Forbidden');
+    return;
+  }
+  const ext = path.extname(full).toLowerCase();
+  const mimeMap = {
+    '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
+    '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.srt': 'text/plain; charset=utf-8',
+    '.ass': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
+  };
+  const contentType = mimeMap[ext] || 'application/octet-stream';
+  const stat = fs.statSync(full);
+  const total = stat.size;
+  const range = req.headers.range;
+  if (range) {
+    const m = range.match(/bytes=(\d+)-(\d*)/);
+    if (m) {
+      const start = parseInt(m[1], 10);
+      const end = m[2] ? parseInt(m[2], 10) : total - 1;
+      if (start >= total || end >= total || start > end) {
+        res.statusCode = 416;
+        res.setHeader('Content-Range', `bytes */${total}`);
+        res.end();
+        return;
+      }
+      const chunkSize = end - start + 1;
+      res.statusCode = 206;
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+      res.setHeader('Content-Length', chunkSize);
+      const stream = fs.createReadStream(full, { start, end });
+      stream.pipe(res);
+      return;
+    }
+  }
+  res.statusCode = 200;
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Length', total);
+  const stream = fs.createReadStream(full);
+  stream.pipe(res);
+}
+
 // ── Auth Handlers ───────────────────────────────────────────────────────────
 
 function handleAuthStart(res) {
@@ -3374,6 +3555,15 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && pathname === '/extensions/mcp') {
     const mcp = listMcpServers();
     return sendJson(res, 200, { status: 'ok', mcp });
+  }
+
+  // ── Media Indexer & Streamer Endpoints (V3.5) ──────────────────────────────
+  if (req.method === 'GET' && pathname === '/api/media/index') {
+    return handleMediaIndex(req, res, urlObj);
+  }
+
+  if (req.method === 'GET' && pathname === '/api/media/stream') {
+    return handleMediaStream(req, res, urlObj);
   }
 
   return sendJson(res, 404, { status: 'error', error: 'Endpoint tidak ditemukan' });

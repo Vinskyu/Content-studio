@@ -49,6 +49,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.BackHandler
+import android.widget.Toast
 import com.contentstudio.app.runtime.ChatController
 import com.contentstudio.app.runtime.LinuxRuntimeManager
 import com.contentstudio.app.ui.theme.StudioAccent
@@ -97,6 +99,26 @@ fun MainStudioScreen(
 
     // Bottom nav auto-hide: masuk ruang proyek atau keyboard terbuka di ruang Agent.
     val showBottomNav = !isInProject && !(activeRoom == StudioRoom.AGENT && isImeVisible)
+
+    var lastBackPressMs by remember { mutableStateOf(0L) }
+
+    BackHandler {
+        when {
+            showSettingsSheet -> showSettingsSheet = false
+            isQuickVoiceOpen -> isQuickVoiceOpen = false
+            activeProject != null -> activeProject = null
+            activeRoom != StudioRoom.AGENT -> activeRoom = StudioRoom.AGENT
+            else -> {
+                val now = System.currentTimeMillis()
+                if (now - lastBackPressMs < 2000L) {
+                    (context as? android.app.Activity)?.finish()
+                } else {
+                    lastBackPressMs = now
+                    Toast.makeText(context, "Tekan sekali lagi untuk keluar", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     Column(
         modifier = modifier

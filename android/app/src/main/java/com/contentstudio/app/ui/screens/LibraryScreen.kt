@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -20,6 +21,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -70,7 +74,10 @@ import androidx.core.content.FileProvider
 import com.contentstudio.app.runtime.ChannelDna
 import com.contentstudio.app.runtime.ChannelProfile
 import com.contentstudio.app.runtime.LibraryAssetItem
+import androidx.activity.compose.BackHandler
 import com.contentstudio.app.runtime.LinuxRuntimeManager
+import com.contentstudio.app.ui.components.StudioMediaThumbnail
+import com.contentstudio.app.ui.components.StudioMediaPlayerDialog
 import com.contentstudio.app.runtime.PatternBeat
 import com.contentstudio.app.runtime.PatternItem
 import com.contentstudio.app.runtime.WorkspaceSummary
@@ -113,9 +120,29 @@ fun LibraryScreen(
     val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
     var activeTab by remember { mutableStateOf("channels") } // "channels", "templates", "media"
 
+    val libHasOverlay = showStockSheet || assetToDelete != null || assetToUse != null || selectedStudioMedia != null
+    BackHandler(enabled = libHasOverlay) {
+        when {
+            showStockSheet -> showStockSheet = false
+            assetToDelete != null -> assetToDelete = null
+            assetToUse != null -> assetToUse = null
+            selectedStudioMedia != null -> selectedStudioMedia = null
+        }
+    }
+
     // Media state
     var selectedCategory by remember { mutableStateOf("all") }
     var searchQuery by remember { mutableStateOf("") }
+    val studioMedia = remember { mutableStateListOf<com.contentstudio.app.runtime.StudioMediaFile>() }
+    var selectedMediaFilter by remember { mutableStateOf("All") }
+    var selectedStudioMedia by remember { mutableStateOf<com.contentstudio.app.runtime.StudioMediaFile?>(null) }
+
+    LaunchedEffect(activeTab) {
+        if (activeTab == "media") {
+            studioMedia.clear()
+            studioMedia.addAll(LinuxRuntimeManager.fetchStudioMediaIndex())
+        }
+    }
     val assets = remember { mutableStateListOf<LibraryAssetItem>() }
     val workspaces = remember { mutableStateListOf<WorkspaceSummary>() }
     var assetToUse by remember { mutableStateOf<LibraryAssetItem?>(null) }
@@ -865,61 +892,48 @@ fun LibraryScreen(
                 }
             }
             else -> {
-                // MEDIA TAB: Filter chips + Search + Assets list
+                // MEDIA TAB: visual gallery (self-contained)
+                val mediaFilters = listOf("All", "Renders", "Videos", "Images", "Audio")
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                    Column(
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        val categories = listOf("All", "Video", "Audio", "Image")
-                        val catKeys = listOf("all", "video", "audio", "image")
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(LibMatteCard)
-                                .padding(3.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            categories.forEachIndexed { idx, label ->
-                                val key = catKeys[idx]
-                                val selected = selectedCategory == key
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(if (selected) LibMatteElevated else Color.Transparent)
-                                        .clickable { selectedCategory = key }
-                                        .padding(vertical = 6.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = label,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                        color = if (selected) TextPrimary else TextMuted
-                                    )
-                                }
+                        mediaFilters.forEach { f ->
+                            val sel = selectedMediaFilter == f
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (sel) LibMatteElevated else Color.Transparent)
+                                    .clickable { selectedMediaFilter = f }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = f,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (sel) TextPrimary else TextMuted
+                                )
                             }
                         }
-
-                        StudioTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = "Search media assets...",
-                            singleLine = true
-                        )
                     }
-
                     Spacer(modifier = Modifier.height(8.dp))
-
-                    if (filteredAssets.isEmpty()) {
+                    val filteredMedia = studioMedia.filter { m ->
+                        when (selectedMediaFilter) {
+                            "Renders" -> m.category == "render"
+                            "Videos" -> m.type == "video"
+                            "Images" -> m.type == "image"
+                            "Audio" -> m.type == "audio"
+                            else -> true
+                        }
+                    }
+                    if (filteredMedia.isEmpty()) {
                         Box(
                             modifier = Modifier
                                 .weight(1f)
@@ -927,125 +941,33 @@ fun LibraryScreen(
                                 .padding(24.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "No media assets found.",
-                                fontSize = 13.sp,
-                                color = TextMuted
-                            )
+                            Text(text = "No media found.", fontSize = 13.sp, color = TextMuted)
                         }
                     } else {
-                        LazyColumn(
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
+                                .padding(horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = PaddingValues(bottom = 32.dp)
                         ) {
-                            items(filteredAssets) { asset ->
-                                val ext = asset.name.substringAfterLast('.', "").uppercase().take(4)
-                                val sizeKb = asset.size / 1024
-                                val sizeStr = if (sizeKb > 1024) String.format(Locale.US, "%.1f MB", sizeKb / 1024.0) else "$sizeKb KB"
-                                val dateStr = if (asset.mtime > 0) {
-                                    SimpleDateFormat("dd MMM HH:mm", Locale.getDefault()).format(Date(asset.mtime))
-                                } else ""
-
-                                Row(
+                            items(filteredMedia) { media ->
+                                val fullUrl = LinuxRuntimeManager.getFullMediaUrl(media.streamUrl)
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
+                                        .aspectRatio(1f)
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(LibMatteCard)
-                                        .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .clickable { selectedStudioMedia = media }
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .background(LibMatteElevated)
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(
-                                                    text = ext.ifBlank { asset.category.uppercase() },
-                                                    fontFamily = FontFamily.Monospace,
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = TextPrimary
-                                                )
-                                            }
-                                            Text(
-                                                text = asset.name,
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = TextPrimary,
-                                                maxLines = 1
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "${asset.category.uppercase()} • $sizeStr • $dateStr",
-                                            fontSize = 11.sp,
-                                            color = TextMuted
-                                        )
-                                    }
-
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(LibMatteElevated)
-                                                .clickable { openAssetFile(asset) }
-                                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                                        ) {
-                                            Text(
-                                                text = "Open",
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = TextPrimary
-                                            )
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(Color(0xFFF2F4F8))
-                                                .clickable { assetToUse = asset }
-                                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                                        ) {
-                                            Text(
-                                                text = "Use",
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = Color(0xFF0B0C0E)
-                                            )
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .clickable { assetToDelete = asset },
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.Delete,
-                                                contentDescription = "Delete",
-                                                tint = StudioDangerRed,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
+                                    StudioMediaThumbnail(
+                                        media = media,
+                                        fullUrl = fullUrl,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
                                 }
                             }
                         }
@@ -1443,6 +1365,16 @@ fun LibraryScreen(
             dismissButton = {
                 StudioSecondaryButton(text = "Cancel", onClick = { assetToDelete = null })
             }
+        )
+    }
+
+    if (selectedStudioMedia != null) {
+        val media = selectedStudioMedia!!
+        val fullUrl = LinuxRuntimeManager.getFullMediaUrl(media.streamUrl)
+        StudioMediaPlayerDialog(
+            media = media,
+            fullUrl = fullUrl,
+            onDismiss = { selectedStudioMedia = null }
         )
     }
 

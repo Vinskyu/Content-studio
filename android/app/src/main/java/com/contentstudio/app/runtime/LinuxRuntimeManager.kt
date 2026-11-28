@@ -120,6 +120,18 @@ data class MemoryEntry(
     val createdAt: String
 )
 
+data class StudioMediaFile(
+    val id: String,
+    val name: String,
+    val type: String,
+    val category: String,
+    val project: String,
+    val relativePath: String,
+    val sizeBytes: Long,
+    val updatedAt: Long,
+    val streamUrl: String
+)
+
 data class ActionPlanCardData(
     val title: String,
     val goal: String = "",
@@ -2310,6 +2322,50 @@ object LinuxRuntimeManager {
             conn.responseCode == 200
         } catch (e: Exception) {
             false
+        }
+    }
+
+    suspend fun fetchStudioMediaIndex(project: String? = null): List<StudioMediaFile> = withContext(Dispatchers.IO) {
+        try {
+            val q = if (!project.isNullOrBlank()) "?project=${URLEncoder.encode(project, "UTF-8")}" else ""
+            val conn = URL("$BRIDGE_BASE_URL/api/media/index$q").openConnection() as HttpURLConnection
+            conn.connectTimeout = 8000
+            conn.readTimeout = 20000
+            if (conn.responseCode == 200) {
+                val txt = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = JSONObject(txt)
+                val itemsArr = obj.optJSONArray("items") ?: JSONArray()
+                val list = mutableListOf<StudioMediaFile>()
+                for (i in 0 until itemsArr.length()) {
+                    val it = itemsArr.getJSONObject(i)
+                    list.add(
+                        StudioMediaFile(
+                            id = it.optString("id"),
+                            name = it.optString("name"),
+                            type = it.optString("type"),
+                            category = it.optString("category"),
+                            project = it.optString("project"),
+                            relativePath = it.optString("relativePath"),
+                            sizeBytes = it.optLong("sizeBytes", 0L),
+                            updatedAt = it.optLong("updatedAt", 0L),
+                            streamUrl = it.optString("streamUrl")
+                        )
+                    )
+                }
+                list
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun getFullMediaUrl(streamUrl: String): String {
+        return if (streamUrl.startsWith("http://") || streamUrl.startsWith("https://")) {
+            streamUrl
+        } else {
+            "$BRIDGE_BASE_URL$streamUrl"
         }
     }
 

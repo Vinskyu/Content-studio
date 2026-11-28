@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -81,6 +82,10 @@ import com.contentstudio.app.ui.theme.StudioTopBar
 import com.contentstudio.app.ui.theme.TextMuted
 import com.contentstudio.app.ui.theme.TextPrimary
 import com.contentstudio.app.ui.theme.TextSecondary
+import com.contentstudio.app.ui.components.StudioMediaThumbnail
+import com.contentstudio.app.ui.components.StudioMediaPlayerDialog
+import com.contentstudio.app.ui.components.StudioMarkdownText
+import androidx.compose.foundation.lazy.grid.items
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -95,12 +100,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Send
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
@@ -134,14 +141,29 @@ fun ProjectBoardScreen(
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
 
+    BackHandler {
+        when {
+            showCopilotSheet -> showCopilotSheet = false
+            showCopilotSheet -> showCopilotSheet = false
+            showLibraryPickerForScene != null -> showLibraryPickerForScene = null
+            activeAudioPickingType != null -> activeAudioPickingType = null
+            selectedProjectMedia != null -> selectedProjectMedia = null
+            else -> onBack()
+        }
+    }
+
     var selectedBoardTab by remember { mutableIntStateOf(0) } // 0: Script, 1: Voice, 2: Visual, 3: Export
     val boardTabs = listOf(
         "Script" to Icons.Outlined.Description,
         "Voice" to Icons.Outlined.GraphicEq,
         "Visual" to Icons.Outlined.PhotoLibrary,
+        "Assets" to Icons.Outlined.CollectionsBookmark,
         "Export" to Icons.Outlined.Movie
     )
-    var showAskAgentSheet by remember { mutableStateOf(false) }
+    var showCopilotSheet by remember { mutableStateOf(false) }
+    val projectMedia = remember { mutableStateListOf<com.contentstudio.app.runtime.StudioMediaFile>() }
+    var selectedProjectMedia by remember { mutableStateOf<com.contentstudio.app.runtime.StudioMediaFile?>(null) }
+    var copilotText by remember { mutableStateOf("") }
 
     // Project state
     var aspectRatio by remember { mutableStateOf("9:16") }
@@ -511,6 +533,12 @@ fun ProjectBoardScreen(
             loadProject()
         }
     }
+    LaunchedEffect(selectedBoardTab) {
+        if (selectedBoardTab == 3) {
+            projectMedia.clear()
+            projectMedia.addAll(LinuxRuntimeManager.fetchStudioMediaIndex(project = workspaceName))
+        }
+    }
 
     Box(
         modifier = modifier
@@ -536,35 +564,21 @@ fun ProjectBoardScreen(
                     }
                 )
                 Spacer(modifier = Modifier.width(4.dp))
-                StudioSmallButton(
-                    text = "Files",
-                    onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            val res = LinuxRuntimeManager.getWorkspaceFiles(workspaceName)
-                            val arr = res.optJSONArray("files")
-                            val list = mutableListOf<WorkspaceFileItem>()
-                            if (arr != null) {
-                                for (i in 0 until arr.length()) {
-                                    val obj = arr.getJSONObject(i)
-                                    list.add(
-                                        WorkspaceFileItem(
-                                            name = obj.optString("name", ""),
-                                            relPath = obj.optString("rel_path", ""),
-                                            size = obj.optLong("size", 0L),
-                                            category = obj.optString("category", "other"),
-                                            updatedAt = obj.optLong("updated_at", 0L)
-                                        )
-                                    )
-                                }
-                            }
-                            withContext(Dispatchers.Main) {
-                                rawFiles.clear()
-                                rawFiles.addAll(list)
-                                showFilesModal = true
-                            }
-                        }
-                    }
-                )
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(StudioSurfaceElevated)
+                        .clickable { showCopilotSheet = true },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.AutoAwesome,
+                        contentDescription = "Co-Pilot",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         )
 
@@ -658,28 +672,23 @@ fun ProjectBoardScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "$words words • ~$estSec sec ($estMin min)",
+                                    text = "$words words • ~$estSec sec (${String.format(Locale.US, "%.1f min", estMin)}",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 11.sp,
                                     color = TextMuted
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    StudioSmallButton(
-                                        text = "Ask Agent",
-                                        onClick = {
-                                            ChatController.setDraftPrompt("Bantu saya perbaiki naskah untuk project '$workspaceName':\n\n$scriptText")
-                                            onNavigateToAgent?.invoke()
-                                        }
-                                    )
                                     StudioSecondaryButton(
                                         text = "Save Script",
                                         onClick = { saveScriptContent() },
-                                        height = 36.dp
+                                        height = 36.dp,
+                                        modifier = Modifier.weight(1f)
                                     )
                                     StudioPrimaryButton(
-                                        text = "Split to Scenes",
+                                        text = "Split Scenes",
                                         onClick = { splitScriptToScenes() },
-                                        height = 36.dp
+                                        height = 36.dp,
+                                        modifier = Modifier.weight(1f)
                                     )
                                 }
                             }
@@ -1325,6 +1334,54 @@ fun ProjectBoardScreen(
                 }
 
                 3 -> {
+                    // TAB 4: ASSETS (visual gallery)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        val filters = listOf("All", "Videos", "Images", "Audio", "Renders", "Docs")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            filters.forEach { f ->
+                                val sel = (f == "All") // placeholder filter state not tracked; keep simple
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (sel) StudioSurfaceElevated else StudioBg)
+                                        .clickable { }
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Text(text = f, fontSize = 11.sp, color = TextPrimary)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                            columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(3),
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(projectMedia) { media ->
+                                val fullUrl = LinuxRuntimeManager.getFullMediaUrl(media.streamUrl)
+                                Box(
+                                    modifier = Modifier
+                                        .aspectRatio(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(StudioSurface)
+                                        .clickable { selectedProjectMedia = media }
+                                ) {
+                                    StudioMediaThumbnail(media = media, fullUrl = fullUrl, modifier = Modifier.fillMaxSize())
+                                }
+                            }
+                        }
+                    }
+                }
+
+                4 -> {
                     // TAB 4: EXPORT
                     val visualsCount = scenesList.count { it.visual.isNotBlank() }
                     val totalScenes = scenesList.size
@@ -1845,45 +1902,21 @@ fun ProjectBoardScreen(
             }
         }
     } // Closes Column
-
-    // CO-PILOT ASK AGENT FLOATING BUTTON
-    Box(
-        modifier = Modifier
-            .align(Alignment.BottomEnd)
-            .padding(end = 16.dp, bottom = 70.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(StudioSurfaceElevated)
-            .border(1.dp, StudioBorder, RoundedCornerShape(20.dp))
-            .clickable { showAskAgentSheet = true }
-            .padding(horizontal = 14.dp, vertical = 9.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.AutoAwesome,
-                contentDescription = "Ask Agent",
-                tint = TextPrimary,
-                modifier = Modifier.size(18.dp)
-            )
-            Text(
-                text = "Ask Agent",
-                fontFamily = FontFamily.Default,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-        }
+    if (selectedProjectMedia != null) {
+        val media = selectedProjectMedia!!
+        val fullUrl = LinuxRuntimeManager.getFullMediaUrl(media.streamUrl)
+        StudioMediaPlayerDialog(media = media, fullUrl = fullUrl, onDismiss = { selectedProjectMedia = null })
     }
 
-    // CO-PILOT ASK AGENT MODAL BOTTOM SHEET
-    if (showAskAgentSheet) {
+
+    // CO-PILOT MODAL BOTTOM SHEET
+    if (showCopilotSheet) {
         val currentStageName = when (selectedBoardTab) {
             0 -> "Script"
             1 -> "Voice"
             2 -> "Visual"
-            3 -> "Export"
+            3 -> "Assets"
+            4 -> "Export"
             else -> "Script"
         }
         val agentMessages by ChatController.messages.collectAsState()
@@ -1899,7 +1932,7 @@ fun ProjectBoardScreen(
         }
 
         ModalBottomSheet(
-            onDismissRequest = { showAskAgentSheet = false },
+            onDismissRequest = { showCopilotSheet = false },
             containerColor = StudioSurface,
             dragHandle = {
                 Box(
@@ -1959,7 +1992,7 @@ fun ProjectBoardScreen(
                         modifier = Modifier
                             .size(28.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .clickable { showAskAgentSheet = false },
+                            .clickable { showCopilotSheet = false },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -2040,12 +2073,16 @@ fun ProjectBoardScreen(
                                         .border(0.5.dp, StudioBorder, RoundedCornerShape(6.dp))
                                         .padding(10.dp)
                                     ) {
-                                        Text(
-                                            text = msg.text,
-                                            fontFamily = FontFamily.Default,
-                                            fontSize = 12.sp,
-                                            color = TextPrimary
-                                        )
+                                        if (isUser) {
+                                            Text(
+                                                text = msg.text,
+                                                fontFamily = FontFamily.Default,
+                                                fontSize = 12.sp,
+                                                color = TextPrimary
+                                            )
+                                        } else {
+                                            StudioMarkdownText(markdown = msg.text)
+                                        }
                                     }
                             }
                         }
