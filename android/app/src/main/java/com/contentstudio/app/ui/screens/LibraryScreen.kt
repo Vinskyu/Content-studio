@@ -132,6 +132,7 @@ fun LibraryScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val activeWorkspace by LinuxRuntimeManager.activeWorkspace.collectAsState()
 
     var activeTab by remember { mutableStateOf("media") } // "media" (Galeri), "channels", "templates"
 
@@ -313,7 +314,7 @@ fun LibraryScreen(
             val ok = LinuxRuntimeManager.downloadMedia(
                 url = item.downloadUrl,
                 filename = item.title.take(40),
-                project = activeWorkspace,
+                project = selectedProjectFolder?.name ?: activeWorkspace,
                 audioOnly = (item.type == "audio")
             )
             withContext(Dispatchers.Main) {
@@ -353,7 +354,7 @@ fun LibraryScreen(
             val ok = LinuxRuntimeManager.downloadMedia(
                 url = url,
                 filename = "",
-                project = activeWorkspace,
+                project = selectedProjectFolder?.name ?: activeWorkspace,
                 audioOnly = isAudioOnlyDownload,
                 start = startTimestampInput.trim(),
                 end = endTimestampInput.trim()
